@@ -25,6 +25,8 @@ def schedule_payload(s, *, timestamp, administrative=False) -> dict:
             "runAt": timestamp(getattr(s, "run_at", None)),
             "onceFired": bool(getattr(s, "once_fired", False)),
             "atHour": s.at_hour, "atMinute": s.at_minute, "weekday": s.weekday,
+            "startDate": s.start_date.isoformat() if getattr(s, "start_date", None) else "",
+            "endDate": s.end_date.isoformat() if getattr(s, "end_date", None) else "",
             "timeZone": sch.clean_time_zone(s.time_zone),
             "assigneeId": s.assignee_id, "assigneeType": s.assignee_type,
             "modelName": str(getattr(s, "model_name", "") or ""),
@@ -70,6 +72,12 @@ def apply_schedule_update(s, body: dict) -> None:
         s.at_minute = max(0, min(59, int(body.get("atMinute") or 0)))
     if "weekday" in body:
         s.weekday = max(1, min(7, int(body.get("weekday") or 1)))
+    if "startDate" in body or "endDate" in body:
+        from ..services.schedule_timing import apply_date_range
+        try:
+            apply_date_range(s, body)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     if "timeZone" in body:
         s.time_zone = sch.clean_time_zone(body.get("timeZone"))
     for k, f in (("assigneeId", "assignee_id"), ("assigneeType", "assignee_type"),

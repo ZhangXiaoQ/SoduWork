@@ -113,25 +113,40 @@ def next_run_instant(s, after: datetime | None = None) -> datetime | None:
     base_utc = _utc(after) if after is not None else datetime.now(timezone.utc)
     zone = schedule_zone(s)
     local = base_utc.astimezone(zone)
+    start_date = getattr(s, "start_date", None)
+    end_date = getattr(s, "end_date", None)
+    if end_date is not None and local.date() > end_date:
+        return None
     mm = max(0, min(59, int(s.at_minute or 0)))
     every = s.every if getattr(s, "every", "") in EVERY else "daily"
 
     if every == "hourly":
+        if start_date is not None and local.date() < start_date:
+            base_utc = (_wall_candidate(start_date, 0, 0, zone) - timedelta(minutes=1)).astimezone(timezone.utc)
         probe = base_utc.replace(second=0, microsecond=0)
         if probe <= base_utc:
             probe += timedelta(minutes=1)
         # Three real hours cover normal time and both sides of a DST fold.
         for _ in range(181):
             if probe.astimezone(zone).minute == mm:
-                return probe
+                candidate = probe
+                local_day = candidate.astimezone(zone).date()
+                if (start_date is None or local_day >= start_date) and (end_date is None or local_day <= end_date):
+                    return candidate
             probe += timedelta(minutes=1)
+        if end_date is not None:
+            return None
         raise RuntimeError("无法计算下一次小时计划")
 
     hh = max(0, min(23, int(s.at_hour or 0)))
     weekday = max(1, min(7, int(s.weekday or 1)))
+    if start_date is not None and local.date() < start_date:
+        local = _wall_candidate(start_date, 0, 0, zone)
     limit = 15 if every == "weekly" else 3
     for offset in range(limit):
         day = local.date() + timedelta(days=offset)
+        if end_date is not None and day > end_date:
+            return None
         if every == "weekly" and day.isoweekday() != weekday:
             continue
         candidate = _wall_candidate(day, hh, mm, zone).astimezone(timezone.utc)
@@ -160,6 +175,10 @@ def due(s, now: datetime | None = None) -> bool:
     if getattr(s, "every", "") == "once":
         target = schedule_timing.next_once(s)
         return target is not None and target <= current
+    local_day = current.astimezone(schedule_zone(s)).date()
+    if ((getattr(s, "start_date", None) is not None and local_day < s.start_date) or
+            (getattr(s, "end_date", None) is not None and local_day > s.end_date)):
+        return False
     retry_at = getattr(s, "next_retry_at", None)
     if retry_at is not None:
         return _utc(retry_at) <= current
@@ -167,7 +186,8 @@ def due(s, now: datetime | None = None) -> bool:
     base = s.last_run_at or s.created_at
     if base is None:
         return False
-    return next_run_instant(s, _utc(base)) <= current
+    next_at = next_run_instant(s, _utc(base))
+    return next_at is not None and next_at <= current
 
 
 def trigger_identity(s, trigger: str = "timer") -> str:

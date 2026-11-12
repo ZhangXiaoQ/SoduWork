@@ -503,6 +503,7 @@ function _schFormHtml(s) {
     window.ScheduleTiming.clockOptions(60, s.atMinute) + '</select>' +
     '<small id="schClockHint">滚动选择时间</small></span>' +
     _schOnceFieldsHtml(s) + '<span class="sch-when-pv" id="schPv" role="status" aria-live="polite"></span></div>' +
+    _schDateRangeHtml(s) +
 
     sec('在哪儿运行', '不依赖工程的办公自动化可以留空') +
     '<label class="sch-f-lbl">工程</label><select class="sch-in" id="schRepo">' +
@@ -601,6 +602,8 @@ function _wireSchForm() {
       atHour: window.ScheduleTiming.clockNumber(document.getElementById('schH').value),
       atMinute: window.ScheduleTiming.clockNumber(document.getElementById('schM').value),
       weekday: Number(document.getElementById('schWd').value || 1),
+      startDate: document.getElementById('schStartDate')?.value || '',
+      endDate: document.getElementById('schEndDate')?.value || '',
       assigneeId: document.getElementById('schWho').value,
       assigneeType: 'agent',
       modelName: mode === 'direct' && _schAgentAllowsModel(document.getElementById('schWho')?.value)
@@ -718,6 +721,8 @@ function _wireSchForm() {
     const v = ev.value;
     document.getElementById('schWd').style.display = v === 'weekly' ? '' : 'none';
     document.getElementById('schHWrap').style.display = v === 'once' ? 'none' : '';
+    const dateRange = document.getElementById('schDateRange');
+    if (dateRange) dateRange.style.display = v === 'once' ? 'none' : '';
     document.getElementById('schH').hidden = v === 'hourly';
     const clockSep = document.getElementById('schClockSep');
     if (clockSep) clockSep.hidden = v === 'hourly';
@@ -762,7 +767,7 @@ function _wireSchForm() {
     wirePluginSelect();
     sync();
   });
-  ['schH', 'schM', 'schWd', 'schRunAt'].forEach(id => document.getElementById(id).addEventListener('input', sync));
+  ['schH', 'schM', 'schWd', 'schRunAt', 'schStartDate', 'schEndDate'].forEach(id => document.getElementById(id)?.addEventListener('input', sync));
   document.getElementById('schTitle').addEventListener('input', event => {
     event.currentTarget.classList.remove('invalid');
     event.currentTarget.removeAttribute('aria-invalid');

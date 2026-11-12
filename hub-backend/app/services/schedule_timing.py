@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 EVERY = ("hourly", "daily", "weekly", "once")
 _ISO = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:\d{2})$")
+_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def utc(value: datetime) -> datetime:
@@ -23,6 +24,25 @@ def parse_run_at(raw) -> datetime:
         return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(timezone.utc)
     except (ValueError, OverflowError) as exc:
         raise ValueError("一次性执行日期时间无效，请重新选择") from exc
+
+
+def parse_date(raw, label: str) -> date | None:
+    if raw in (None, ""):
+        return None
+    if not isinstance(raw, str) or not _DATE.fullmatch(raw):
+        raise ValueError(f"{label}格式无效")
+    try:
+        return date.fromisoformat(raw)
+    except ValueError as exc:
+        raise ValueError(f"{label}格式无效") from exc
+
+
+def apply_date_range(s, body: dict) -> None:
+    start = parse_date(body.get("startDate"), "开始日期") if "startDate" in body else getattr(s, "start_date", None)
+    end = parse_date(body.get("endDate"), "结束日期") if "endDate" in body else getattr(s, "end_date", None)
+    if start and end and end < start:
+        raise ValueError("结束日期不能早于开始日期")
+    s.start_date, s.end_date = start, end
 
 
 def validate(s) -> None:
@@ -78,7 +98,11 @@ def trigger_for(s, now: datetime | None = None) -> str:
 
 def snapshot(s) -> dict:
     every = str(getattr(s, "every", "") or "daily")
-    return {"every": every, **({"runAt": iso(getattr(s, "run_at", None))} if every == "once" else {})}
+    start, end = getattr(s, "start_date", None), getattr(s, "end_date", None)
+    return {"every": every,
+            **({"runAt": iso(getattr(s, "run_at", None))} if every == "once" else {}),
+            **({"startDate": start.isoformat()} if start else {}),
+            **({"endDate": end.isoformat()} if end else {})}
 
 
 def execution_snapshot(s) -> tuple:

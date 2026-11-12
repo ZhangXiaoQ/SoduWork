@@ -39,6 +39,7 @@ function _schRecipeValues(item) {
     note: _schPickLocale(item.noteLocales, locale) || item.note || '',
     every: item.every || 'daily', atHour: item.atHour, atMinute: item.atMinute,
     weekday: item.weekday, timeZone: item.timeZone,
+    startDate: item.startDate || '', endDate: item.endDate || '',
     requiredCapabilities: item.requiredCapabilities || [], retryLimit: item.retryLimit,
     retryDelayMinutes: item.retryDelayMinutes, pluginBindingId: item.pluginBindingId || '',
     pluginInputs: item.pluginInputs || {},
@@ -603,6 +604,12 @@ function _schOnceFieldsHtml(value) {
     '" aria-describedby="schOnceHint"><small id="schOnceHint"></small></label>';
 }
 
+function _schDateRangeHtml(value) {
+  return '<div class="sch-date-range" id="schDateRange"' + (value.every === 'once' ? ' style="display:none"' : '') + '>' +
+    '<label><span>开始日期</span><input class="sch-in" id="schStartDate" type="date" value="' + esc(value.startDate || '') + '"></label>' +
+    '<label><span>结束日期</span><input class="sch-in" id="schEndDate" type="date" value="' + esc(value.endDate || '') + '"></label></div>';
+}
+
 function _schReadTiming() {
   const existing = _schEditing && _schEditing !== 'new' ? _schEditing : {};
   const every = document.getElementById('schEvery').value;
@@ -625,11 +632,13 @@ function _schReadTiming() {
 }
 
 function _schTimingError(value, focus) {
+  const rangeError = value.startDate && value.endDate && value.endDate < value.startDate
+    ? '结束日期不能早于开始日期' : '';
   const existing = _schEditing && _schEditing !== 'new' ? _schEditing : undefined;
-  const error = window.ScheduleTiming?.validate(value, existing) ||
+  const error = rangeError || window.ScheduleTiming?.validate(value, existing) ||
     (!window.ScheduleTiming ? '时间设置尚未就绪，请重新打开自动化' : '');
   if (error && focus) {
-    const input = document.getElementById(value.every === 'once' ? 'schRunAt' :
+    const input = document.getElementById(rangeError ? 'schEndDate' : value.every === 'once' ? 'schRunAt' :
       value.every !== 'hourly' && (!Number.isInteger(value.atHour) || value.atHour < 0 || value.atHour > 23) ? 'schH' : 'schM');
     input.classList.add('invalid'); input.setAttribute('aria-invalid', 'true');
     input.focus({ preventScroll: true });

@@ -2,12 +2,13 @@
 PostgreSQL.
 """
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy import (
     BigInteger,
     JSON,
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -615,6 +616,8 @@ class AiSchedule(Base):
     at_hour: Mapped[int] = mapped_column(Integer, default=9)
     at_minute: Mapped[int] = mapped_column(Integer, default=0)
     weekday: Mapped[int] = mapped_column(Integer, default=1)         # ISO weekday: 1 is Monday and 7 is Sunday.
+    start_date: Mapped[date | None] = mapped_column(Date, default=None)
+    end_date: Mapped[date | None] = mapped_column(Date, default=None)
     # Creator's IANA time zone, independent of the Hub host time zone.
     # Keep the requested local execution time when the host runs in UTC.
     time_zone: Mapped[str] = mapped_column(String(64), default="Asia/Shanghai")
