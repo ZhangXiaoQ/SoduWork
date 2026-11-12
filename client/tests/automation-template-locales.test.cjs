@@ -9,6 +9,7 @@ const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, ch =
 const TEMPLATE = {
   id: 'daily-report', name: '每日工作总结', description: '每天整理今日任务、风险和明日计划',
   title: '每日工作总结', note: '汇总我今天的任务进展。', every: 'daily', atHour: 18, atMinute: 0,
+  startDate: '2030-01-01', endDate: '2030-12-31',
   nameLocales: { 'en-US': 'Daily work summary' },
   descriptionLocales: { 'en-US': 'Summarize today’s work, risks and tomorrow’s plan each day' },
   noteLocales: { 'en-US': 'Summarize today’s task progress.' },
@@ -71,6 +72,8 @@ test('prefill uses the current locale so English users create English automation
   assert.equal(en._schRecipeValues(TEMPLATE).title, 'Daily work summary');
   assert.equal(en._schRecipeValues(TEMPLATE).note, 'Summarize today’s task progress.');
   assert.equal(en._schRecipeValues(TEMPLATE).every, 'daily');
+  assert.equal(en._schRecipeValues(TEMPLATE).startDate, '2030-01-01');
+  assert.equal(en._schRecipeValues(TEMPLATE).endDate, '2030-12-31');
   const zh = setup('zh-CN', [TEMPLATE]);
   assert.equal(zh._schRecipeValues(TEMPLATE).title, '每日工作总结');
   assert.equal(zh._schRecipeValues(TEMPLATE).note, '汇总我今天的任务进展。');

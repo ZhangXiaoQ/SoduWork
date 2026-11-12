@@ -12,8 +12,12 @@ def upgrade() -> None:
     op.add_column("ai_schedule", sa.Column("weekdays", sa.JSON(), nullable=False, server_default="[]"))
     op.add_column("ai_schedule", sa.Column("month_days", sa.JSON(), nullable=False, server_default="[]"))
     op.add_column("ai_schedule", sa.Column("month_day_policy", sa.String(length=16), nullable=False, server_default="skip"))
-    op.add_column("ai_schedule", sa.Column("start_date", sa.String(length=10), nullable=True))
-    op.add_column("ai_schedule", sa.Column("end_date", sa.String(length=10), nullable=True))
+    # The local date-range branch may already have created these columns.
+    columns = set() if op.get_context().as_sql else {
+        column["name"] for column in sa.inspect(op.get_bind()).get_columns("ai_schedule")}
+    for name in ("start_date", "end_date"):
+        if name not in columns:
+            op.add_column("ai_schedule", sa.Column(name, sa.String(length=10), nullable=True))
     connection = op.get_bind()
     schedule = sa.table(
         "ai_schedule",

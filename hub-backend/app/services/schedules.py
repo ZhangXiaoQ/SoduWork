@@ -249,6 +249,10 @@ def due(s, now: datetime | None = None) -> bool:
         return target is not None and target <= current
     retry_at = getattr(s, "next_retry_at", None)
     if retry_at is not None:
+        if getattr(s, "every", "") != "custom":
+            start, end = schedule_timing.schedule_dates(s)
+            if not _date_allowed(current.astimezone(schedule_zone(s)).date(), start, end):
+                return False
         return _utc(retry_at) <= current
 
     base = s.last_run_at or s.created_at

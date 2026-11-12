@@ -40,6 +40,7 @@ function _schRecipeValues(item) {
     every: item.every || 'daily', atHour: item.atHour, atMinute: item.atMinute,
     ...(item.every === 'custom' ? {customRule: item.customRule || ''} : {}),
     weekday: item.weekday, timeZone: item.timeZone,
+    startDate: item.startDate || '', endDate: item.endDate || '',
     requiredCapabilities: item.requiredCapabilities || [], retryLimit: item.retryLimit,
     retryDelayMinutes: item.retryDelayMinutes, pluginBindingId: item.pluginBindingId || '',
     pluginInputs: item.pluginInputs || {},
