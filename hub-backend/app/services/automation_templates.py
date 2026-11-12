@@ -16,13 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import AppSetting
 from .localized_text import normalize_locales as _locales
+from .schedule_timing import parse_schedule_date
 
 SETTING_KEY = "automation_templates_v1"
 MAX_ITEMS = 100
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,63}$")
 _EVERY = {"hourly", "daily", "weekly"}
 _CAPABILITIES = {"browser", "computer", "office"}
-_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def _text(value, limit: int = 240) -> str:
@@ -38,16 +38,10 @@ def _int(value, default: int, low: int, high: int) -> int:
 
 
 def _date(value, field: str) -> str:
-    value = _text(value, 10)
-    if not value:
-        return ""
-    if not _DATE_RE.fullmatch(value):
-        raise ValueError(f"{field}格式无效")
     try:
-        datetime.strptime(value, "%Y-%m-%d")
+        return parse_schedule_date(value, field) or ""
     except ValueError as exc:
         raise ValueError(f"{field}格式无效") from exc
-    return value
 
 
 def normalize(raw: dict, *, require_name: bool = True) -> dict:

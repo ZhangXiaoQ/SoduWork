@@ -129,6 +129,41 @@ class ScheduleTimingRuleTests(unittest.TestCase):
               self.assertTrue(schedules.due(schedule, utc("2030-02-01T00:01:00Z")), mode)
               self.assertFalse(schedules.due(schedule, utc("2030-02-01T00:01:01Z")), mode)
 
+  def test_retry_bounds_preserve_unbounded_once_and_custom_behavior(self):
+      now = utc("2030-02-01T00:00:00Z")
+      for mode in ("hourly", "daily", "weekly", "monthly", "once", "custom"):
+          schedule = plan(every=mode, next_retry_at=now, once_fired=True)
+          with self.subTest(mode=mode):
+              self.assertTrue(schedules.due(schedule, now))
+              self.assertFalse(schedules.due(schedule, utc("2030-01-31T23:59:59Z")))
+      for mode in ("hourly", "daily", "weekly", "monthly"):
+          schedule = plan(every=mode, start_date="2030-02-01", end_date="2030-02-01",
+                          next_retry_at=utc("2030-01-31T00:00:00Z"))
+          with self.subTest(mode=mode):
+              self.assertFalse(schedules.due(schedule, utc("2030-01-31T15:59:59Z")))
+              self.assertTrue(schedules.due(schedule, now))
+              self.assertTrue(schedules.due(schedule, utc("2030-02-01T15:59:59Z")))
+              self.assertFalse(schedules.due(schedule, utc("2030-02-01T16:00:00Z")))
+
+  def test_settle_does_not_advertise_a_retry_outside_the_date_window(self):
+      from app.services.schedule_run_contracts import apply_outcome
+      now = utc("2030-01-31T15:58:00Z")  # 23:58 in the schedule timezone.
+      for mode in ("hourly", "daily", "weekly", "monthly", "once", "custom"):
+          for bounded, delay in ((True, 5), (True, 1), (False, 5)):
+              schedule = plan(every=mode, end_date="2030-01-31" if bounded else None,
+                              owner_client_id="device", owner_user_id="user",
+                              retry_limit=2, retry_count=0, retry_delay_minutes=delay)
+              run = SimpleNamespace(trigger="timer", owner_client_id="device", owner_user_id="user",
+                                    receipt={"timing": schedule_timing.snapshot(schedule)})
+              with self.subTest(mode=mode, bounded=bounded, delay=delay):
+                  result = schedule_timing.settle(schedule, run, {"ok": False, "error": "offline"},
+                      outcome_of=lambda s, out: apply_outcome(s, out, now))
+                  expected = not (bounded and delay == 5 and mode not in ("once", "custom"))
+                  self.assertEqual(result["retrying"], expected)
+                  self.assertEqual(schedule.next_retry_at is not None, expected)
+                  self.assertEqual(schedule.retry_count, 1 if expected else 0)
+                  self.assertEqual(schedule.last_error, "offline")
+
   def test_timing_edit_fences_old_result_and_queued_retry(self):
       from app.api.schedule_contract import apply_schedule_update
       schedule = plan(every="monthly", month_days=[30, 31], owner_client_id="device", owner_user_id="user",

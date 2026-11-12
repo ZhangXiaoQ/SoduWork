@@ -42,8 +42,13 @@ class TemplateValidationTests(unittest.TestCase):
         self.assertEqual(result["endDate"], "2026-12-01")
         with self.assertRaisesRegex(ValueError, "结束日期不能早于开始日期"):
             templates.normalize({**VALID, "startDate": "2026-12-01", "endDate": "2026-11-12"})
-        with self.assertRaisesRegex(ValueError, "开始日期格式无效"):
-            templates.normalize({**VALID, "startDate": "2026-02-30"})
+        for field, label in (("startDate", "开始日期"), ("endDate", "结束日期")):
+            for value in ("2026-02-30", "2026-11-12suffix", "2026-11-12T00:00:00Z", False, 0):
+                with self.subTest(field=field, value=value), self.assertRaisesRegex(ValueError, f"{label}格式无效"):
+                    templates.normalize({**VALID, field: value})
+        for value in (None, ""):
+            result = templates.normalize({**VALID, "startDate": value, "endDate": value})
+            self.assertEqual((result["startDate"], result["endDate"]), ("", ""))
 
     def test_invalid_batch_and_duplicate_id_leave_persisted_catalog_unchanged(self):
         async def scenario():

@@ -68,3 +68,33 @@ test('boundaries and multilingual names remain valid without silent rewriting', 
     assert.deepEqual(page.render(), {}); page.unmount()
   }
 })
+
+test('date controls retain optional bounds and reject a reversed range before saving', async () => {
+  setLocale('zh-CN')
+  const saved = [], changes = []
+  const props = { value: { ...valid, startDate: '2030-02-01', endDate: '2030-01-31' },
+    onChange: value => changes.push(value), onCancel() {}, onSave: () => saved.push('save') }
+  const page = await createComponentHarness(new URL('../src/screens/AutomationTemplates.jsx', import.meta.url), {
+    exportName: 'Editor', privateExports: ['Editor'], dependencies, props,
+  })
+  try {
+    const dates = () => page.nodes(n => n.type === 'input' && n.props.type === 'date')
+    assert.equal(dates().length, 2)
+    assert.equal(dates()[0].props.max, '2030-01-31')
+    assert.equal(dates()[1].props.min, '2030-02-01')
+    page.act(() => page.nodes(n => n.type === 'form')[0].props.onSubmit({ preventDefault() {} }))
+    assert.deepEqual(saved, [])
+    assert.match(page.nodes(n => n.props.className === 'at-field-error')[0].props.children, /结束日期不能早于开始日期/)
+    page.act(() => dates()[1].props.onChange({ target: { value: '2030-02-28' } }))
+    assert.equal(changes[0].startDate, '2030-02-01')
+    assert.equal(changes[0].endDate, '2030-02-28')
+    page.render({ ...props, value: changes[0] })
+    page.act(() => page.nodes(n => n.type === 'form')[0].props.onSubmit({ preventDefault() {} }))
+    assert.deepEqual(saved, ['save'])
+    page.render({ ...props, value: valid })
+    assert.equal(dates()[0].props.value, '')
+    assert.equal(dates()[1].props.min, undefined)
+    page.act(() => page.nodes(n => n.type === 'form')[0].props.onSubmit({ preventDefault() {} }))
+    assert.deepEqual(saved, ['save', 'save'])
+  } finally { page.unmount() }
+})
