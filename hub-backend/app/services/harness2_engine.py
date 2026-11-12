@@ -37,7 +37,7 @@ def _fault(exc: Exception, phase: str = "") -> Harness2RefinementError:
 
 
 def text_surface() -> tree.SurfaceSpec:
-    """The official OpenCode text layout with an additional strict adapter fence."""
+    """Reuse the upstream text schema; its name does not select an executor."""
     return tree.SurfaceSpec(
         name="opencode", always_on=TEXT_FILES, always_on_max=MAX_HARNESS_CHARS,
         always_on_cap_reason="Keep the bounded planning instructions concise.",
@@ -346,6 +346,8 @@ def refine(prompt: str, complete: Complete, work_dir: Path, progress: Progress) 
             "task", 1, base, adapter=adapter, prop=_Proposer(adapter),
             work_dir=root, run_id_of=lambda label: label,
             base_tree=tree.read_tree(text_surface(), adapter.base_harness()),
+            # Managed models may allow only one request with no waiting queue.
+            # Preserve all stages without making a turn compete with itself.
             propose_workers=1, rollout_workers=1,
         )
         if calls.failed:

@@ -13,6 +13,8 @@ if (typeof electron === 'string') {
   const client = path.resolve(__dirname, '..'), output = path.resolve(client, '../outputs/library-remote-storage');
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-library-storage-'));
   fs.mkdirSync(output, { recursive: true }); app.setPath('userData', path.join(temporary, 'profile'));
+  // Keep isolated screenshot rendering portable across CI graphics environments.
+  app.disableHardwareAcceleration();
   const report = { ok: false, boundary: 'Production panel/dialog in real Electron, synthetic status and API calls. No MinIO/NFS server or user data.', cases: [] };
   let win;
   const js = code => win.webContents.executeJavaScript(code, true);

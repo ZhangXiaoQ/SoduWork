@@ -16,30 +16,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  mobile:
-    name: Android source tests
-    runs-on: ubuntu-22.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '22'
-          package-manager-cache: false
-      - uses: subosito/flutter-action@fd55f4c5af5b953cc57a2be44cb082c8f6635e8e # v2.21.0
-        with:
-          flutter-version: '3.47.7'
-          channel: stable
-          cache: true
-      - name: Analyze and test the locked mobile source
-        working-directory: mobile
-        run: |
-          flutter pub get --enforce-lockfile
-          flutter analyze
-          flutter test
-
   startup:
     name: Source HTTP startup (${{ matrix.os }})
     strategy:
@@ -142,7 +118,8 @@ jobs:
           else
             hub-backend/.venv/bin/python -m pip install -r hub-backend/requirements-test.txt
             sudo apt-get update
-            sudo apt-get install -y xvfb xauth ripgrep libgtk-3-0 libnss3 libasound2
+            sudo apt-get install -y xvfb xauth libgtk-3-0 libnss3 libasound2 ripgrep
+            rg --version
           fi
       - run: npm ci
         working-directory: client

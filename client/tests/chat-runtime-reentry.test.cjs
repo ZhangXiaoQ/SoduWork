@@ -14,7 +14,7 @@ function section(start, end) {
 function fixture(runtime = 'opencode') {
   const opened = [], reset = [];
   const ctx = {
-    global: {}, document: { getElementById: () => null }, setTimeout: () => 1,
+    global: {}, document: { getElementById: () => null }, setTimeout: () => 1, clearTimeout() {},
     _ref: '', _sessionId: '', _draftKey: 'new', _busy: false, _viewEpoch: 1,
     _openingTask: null, _openingEpoch: -1, _sessionOptions: {}, _snap: null,
     _wd: {}, _mode: 'full', _sessionCaps: [], _sessionInputs: [], _activeCollabTaskId: '', _workModel: () => 'selected-model',
@@ -45,6 +45,65 @@ function fixture(runtime = 'opencode') {
     section('  function sessionInfo()', '  function hasSession()'), ctx);
   return { ctx, opened, reset };
 }
+
+test('cold remote requirement navigation restores work cards before opening its original execution', async t => {
+  const fsp = require('node:fs/promises');
+  const root = await fsp.mkdtemp(path.join(require('node:os').tmpdir(), 'soduwork-requirement-entry-'));
+  const app = {getPath: () => root};
+  let actor = {hub:'http://127.0.0.1:18989', clientId:'desktop', session:
+    Buffer.from(JSON.stringify({typ:'device',uid:'alice',cid:'desktop',iat:1,exp:9999999999}))
+      .toString('base64url') + '.' + 'a'.repeat(64)};
+  let refused = false;
+  const executionContext = {location:{mode:'remote'},runner:{runnerId:'cloud-runner',host:'Isolated cloud'}};
+  const requests = [], events = [];
+  const cloud = require('../main/conversation/cloud-handoff').create({app,identityOf:async()=>actor,
+    interval:60000, remoteDirectory:true, request:async (_identity, route, options) => {
+      requests.push({route,options});
+      if(refused) throw Error('remote access denied');
+      if(route==='/tasks/req') return {id:'req',kind:'requirement',status:'done',title:'Requirement',
+        workRouting:{executionContext}};
+      if(route.includes('/ai-session?')) return {ok:true,taskId:'req',ref:'original-run',
+        runnerId:'cloud-runner',engine:'pi',executionContext,status:'done',canSend:true,items:[],last:0};
+      if(route.endsWith('/attachments')) return [];
+      if(route.startsWith('/cloud-conversations')) return {ok:true,chats:[]};
+      assert.fail(route);
+    }});
+  const bridge = require('../main/agent-runtime/pi-session-bridge').createPiSessionBridge({
+    app,runnerAdapters:[],sessionModule:{probe:async()=>({ok:true}),history:async()=>({ok:true,chats:[]}),
+      historyEntry:async()=>({ok:false,notFound:true}),open:async()=>assert.fail('must not start a local Agent')}});
+  // Install the actual composite provider, which must forward exact lookups.
+  const ipc = fs.readFileSync(path.join(__dirname,'../main/pi-session/ipc.js'),'utf8');
+  const start = ipc.indexOf('  session.setExternalHistory?.({');
+  vm.runInNewContext(ipc.slice(start,ipc.indexOf('\n  });',start)+6), {
+    session:bridge,_cloudHandoff:cloud,_accountSync:{history:async()=>({ok:true,chats:[]})}});
+  const cards = require('../main/conversation/work-conversation-cards').create({app,session:bridge,identityOf:async()=>actor});
+  const {ctx} = fixture('pi');
+  ctx.window=ctx.global;ctx.global.SoduWorkAPI={taskStorageKey:()=> 'isolated-owner'};
+  ctx._api=()=>({workCards:async id=>{events.push('cards');return cards.read(id);}});
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../components/panels/chat-work-cards.js'),'utf8'),ctx);
+  ctx._workCards=ctx.global.ChatWorkCards.create(ctx);
+  const views=[];
+  ctx._ensureOnce=async id=>{
+    events.push('open');
+    const view=await cloud.reopen(id,'remote-view-'+views.length);views.push(view);
+    ctx._sessionId=id;ctx._ref=view.ref;ctx._snap=view.snapshot();
+    return true;
+  };
+  t.after(async()=>{for(const view of views) await view.close();bridge.dispose();
+    await fsp.rm(root,{recursive:true,force:true,maxRetries:5,retryDelay:50});});
+  assert.equal(await ctx.enter('','task-execution:req'),true,ctx._snap?.statusText);
+  assert.deepEqual(events,['cards','open']);
+  assert.equal(ctx._snap.cloudHandoff.ref,'original-run');
+  assert.equal(ctx._snap.cloudHandoff.target.runnerId,'cloud-runner');
+  assert.equal(ctx._snap.cwd || '', '');
+  assert.ok(requests.every(row=>!row.options?.method || row.options.method==='GET'));
+  assert.equal((await cards.read('unknown-local')).ok,false,'unknown local archives still fail closed');
+  assert.equal(await bridge.findRunnerRow('task-execution:req',{nativeOnly:true}),null);
+  refused=true;
+  const denied=await cards.read('task-execution:req');
+  assert.equal(denied.ok,false);assert.match(denied.reason,/remote access denied/);
+  assert.equal(views.length,1,'metadata validation must not start a second view');
+});
 
 test('re-entering an already open conversation preserves every runtime and its fixed session resources', async () => {
   for (const runtime of ['pi', 'opencode', 'qwen', 'codex-harness', 'codex', 'claude', 'dsh']) {

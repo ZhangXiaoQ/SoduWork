@@ -20,7 +20,7 @@ function appFixture(t, isPackaged) {
   return app;
 }
 
-test('public identity comes from the existing package and accepts empty update trust', () => {
+test('public identity comes from the existing package and configured update trust', () => {
   const profile = distribution.current();
   const packageInfo = require('../package.json');
   assert.equal(profile.distributionId, 'self-hosted');
@@ -32,10 +32,9 @@ test('public identity comes from the existing package and accepts empty update t
   assert.equal(profile.workspaceName, 'SoduWork');
   assert.equal(profile.linuxPackageName, packageInfo.build.deb.packageName);
   assert.deepEqual(profile.updateTrust, require('../update-trust.json'));
-  assert.deepEqual(profile.updateTrust.keys, {});
   assert.ok(Object.isFrozen(profile.updateTrust.keys));
   assert.deepEqual(distribution.fromMetadata(profile), profile);
-  for (const id of ['internal', 'cn', 'global', 'unknown']) {
+  for (const id of ['internal', 'stage', 'cn', 'global', 'unknown']) {
     assert.throws(() => distribution.selected({ SODUWORK_DISTRIBUTION: id }), /Unknown/);
   }
 });
@@ -69,7 +68,7 @@ test('self-hosted update channels are explicit, validated and bound to package i
   }
 });
 
-test('an otherwise valid signed manifest is rejected when public trust has no keys', () => {
+test('an otherwise valid signed manifest is rejected when isolated public trust has no keys', t => {
   const signing = crypto.generateKeyPairSync('ed25519');
   const manifest = { schema: 1, version: '99.0.0', releaseId: '00000000-0000-4000-8000-000000000001',
     channel: 'stable', platform: 'win32', arch: 'x64', keyId: 'unregistered',
@@ -80,7 +79,21 @@ test('an otherwise valid signed manifest is rejected when public trust has no ke
   const fixtureTrust = { schema: 1, keys: { unregistered: signing.publicKey.export({ format: 'der', type: 'spki' })
     .subarray(-32).toString('base64') } };
   assert.equal(validateManifest(manifest, fixtureTrust, 'win32'), manifest);
-  assert.throws(() => validateManifest(manifest, distribution.current().updateTrust, 'win32'), /不受信任/);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-empty-update-trust-'));
+  t.after(() => {
+    assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir()));
+    assert.ok(path.basename(root).startsWith('soduwork-empty-update-trust-'));
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  fs.mkdirSync(path.join(root, 'main'));
+  for (const file of ['distribution.cjs', 'hub-endpoint.cjs']) {
+    fs.copyFileSync(path.join(__dirname, '../main', file), path.join(root, 'main', file));
+  }
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify(require('../package.json')));
+  fs.writeFileSync(path.join(root, 'update-trust.json'), JSON.stringify({ schema: 1, keys: {} }));
+  const isolated = require(path.join(root, 'main/distribution.cjs')).current();
+  assert.deepEqual(isolated.updateTrust.keys, {});
+  assert.throws(() => validateManifest(manifest, isolated.updateTrust, 'win32'), /不受信任/);
 });
 
 for (const isPackaged of [false, true]) test(`self-hosted ${isPackaged ? 'packaged' : 'source'} clients persist an editable Hub`, t => {

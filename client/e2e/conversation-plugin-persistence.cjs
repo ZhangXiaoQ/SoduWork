@@ -108,7 +108,8 @@ app.whenReady().then(async () => {
   ipcMain.handle('pi-session-snapshot', () => ({ ok: true, snapshot: handle.uiSnapshot() }));
   for (const [channel, value] of Object.entries({ 'pi-session-history': { ok: true, chats: [] }, 'pi-session-outputs': { ok: true, items: [] },
     'pi-session-release': { ok: true }, 'pi-session-runtime-models': { ok: true, items: [] },
-    'work-preview-hide': { ok: true }, 'work-preview-destroy': { ok: true } })) ipcMain.handle(channel, () => value);
+    'work-preview-hide': { ok: true }, 'work-preview-destroy': { ok: true },
+    'work-preview-reset-embedded': { ok: true } })) ipcMain.handle(channel, () => value);
   const source = path.join(__dirname, 'fixtures/workbench-annotations.html'), scripts = [];
   const html = fs.readFileSync(source, 'utf8').replace(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi, (_, attrs, body) => {
     const src = attrs.match(/src=["']([^"']+)/); scripts.push(src ? fs.readFileSync(path.resolve(path.dirname(source), src[1]), 'utf8') : body); return '';
@@ -122,7 +123,8 @@ app.whenReady().then(async () => {
   for (const file of ['core/i18n-dom.js', 'core/i18n.js', 'components/panels/compose-candidate-navigation.js',
     'components/panels/chat-plugin-mention-model.js', 'components/panels/chat-plugin-mention.js']) await js(read(file) + '\nvoid 0;');
   for (const script of scripts) await js(script + '\nvoid 0;');
-  await js(`SoduWorkAPI.pluginCatalog=async()=>({items:[{pluginId:'meeting-fixture',key:'meeting-fixture',name:'会议查询 · 回归验证',personal:true,enabled:true}]});void 0;`);
+  await js(`SoduWorkAPI.pluginCatalog=async()=>({items:[{pluginId:'meeting-fixture',key:'meeting-fixture',name:'会议查询 · 回归验证',personal:true,enabled:true,
+    inputs:[{key:'format',label:'Format',type:'text',default:'qa-format-marker'}]}]});void 0;`);
   ready = true;
   stage('Open conversation');
   await js(`SoduWorkI18n.setLocale('zh-CN');NativeChat.enter('',${JSON.stringify(handle.sessionId)},{adapterId:'pi'});`);
@@ -134,6 +136,12 @@ app.whenReady().then(async () => {
   fs.writeFileSync(path.join(out, 'before-send.png'), (await win.webContents.capturePage()).toPNG());
   await send('查询最近的会议', 1);
   assert.deepEqual(resolutions, [['meeting-fixture']]); assert.deepEqual(executions, ['1']);
+  assert.equal(requests[0].text, '查询最近的会议');
+  assert.equal(requests[0].options.plugins[0].inputValues.format, 'qa-format-marker');
+  assert.ok(fixture.requests.some(body => JSON.stringify(body.messages).includes('qa-format-marker')),
+    'the actual model request receives structured parameters');
+  assert.doesNotMatch(JSON.stringify(handle.uiSnapshot().messages), /qa-format-marker|本轮参数/,
+    'visible history never includes private parameter data');
   report.cases.push('Slash selection sends its plugin, actually calls the tool, and clears the composer chip.');
   await send('再查询一次会议', 2);
   assert.equal(requests[1].options.plugins.length, 0, 'follow-up sends no picker selection');

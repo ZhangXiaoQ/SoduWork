@@ -105,10 +105,12 @@ function resolve(item, deps, assertActive = () => {}) {
     if (!remote) binding(item, deps, 'mcp.connect'); // Remote installations rechecked by authorize before every request.
     const row = store.read(bound), token = row.values[connection.credentialKey];
     if (typeof token !== 'string' || !token.trim() || /[\r\n]/.test(token) || token.length > 4096) throw Error('请先登录应用以同步接入凭据');
-    return { token, revision: row.revision };
+    const installed = remote ? {jiyong:connection.jiyong} : require('./personal-plugins').get(deps.app,bound.pluginId);
+    return { token, revision: store.mcpRevision(row, installed, connection.credentialKey) };
   };
   const current = read();
   const resolved = { ...connection, token: current.token, revision: current.revision, readCurrent: read,
+    notifyChanged: change => {read();item.view?.webContents?.send('app-data-changed',change);},
     inspect: action => require('./work-preview-app-inspect.cjs').inspect(item, action, read) };
   return require('./jiyong-mcp-bindings.cjs').extend(resolved,remote ? {jiyong:connection.jiyong} : require('./personal-plugins').get(deps.app,bound.pluginId),bound);
 }

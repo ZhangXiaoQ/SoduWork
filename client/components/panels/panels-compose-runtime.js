@@ -18,7 +18,7 @@
       modelMode: 'managed', goalMode: 'native', group: 'more', order: 60 },
     { id: 'dsh', displayName: 'DeepSeek Harness', summary: '通过 ACP 接入的 DeepSeek 执行底座',
       modelMode: 'managed', goalMode: 'native', group: 'more', order: 70 },
-    { id: 'harness2', displayName: 'Google Harness²', summary: 'Harness² 文本推演后由 OpenCode 执行，增加耗时与模型用量',
+    { id: 'harness2', displayName: 'Google Harness²', summary: 'Harness² 文本推演后独立执行工具，增加耗时与模型用量',
       modelMode: 'managed', goalMode: 'native', group: 'more', order: 80 },
   ]);
   // Until the main process returns a health-checked projection, Pi is the only
@@ -607,5 +607,6 @@
   };
   global.addEventListener?.('soduwork-data-scope-changed', ownerChanged);
   global.addEventListener?.('soduwork-device-auth', ownerChanged);
+  global.addEventListener?.('soduwork-locale-change', () => { if (boundOptions) paint(boundOptions.root); });
   if (typeof module !== 'undefined' && module.exports) module.exports = global.ComposeRuntime;
 })(window);

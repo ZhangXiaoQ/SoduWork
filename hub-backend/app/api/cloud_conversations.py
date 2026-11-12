@@ -70,6 +70,8 @@ async def directory(
     cloud_rows = cloud_rows[:limit]
     task_ids = [str(task.id) for task in cloud_rows]
     cloud_tasks = [task_svc.task_to_api(task) for task in cloud_rows]
+    from ..services import conversation_review_projection
+    await conversation_review_projection.decorate_many(session, cloud_rows, cloud_tasks)
     ai = await task_svc.ai_states(session, task_ids)
     for task in cloud_tasks:
         if task["id"] in ai:
@@ -130,7 +132,9 @@ async def directory(
             "taskId": str(task["id"]),
             "transferId": str(handoff.transfer_id or ""),
             "ref": ref,
-            "title": str(source.get("title") or task.get("title") or "Cloud conversation")[:200],
+            "title": str((task.get("title") if task.get("conversationReview") else source.get("title"))
+                         or task.get("title") or "Cloud conversation")[:200],
+            "conversationReview": task.get("conversationReview"),
             "at": task.get("updatedAt") or task.get("created"),
             "state": state,
             "remoteState": state,

@@ -20,7 +20,11 @@ function snapshot(app) {
     const value = JSON.parse(fs.readFileSync(file(app), 'utf8'));
     if (value.schema !== 1 || !MODES.has(value.mode) || !Number.isSafeInteger(value.revision) || value.revision < 0) throw Error('invalid');
     return { mode: value.mode === 'full' && value.fullConsentVersion !== 1 ? 'standard' : value.mode, revision: value.revision };
-  } catch { return { mode: 'standard', revision: 0 }; }
+  } catch (error) {
+    // A fresh profile uses the product default. Invalid/unreadable saved
+    // preferences retain the existing conservative recovery behavior.
+    return { mode: error?.code === 'ENOENT' ? 'full' : 'standard', revision: 0 };
+  }
 }
 function save(app, mode, current) {
   const value = { schema: 1, mode, revision: current.revision + 1, fullConsentVersion: mode === 'full' ? 1 : 0 };

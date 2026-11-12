@@ -5,6 +5,7 @@ import asyncio
 import contextvars
 import json
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import runner_main
@@ -105,6 +106,30 @@ class RunnerHandshakeTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ConnectionError, "fixture revoked"):
             await machine._hello()
         self.assertFalse(machine.bin)
+
+    async def test_desktop_plugin_admission_survives_hello_and_cluster_refresh(self):
+        from app.services.runner_hub import _Runner
+        from app.services.cluster_runtime import RemoteRunner
+        wire = Wire(['{"op":"welcome","caps":["bin1"]}'])
+        machine = self.machine(wire)
+        machine.desktop_owned = True
+        machine._admission = SimpleNamespace(_journal=object())
+        await machine._hello()
+        advertised = wire.sent[0]["caps"]
+        self.assertIn("desktopPluginTurn1", advertised)
+        self.assertIn("admit1", advertised)
+        registered = _Runner(None, wire.sent[0])
+        self.assertEqual(registered.caps, advertised)
+        report = {**registered.api(), "clusterToken": "fixture-token"}
+        proxy = RemoteRunner("fixture-node", report)
+        proxy.update(report)
+        self.assertEqual(proxy.caps, advertised)
+
+    def test_protocol_caps_remain_bounded_and_reject_malformed_entries(self):
+        from app.services.runner_hub import clean_protocol_caps
+        self.assertEqual(clean_protocol_caps(None), [])
+        self.assertEqual(clean_protocol_caps([None, 1, "", "x" * 65, "admit1", "admit1"]), ["admit1"])
+        self.assertEqual(len(clean_protocol_caps([f"cap{i}" for i in range(1000)])), 32)
 
     async def test_timeout_closes_connection_and_retries_same_identity_before_reporting(self):
         wires = [Wire(), Wire(['{"op":"welcome","caps":["bin1"]}'])]

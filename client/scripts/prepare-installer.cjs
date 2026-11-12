@@ -1,8 +1,9 @@
 'use strict';
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 const { getMakeNsisPath } = require('app-builder-lib/out/toolsets/windows');
+const { notarizeApp, notarizeEnabled } = require('./notarize-macos.cjs');
 
 // This module is registered as BOTH afterPack and afterSign and stages its
 // work across the two calls of one pack (same appOutDir):
@@ -30,6 +31,7 @@ const { getMakeNsisPath } = require('app-builder-lib/out/toolsets/windows');
 // inventory and payload entirely, but still copy the shell runtime - the
 // packaged app needs bundled Git at runtime.
 const previousPack = { key: null, assembled: false };
+const macAfterPack = new Set();
 
 function isDirOnlyBuild(context) {
   const names = (context.targets || []).map(target => target?.name).filter(Boolean);
@@ -46,6 +48,16 @@ async function prepare(context = {}) {
       require('./verify-runtime.cjs').verify(context.appOutDir, context.electronPlatformName, { packaged: true, resourcesPath });
       require('./verify-runtime.cjs').verifyExecutables(resourcesPath, context.electronPlatformName,
         typeof context.arch === 'string' ? context.arch : ({ 1: 'x64', 3: 'arm64' })[context.arch]);
+      if (context.electronPlatformName === 'darwin') {
+        const appPath = path.join(context.appOutDir, context.packager.appInfo.productFilename + '.app');
+        const key = path.resolve(appPath);
+        const afterSign = macAfterPack.has(key);
+        if (afterSign && notarizeEnabled(process.env)) {
+          await notarizeApp({ appPath, env: process.env,
+            run: (file, args, options) => execFileSync(file, args, { stdio: 'inherit', ...options }) });
+        }
+        macAfterPack.add(key);
+      }
     }
     return;
   }

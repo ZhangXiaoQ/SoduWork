@@ -5,12 +5,33 @@ disabled computer may finish existing work and return its results, but cannot
 receive another prompt, shell input, package install, or configuration change.
 """
 from __future__ import annotations
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
+from contextvars import ContextVar
 
 from sqlalchemy import select, text
 
 class RunnerAccessDenied(RuntimeError):
     pass
+
+
+_content_transaction = ContextVar("runner_content_transaction", default=None)
+_CONTENT_OPS = frozenset({"content.put", "content.seal", "content.read", "content.status"})
+
+
+@contextmanager
+def content_transaction(session):
+    """Reuse the caller's transaction only for immutable content operations.
+
+    An event ingest already owns database locks. A second local connection
+    would wait on its own caller before sending the persistence acknowledgement.
+    This does not bypass the final ownership/policy check or commit caller work.
+    Remote Hub processes still perform their own transport authorization.
+    """
+    token = _content_transaction.set(session)
+    try:
+        yield
+    finally:
+        _content_transaction.reset(token)
 
 
 async def acquire_runner_policy_lock(session, runner_id):
@@ -30,6 +51,7 @@ async def acquire_runner_policy_lock(session, runner_id):
 _DISABLED_ALLOWED = frozenset({
     "welcome", "ping", "session.ack", "session.nack", "runner.probe", "job.has", "job.status", "job.info",
     "job.session", "job.file", "job.stop", "input.drop",
+    "content.put", "content.seal", "content.read", "content.status",
     "agent.setup", "agent.job", "component.list", "component.job",
     "deploy.status", "quality.status", "term.close", "term.detach",
 })
@@ -68,14 +90,22 @@ async def authorize_send(runner, op):
         return
     from ..automation_models import RunnerNode
     from ..db import SessionLocal
+    async def check_policy(session):
+        await acquire_runner_policy_lock(session, runner.id)
+        row = await session.scalar(select(RunnerNode).where(
+            RunnerNode.id == runner.id).with_for_update().execution_options(populate_existing=True))
+        reason = denial(row, runner, op)
+        if reason:
+            raise RunnerAccessDenied(reason)
+
+    caller = _content_transaction.get() if op in _CONTENT_OPS else None
+    if caller is not None:
+        await check_policy(caller)
+        yield
+        return
     async with SessionLocal() as session:
         async with session.begin():
-            await acquire_runner_policy_lock(session, runner.id)
-            row = await session.scalar(select(RunnerNode).where(
-                RunnerNode.id == runner.id).with_for_update().execution_options(populate_existing=True))
-            reason = denial(row, runner, op)
-            if reason:
-                raise RunnerAccessDenied(reason)
+            await check_policy(session)
             # Keep the same row lock as administrative state transitions until
             # bytes leave this Hub; a transfer cannot pass the last check.
             yield

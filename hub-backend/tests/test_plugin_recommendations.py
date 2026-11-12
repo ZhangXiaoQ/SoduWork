@@ -249,6 +249,37 @@ class RecommendationEndpointTests(unittest.IsolatedAsyncioTestCase):
         r = await self.client.get("/api/v1/admin/plugins/p-compose/recommendation")
         self.assertTrue(r.json()["composeRecommended"])
 
+    async def test_sidebar_is_an_independent_admin_placement(self):
+        r = await self.patch_policy("p-compose", {"sidebarRecommended": True})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertTrue(r.json()["sidebarRecommended"])
+        self.assertFalse(r.json()["composeRecommended"])
+        r = await self.client.get("/api/v1/admin/plugins/p-compose/recommendation")
+        self.assertTrue(r.json()["sidebarRecommended"])
+        r = await self.patch_policy("p-compose", {"composeRecommended": True})
+        self.assertTrue(r.json()["sidebarRecommended"], "legacy callers preserve sidebar placement")
+        r = await self.client.get("/api/v1/plugins/recommendations?surface=sidebar")
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual([row["targetId"] for row in r.json()["items"]], ["p-compose"])
+        r = await self.patch_policy("p-compose", {"sidebarRecommended": "yes", "composeRecommended": False})
+        self.assertEqual(r.status_code, 422)
+        r = await self.client.get("/api/v1/admin/plugins/p-compose/recommendation")
+        self.assertTrue(r.json()["composeRecommended"], "invalid requests cannot partially save")
+        r = await self.patch_policy("p-compose", {"sidebarRecommended": False})
+        self.assertFalse(r.json()["sidebarRecommended"])
+        self.assertTrue(r.json()["composeRecommended"])
+        r = await self.client.get("/api/v1/plugins/recommendations?surface=sidebar")
+        self.assertEqual(r.json()["items"], [])
+
+    async def test_employee_cannot_recommend_to_sidebar(self):
+        async def employee():
+            user = await self._user("emp-1")
+            user._perms = set()
+            return user
+        self.app.dependency_overrides[current_user] = employee
+        r = await self.patch_policy("p-compose", {"sidebarRecommended": True})
+        self.assertEqual(r.status_code, 403)
+
     async def test_delete_plugin_cleans_recommendation_rows(self):
         async with self.sessions() as session:
             await plugin_marketplace.sync_app_recommendation(

@@ -9,12 +9,11 @@
 .cp-skill-tag button{appearance:none;border:0;background:transparent;width:18px;height:18px;padding:0;border-radius:5px;
   display:grid;place-items:center;color:var(--ink-5);font:14.5px/1 inherit;cursor:pointer}
 .cp-skill-tag button:hover{background:var(--bg-2);color:var(--ink-2)}
-.cp-skill-menu{display:none;position:absolute;left:16px;bottom:calc(100% + 8px);z-index:82;
-  width:min(460px,calc(100% - 32px));box-sizing:border-box;max-height:360px;overflow:auto;padding:6px;
+.cp-skill-menu{display:none;position:fixed;left:16px;top:auto;bottom:auto;z-index:1800;
+  width:min(460px,calc(100vw - 16px));box-sizing:border-box;max-height:360px;overflow:auto;overscroll-behavior:contain;padding:6px;
   border:1px solid color-mix(in srgb,var(--line) 92%,transparent);border-radius:13px;background:var(--bg-0);
   box-shadow:0 22px 54px -22px rgba(22,35,58,.34),0 5px 14px -9px rgba(22,35,58,.2)}
 .cp-skill-menu.show{display:block;animation:cp-skill-in .12s ease-out}
-.compose-panel[data-stage='compose'] .cp-skill-menu{top:calc(100% + 8px);bottom:auto;max-height:min(330px,48vh)}
 .cp-skill-menu-head{height:27px;display:flex;align-items:center;justify-content:space-between;padding:0 8px;
   color:var(--ink-5);font-size:max(var(--font-min-readable, 14.5px), 10.5px)}.cp-skill-menu-head span{font-weight:550;color:var(--ink-4)}
 .cp-skill-menu-head i{font-style:normal}

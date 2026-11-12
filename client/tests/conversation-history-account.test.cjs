@@ -24,23 +24,40 @@ function fixture(t) {
       fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(value)); return file;
     } };
 }
-test('ordinary, work and live rows use persisted account ownership and return after switching back', t => {
-  const f = fixture(t), rows = ['alice', 'bob', 'unbound'].map(id => ({ id, count: 1 }));
-  assert.deepEqual(access.visible(f.app, rows).map(row => row.id), ['alice']);
+test('local history remains visible across accounts while execution ownership stays strict', t => {
+  const f = fixture(t), id = 'pre-rename';
+  const previous = crypto.createHash('sha256').update('soduwork-account\0one').digest('hex').slice(0, 32);
+  f.write('session-memory-bindings', id, { owner: previous, ids: [] });
+  const rows = [{ id, workOwner: previous }];
+  assert.deepEqual(access.visible(f.app, rows).map(row => row.id), [id]);
+  assert.doesNotThrow(() => access.assertOwner(f.app, id, access.actor(f.app), rows[0]));
   f.switch(identity('two'));
-  assert.deepEqual(access.visible(f.app, rows).map(row => row.id), ['bob']);
+  assert.deepEqual(access.visible(f.app, rows).map(row => row.id), [id]);
+  assert.throws(() => access.assertOwner(f.app, id, access.actor(f.app), rows[0]), /当前账号/);
+  f.switch(identity());
+  f.write('requirement-session-context', id, { owner: scope(identity('two')) });
+  assert.deepEqual(access.visible(f.app, rows).map(row => row.id), [id]);
+  assert.throws(() => access.assertOwner(f.app, id, access.actor(f.app), rows[0]), /当前账号/);
+});
+test('local history visibility survives account switch, expiry and signout without granting execution', t => {
+  const f = fixture(t), rows = ['alice', 'bob', 'unbound'].map(id => ({ id, count: 1 }));
+  assert.deepEqual(access.visible(f.app, rows).map(row => row.id), ['alice', 'bob', 'unbound']);
+  f.switch(identity('two'));
+  assert.deepEqual(access.visible(f.app, rows).map(row => row.id), ['alice', 'bob', 'unbound']);
   assert.throws(() => access.assertOwner(f.app, 'alice'), /当前账号/);
   f.switch(identity());
-  assert.deepEqual(access.visible(f.app, rows).map(row => row.id), ['alice']);
+  assert.deepEqual(access.visible(f.app, rows).map(row => row.id), ['alice', 'bob', 'unbound']);
   f.expire();
-  assert.deepEqual(access.visible(f.app, rows).map(row => row.id), ['alice'], 'trusted offline owner remains usable');
+  assert.deepEqual(access.visible(f.app, rows).map(row => row.id), ['alice', 'bob', 'unbound']);
   f.switch(null);
-  assert.deepEqual(access.visible(f.app, rows), []);
+  assert.deepEqual(access.visible(f.app, rows).map(row => row.id), ['alice', 'bob', 'unbound']);
+  assert.throws(() => access.assertOwner(f.app, 'alice'), /请先登录/);
 });
-test('damaged or conflicting ownership cannot claim a foreign archive; cloud flag alone is not authority', t => {
+test('local read does not claim execution ownership and cloud flag alone is not authority', t => {
   const f = fixture(t);
   f.write('requirement-session-context', 'alice', { owner: scope(identity('two')) });
-  assert.deepEqual(access.visible(f.app, [{ id: 'alice' }, { id: 'unknown', cloud: true }]), []);
+  assert.deepEqual(access.visible(f.app, [{ id: 'alice' }, { id: 'unknown', cloud: true }]).map(row => row.id), ['alice']);
+  assert.throws(() => access.assertOwner(f.app, 'alice'), /当前账号/);
   f.write('conversation-handoffs', 'remote', { sessionId: 'remote', owner: connectionScope(identity()), entryKind: 'cloud' });
   assert.equal(access.visible(f.app, [{ id: 'remote', cloud: true }]).length, 1);
   f.switch(identity('two'));
@@ -84,15 +101,16 @@ test('legacy migration never claims an ownerless runner row', t => {
     { id: 'runner-only', adapterId: 'runner' }, { allowLegacy: true }), /当前账号/);
   assert.equal(fs.existsSync(path.join(f.root, 'conversation-history-owners')), false);
 });
-test('an ownerless native archive is listed and bound during the first authenticated history projection', t => {
+test('listing an ownerless archive never assigns it to the current account', t => {
   const f = fixture(t), archive = path.join(f.root, 'pi-agent', 'sessions', 'project', 'legacy.jsonl');
   fs.mkdirSync(path.dirname(archive), { recursive: true });
   fs.writeFileSync(archive, '{"type":"session","id":"legacy-list"}\n');
   const rows = [{ id: 'legacy-list', path: archive, count: 1, cwd: f.root }];
   assert.deepEqual(access.visible(f.app, rows).map(row => row.id), ['legacy-list']);
-  assert.doesNotThrow(() => access.assertOwner(f.app, 'legacy-list', access.actor(f.app), rows[0]));
+  assert.throws(() => access.assertOwner(f.app, 'legacy-list', access.actor(f.app), rows[0]), /当前账号/);
+  assert.equal(fs.existsSync(path.join(f.root, 'conversation-history-owners')), false);
   f.switch(identity('two'));
-  assert.deepEqual(access.visible(f.app, rows), [], 'the migrated archive stays hidden after an account switch');
+  assert.deepEqual(access.visible(f.app, rows).map(row => row.id), ['legacy-list']);
 });
 test('a legacy owner sidecar never follows a symbolic link', t => {
   const f = fixture(t), directory = path.join(f.root, 'conversation-history-owners');
@@ -107,7 +125,7 @@ test('a legacy owner sidecar never follows a symbolic link', t => {
   }
   assert.throws(() => access.assertOwner(f.app, 'linked', access.actor(f.app)), /无法读取会话归属记录/);
 });
-test('history IPC rejects foreign rename/archive/restore/delete before touching the runtime', async t => {
+test('legacy account lifecycle IPC stays strict when no device replica service is installed', async t => {
   const f = fixture(t), handlers = new Map(), calls = [];
   require('../main/pi-session/history-ipc').install({ app: f.app,
     ipcMain: { handle: (name, fn) => handlers.set(name, fn) }, BrowserWindow: { getAllWindows: () => [] },
@@ -122,7 +140,7 @@ test('history IPC rejects foreign rename/archive/restore/delete before touching 
     assert.equal(result.ok, false, name); assert.match(result.reason, /当前账号/);
   }
   assert.deepEqual(calls, []);
-  assert.deepEqual((await handlers.get('pi-session-history-archived')()).chats.map(row => row.id), ['bob']);
+  assert.deepEqual((await handlers.get('pi-session-history-archived')()).chats.map(row => row.id), ['alice', 'bob']);
   f.switch(identity());
   assert.equal((await handlers.get('pi-session-history-archive')({}, 'alice')).ok, true);
   assert.deepEqual(calls, ['archive']);

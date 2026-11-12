@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import stat
 import socket
 import tempfile
@@ -29,6 +30,7 @@ from app.deps import current_client
 from app.library_models import LibraryFolder, LibraryItem
 from app.models import Attachment, Client, Task, TaskEvent
 from app.services import cloud_deliveries, delivery_collections as svc, delivery_manifest, library_storage, storage
+from test_unified_requirements import _schema_template
 
 
 def entry(name, data, role="primary", mime="text/plain"):
@@ -75,14 +77,11 @@ class DeliveryCollectionsTestCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="soduwork-deliveries-")
         self.root = Path(self.temp.name)
+        # Clone schema only; every case retains its own file-backed database,
+        # transactions, concurrent connections, storage files, and HTTP routes.
+        shutil.copyfile(_schema_template(), self.root / "test.sqlite")
         self.engine = create_async_engine("sqlite+aiosqlite:///" + (self.root / "test.sqlite").as_posix())
         self.sessions = async_sessionmaker(self.engine, expire_on_commit=False)
-        async with self.engine.begin() as conn:
-            await conn.run_sync(lambda connection: Base.metadata.create_all(connection, tables=[
-                LibraryFolder.__table__, LibraryItem.__table__, Client.__table__, Task.__table__,
-                Attachment.__table__, ConversationHandoff.__table__, ExecutionSession.__table__,
-                ArtifactVersion.__table__, ApprovalRequest.__table__, ApprovalDecision.__table__,
-                ApprovalAssignment.__table__, DeploymentRun.__table__, WorkflowRun.__table__, TaskEvent.__table__]))
         self.app = FastAPI()
         self.app.include_router(deliveries.router)
         self.app.include_router(library.router)
@@ -349,9 +348,11 @@ class DeliveryCollectionsTests(DeliveryCollectionsTestCase):
             await execution_settlement.settle_terminal(session, "cloud-task", "runner-ref", include_task=False)
         status = await self.http.get("/api/v1/deliveries/from-task/cloud-task")
         self.assertIsNone(status.json()["delivery"])
+        self.assertEqual((status.json()["round"], status.json()["executionRef"]), (1, "runner-ref"))
         self.assertEqual((await self.http.get("/api/v1/deliveries")).json()["items"], [])
         result = (await self.http.post("/api/v1/deliveries/from-task/cloud-task")).json()
         self.assertEqual(result["state"], "synced", result)
+        self.assertEqual((result["round"], result["executionRef"]), (1, "runner-ref"))
         info = result["delivery"]
         self.assertEqual([row["path"] for row in info["files"]], ["report.md"])
         self.assertEqual(info["source"], "cloud")
@@ -360,6 +361,7 @@ class DeliveryCollectionsTests(DeliveryCollectionsTestCase):
             reply = await self.http.request(method, "/api/v1/deliveries/from-task/cloud-task", headers=phone)
             self.assertEqual(reply.status_code, 200, reply.text)
             self.assertEqual(reply.json()["delivery"]["id"], info["id"])
+            self.assertEqual((reply.json()["round"], reply.json()["executionRef"]), (1, "runner-ref"))
         denied = await self.http.post("/api/v1/deliveries/from-task/cloud-task", headers={"X-User": "bob"})
         self.assertEqual(denied.status_code, 404)
         self.assertEqual((await self.http.get(f'/api/v1/deliveries/{info["id"]}/download', headers=phone)).content, b"# Cloud result")
@@ -495,11 +497,28 @@ class DeliveryCollectionsTests(DeliveryCollectionsTestCase):
         self.assertFalse(rejected.json()["retryable"])
         async with self.sessions() as session:
             row = await session.get(ExecutionSession, "execution")
-            row.state, row.metadata_ = "done", {"round": 1}
+            # An explicit in-progress collection differs from a lost marker
+            # after restart, which the production retry path can reconstruct.
+            row.state, row.metadata_ = "done", {"round": 1,
+                "terminalSettlement": {"round": 1, "state": "pending"}}
             await session.commit()
         pending = await self.http.post("/api/v1/deliveries/from-task/cloud-task")
         self.assertEqual(pending.json()["state"], "pending", pending.text)
         self.assertEqual((await self.http.get("/api/v1/deliveries")).json()["items"], [])
+
+    async def test_cloud_retry_recovers_a_lost_settlement_from_verified_current_files(self):
+        await self.seed_cloud([("report.md", b"verified complete report", "output")])
+        async with self.sessions() as session:
+            row = await session.get(ExecutionSession, "execution")
+            row.metadata_ = {"round": 1}
+            await session.commit()
+        result = (await self.http.post("/api/v1/deliveries/from-task/cloud-task")).json()
+        self.assertEqual(result["state"], "synced", result)
+        self.assertEqual((result["round"], result["executionRef"]), (1, "runner-ref"))
+        self.assertEqual((await self.http.get(f'/api/v1/deliveries/{result["delivery"]["id"]}/download')).content,
+                         b"verified complete report")
+        repeated = (await self.http.post("/api/v1/deliveries/from-task/cloud-task")).json()
+        self.assertEqual(repeated["delivery"]["id"], result["delivery"]["id"])
 
     async def test_cloud_late_sync_does_not_clobber_a_new_execution_round(self):
         await self.seed_cloud([("report.md", b"# Cloud result", "output")])
@@ -518,12 +537,64 @@ class DeliveryCollectionsTests(DeliveryCollectionsTestCase):
             response = await self.http.post("/api/v1/deliveries/from-task/cloud-task")
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["state"], "pending", response.text)
+        self.assertIsNone(response.json()["delivery"])
+        self.assertEqual((response.json()["round"], response.json()["executionRef"]), (2, "runner-ref"))
         async with self.sessions() as session:
             row = await session.get(ExecutionSession, "execution")
             self.assertEqual(row.state, "running")
             self.assertEqual(row.metadata_["round"], 2)
             self.assertEqual(row.metadata_["keepMe"], "current runtime state")
             self.assertNotIn("deliverySync", row.metadata_)
+
+    async def test_historical_receipt_remains_immutable_after_current_task_advances(self):
+        await self.seed_cloud([("report.md", b"old report", "output")])
+        first = (await self.http.post("/api/v1/deliveries/from-task/cloud-task")).json()
+        async with self.sessions() as session:
+            row = await session.get(ExecutionSession, "execution")
+            row.metadata_ = {**row.metadata_, "round": 2, "terminalSettlement": {"round": 2, "state": "done"}}
+            backend = storage.put("test/new-report", b"new report", "text/plain")
+            session.add(Attachment(id="new-report", task_id="cloud-task", source_ref="runner-ref",
+                filename="report.md", content_type="text/plain", size=10, storage_key="test/new-report", backend=backend,
+                uploaded_by="agent:runner", role="output", evidence_meta={"round": 2, "verification": {"state": "passed"}}))
+            await session.commit()
+        current = (await self.http.post("/api/v1/deliveries/from-task/cloud-task")).json()
+        self.assertEqual((current["round"], current["executionRef"]), (2, "runner-ref"))
+        self.assertNotEqual(current["delivery"]["id"], first["delivery"]["id"])
+        restored = (await self.http.get(f'/api/v1/deliveries/{first["delivery"]["id"]}')).json()
+        self.assertEqual(restored["delivery"]["revision"], first["delivery"]["revision"])
+        self.assertEqual((await self.http.get(f'/api/v1/deliveries/{first["delivery"]["id"]}/download')).content, b"old report")
+        denied = await self.http.get(f'/api/v1/deliveries/{first["delivery"]["id"]}', headers={"X-User": "bob"})
+        self.assertEqual(denied.status_code, 404)
+
+    async def test_postcommit_turn_advance_does_not_relabel_a_persisted_receipt(self):
+        from sqlalchemy.ext.asyncio import AsyncSession
+        await self.seed_cloud([("report.md", b"old report", "output")])
+        original_refresh = AsyncSession.refresh
+        advanced = False
+
+        async def advance_before_refresh(session, instance, *args, **kwargs):
+            nonlocal advanced
+            if isinstance(instance, ExecutionSession) and not advanced:
+                advanced = True
+                async with self.sessions() as other:
+                    row = await other.get(ExecutionSession, "execution")
+                    self.assertEqual(row.metadata_["deliverySync"]["round"], 1)
+                    row.state = "running"
+                    row.metadata_ = {**row.metadata_, "round": 2}
+                    await other.commit()
+            return await original_refresh(session, instance, *args, **kwargs)
+
+        with patch.object(AsyncSession, "refresh", advance_before_refresh):
+            response = await self.http.post("/api/v1/deliveries/from-task/cloud-task")
+        self.assertEqual(response.status_code, 200, response.text)
+        result = response.json()
+        self.assertTrue(advanced)
+        self.assertEqual(result["state"], "synced")
+        self.assertEqual((result["round"], result["executionRef"]), (1, "runner-ref"))
+        self.assertEqual((await self.http.get(f'/api/v1/deliveries/{result["delivery"]["id"]}/download')).content, b"old report")
+        current = (await self.http.get("/api/v1/deliveries/from-task/cloud-task")).json()
+        self.assertEqual((current["state"], current["round"]), ("running", 2))
+        self.assertIsNone(current["delivery"])
 
     async def test_unbound_devices_stay_private(self):
         made = await self.upload(headers={"X-User": "", "X-Device": "guest-one"})

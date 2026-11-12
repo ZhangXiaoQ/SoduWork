@@ -77,6 +77,32 @@ app.whenReady().then(async () => {
     fs.writeFileSync(path.join(output, item.key + '-en.txt'), visible);
     assert.doesNotMatch(visible, /[\u4e00-\u9fff]/, item.pluginId + ': ' + visible.split('\n').filter(line => /[\u4e00-\u9fff]/.test(line)).join('\n'));
   }
+  await js(`document.querySelector('#capModalClose').click();`);
+  for (const file of ['components/panels/chat-plugin-mention-model.js', 'components/panels/chat-plugin-mention.js', 'components/panels/work-composer.js']) {
+    await js(read(file) + '\nvoid 0;');
+  }
+  await js(`window.composerFixture=document.createElement('section');
+    composerFixture.innerHTML='<textarea></textarea><div id="morePluginRows"></div>';document.body.appendChild(composerFixture);
+    window.composerItems=shipped.concat([{pluginId:'custom-name',name:'插件开发助手',description:'Custom description 保存',personal:true,enabled:true}]);
+    window.picker=ChatPluginMention.create({host:composerFixture,input:composerFixture.querySelector('textarea'),catalog:async()=>({items:composerItems})});
+    picker.open();`); await tick();
+  await js(`picker.restore([composerItems.find(item=>item.pluginId==='local:plugin-builder'),composerItems.at(-1)]);`);
+  for (const locale of ['en-US', 'ja-JP', 'ko-KR', 'zh-CN', 'en-US']) {
+    await js(`SoduWorkI18n.setLocale(${JSON.stringify(locale)});picker.open();
+      document.querySelector('#morePluginRows').innerHTML=WorkComposer.pluginRows(ChatPluginMentionModel.normalizeCatalog({items:composerItems}),[]);`);
+    await tick();
+    const expected = require('../core/plugin-locales').present(builder, locale);
+    assert.deepEqual(await js(`Array.from(composerFixture.querySelectorAll('.nplugin-chip>span'),node=>node.textContent)`), [expected.name, '插件开发助手']);
+    for (const item of plugins) {
+      const translated = require('../core/plugin-locales').present(item, locale);
+      const content = await js(`document.querySelector('[data-more-plugin=${JSON.stringify(item.pluginId)}]')?.textContent`);
+      if (!require('../components/panels/chat-plugin-mention-model').isWorkspaceApp(item)) {
+        assert.ok(content?.includes(translated.name), locale + ' composer name: ' + item.pluginId);
+        assert.ok(content?.includes(translated.description), locale + ' composer description: ' + item.pluginId);
+      }
+    }
+  }
+  await js('picker.destroy();composerFixture.remove();');
   assert.deepEqual(await js('errors'), []);
   console.log('PASS: five locale transitions on mounted built-in skill cards and plugin cards/dialogs; custom metadata and identifiers preserved');
   win.destroy(); app.exit(0);

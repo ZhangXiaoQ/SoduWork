@@ -6,9 +6,10 @@ routers. Never import this module in a deployed Hub.
 import time
 import importlib
 import asyncio
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager, suppress, ExitStack
 from pathlib import Path
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 from fastapi import HTTPException
 from sqlalchemy import select
 
@@ -40,7 +41,33 @@ async def authenticated_fixture_lifespan(application):
             for key in ('sender', 'recipient', 'other'):
                 client = await session.get(fixture.models.Client, 'e2e-' + key)
                 client.secret_hash = device_auth.hash_secret('isolated-requirements-fixture-key-never-production')
+            session.add(automation_models.RunnerNode(id="fixture-runner", owner_user_id="",
+                client_id="e2e-recipient", org_id="e2e-org", auth_state="active", management_state="active"))
             await session.commit()
+        # Preserve the real endpoint storage protocol; only socket delivery and
+        # cluster routing are loopback fixtures. Hub never retains message bodies.
+        import runner_main
+        from app.services import local_base, runner_hub, cluster_runtime
+        with patch.object(local_base, "_data_root", return_value=str(fixture.root / "runner")):
+            endpoint = runner_main.Runner("http://127.0.0.1", "", "fixture-device", "fixture-runner")
+        socket = SimpleNamespace()
+        node = runner_hub._Runner(socket, {"runnerId": "fixture-runner", "caps": ["conversationContent1"]})
+        node.client_id, node.org_id, node.ready = "e2e-recipient", "e2e-org", True
+
+        async def send(packet):
+            calls["contentOperations"].append(packet["op"])
+            await endpoint._handle_message(packet, socket)
+
+        async def reply(packet):
+            node.resolve(packet["id"], packet)
+
+        socket.send_json, endpoint._send = send, reply
+        original_get = runner_hub.get
+        patches = ExitStack()
+        patches.enter_context(patch.object(local_base, "_data_root", return_value=str(fixture.root / "runner")))
+        patches.enter_context(patch.object(runner_hub, "get",
+            side_effect=lambda rid: node if rid == "fixture-runner" else original_get(rid)))
+        patches.enter_context(patch.object(cluster_runtime, "check_owner", AsyncMock()))
         async def drain_notifications():
             while True:
                 if not await task_notifications.run_once(fixture.sessions):
@@ -52,10 +79,12 @@ async def authenticated_fixture_lifespan(application):
             worker.cancel()
             with suppress(asyncio.CancelledError):
                 await worker
+            patches.close()
+            endpoint._admission._journal.close()
 
 
 app.router.lifespan_context = authenticated_fixture_lifespan
-calls = {"dispatches": [], "events": []}
+calls = {"dispatches": [], "events": [], "contentOperations": []}
 original_publish = hub.publish
 
 
@@ -116,10 +145,19 @@ async def finish(task_id: str):
             evidence_meta={"verification": delivery_manifest.validate_bytes("delivery.md", data, "text/markdown")}))
         task.result = "交付文件与完成标准已生成，等待提出人验收。"
         await session.flush()
-        await execution_sessions.ingest_live_snapshot(session, task, "local:fixture-" + task_id, {
+        receipt = await execution_sessions.ingest_live_snapshot(session, task, "local:fixture-" + task_id, {
             "ok": True, "status": "done", "runnerId": "fixture-runner", "cli": "pi", "ended": time.time(),
-            "seq": 1, "items": [{"type": "text", "text": task.result, "seq": 1}],
+            "seq": 1, "items": [{"kind": "say", "text": task.result, "seq": 1}],
         })
+        if not receipt or receipt.get("status") != "done" or receipt.get("persistedThrough") != 1:
+            raise RuntimeError("The isolated Runner completion was not retained")
+        event = await session.scalar(select(automation_models.ExecutionEvent).where(
+            automation_models.ExecutionEvent.session_id == receipt["id"], automation_models.ExecutionEvent.seq == 1))
+        if event.text or not event.detail.get("contentRef"):
+            raise RuntimeError("The isolated Hub retained a message body instead of an endpoint reference")
+        restored = await execution_sessions.read_task(session, task.id, receipt["ref"])
+        if restored["items"][0]["text"] != task.result:
+            raise RuntimeError("The endpoint conversation did not restore the complete answer")
         task_events.record(session, task_id, "ai.completed", {"ref": "local:fixture-" + task_id}, actor="fixture-provider")
         await session.commit()
     return {"ok": True, "attachmentId": aid}

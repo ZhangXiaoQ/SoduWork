@@ -101,8 +101,13 @@ test('history list distinguishes runtime state from selected row state', () => {
       assert.equal(options.presenceOnly, true);
       receive = fn; subscribed = 'batch'; return () => {};
     };
-    const window = { soduWorkAPI: { conversationSession: api } };
-    vm.runInNewContext(read('components', 'workspace', 'workspace-chat-list.js'), { window });
+    const window = {
+      SoduWorkAPI: { hubBase: () => 'https://sidebar-fixture.invalid',
+        clientAuthSnapshot: () => ({ clientId: 'fixture-device', user: { id: 'fixture-user' } }) },
+      soduWorkAPI: { conversationSession: api },
+    };
+    for (const file of ['workspace-sidebar-state.js', 'workspace-chat-list.js'])
+      vm.runInNewContext(read('components', 'workspace', file), { window, URL });
     const delivered = [];
     const ctx = { activeChatId: 'selected-completed', updateChatState: event => delivered.push(event) };
     window.WorkspaceChatList.create(ctx).subscribeConversationPresence();
@@ -125,6 +130,23 @@ test('history list distinguishes runtime state from selected row state', () => {
   assert.doesNotMatch(css, /st-chat-completed/);
   assert.doesNotMatch(css, /st-chat-archived/);
   assert.doesNotMatch(css, /\.ws-chat\.is-active i\.st-chat\{/);
+});
+
+test('signed-out history cannot subscribe to single or batched runtime presence', () => {
+  for (const batched of [false, true]) {
+    let subscriptions = 0;
+    const api = { onEvent() { subscriptions++; } };
+    if (batched) api.onEventBatch = () => { subscriptions++; };
+    const window = {
+      SoduWorkAPI: { hubBase: () => 'https://sidebar-fixture.invalid',
+        clientAuthSnapshot: () => ({ clientId: 'fixture-device', user: null }) },
+      soduWorkAPI: { conversationSession: api },
+    };
+    for (const file of ['workspace-sidebar-state.js', 'workspace-chat-list.js'])
+      vm.runInNewContext(read('components', 'workspace', file), { window, URL });
+    window.WorkspaceChatList.create({}).subscribeConversationPresence();
+    assert.equal(subscriptions, 0);
+  }
 });
 
 test('opening a history chat paints an immediate placeholder instead of a blank stage', () => {

@@ -25,6 +25,18 @@ const options = { acceptanceSession: true, taskRef: 'task-1', acceptanceMode: 'a
 const metadataFile = fixture => path.join(fixture.directory, 'acceptance-session-context',
   crypto.createHash('sha256').update('review-chat').digest('hex') + '.json');
 
+test('history labels distinguish persisted review purpose without renaming the execution', async t => {
+  const f = fixture(t);
+  await acceptance.attach(f.app, f.handle, {...options, acceptanceMode: 'manual'}, identity());
+  const original = {id: 'review-chat', title: 'Requirement', at: Date.now()};
+  const row = acceptance.projectHistory(f.app, original);
+  assert.match(row.title, /^验收分析 · Requirement · /);
+  assert.equal(row.acceptanceReview.approvalId, 'review-1');
+  assert.equal(acceptance.projectHistory(f.app, row).title, row.title);
+  assert.equal(original.title, 'Requirement');
+  assert.equal(acceptance.projectHistory(f.app, {...original, id: 'execution'}).title, 'Requirement');
+});
+
 test('自动验收模式、需求和审批单随原会话恢复，不依赖渲染层重新传参', async t => {
   const f = fixture(t);
   await acceptance.attach(f.app, f.handle, options, identity());
@@ -82,24 +94,27 @@ test('验收会话隔离账号与 Hub，同一账号重注册设备可恢复', a
   assert.equal(acceptance.get(restored).taskRef, 'task-1');
 });
 
+// Synthetic RFC1918 fixture: no network request is made by these metadata tests.
 test('未打包源码客户端允许同一端口的本地 Hub 地址迁移并更新会话归属', async t => {
   const f = fixture(t), app = { ...f.app, isPackaged: false };
   await acceptance.attach(app, f.handle, options, identity('verifier', 'http://127.0.0.1:9080'));
   const restored = { sessionId: 'review-chat' };
-  await acceptance.attach(app, restored, { resumed: true }, identity('verifier', 'http://10.20.0.187:9080', 'new-device'));
+  await acceptance.attach(app, restored, { resumed: true }, identity('verifier', 'http://10.0.0.1:9080', 'new-device'));
   assert.equal(acceptance.get(restored).taskRef, 'task-1');
-  assert.equal(JSON.parse(fs.readFileSync(metadataFile(f), 'utf8')).hub, 'http://10.20.0.187:9080');
+  assert.equal(JSON.parse(fs.readFileSync(metadataFile(f), 'utf8')).hub, 'http://10.0.0.1:9080');
 });
 
 test('本地 Hub 迁移不会跨端口或进入已打包客户端', async t => {
   const local = fixture(t), localApp = { ...local.app, isPackaged: false };
   await acceptance.attach(localApp, local.handle, options, identity('verifier', 'http://127.0.0.1:9080'));
   await assert.rejects(acceptance.attach(localApp, { sessionId: 'review-chat' }, { resumed: true },
-    identity('verifier', 'http://10.20.0.187:9081')), /账号或服务/);
+    identity('verifier', 'http://10.0.0.1:9081')), /账号或服务/);
+  await assert.rejects(acceptance.attach(localApp, { sessionId: 'review-chat' }, { resumed: true },
+    identity('verifier', 'http://192.0.2.20:9080')), /账号或服务/);
   const packaged = fixture(t), packagedApp = { ...packaged.app, isPackaged: true };
   await acceptance.attach(packagedApp, packaged.handle, options, identity('verifier', 'http://127.0.0.1:9080'));
   await assert.rejects(acceptance.attach(packagedApp, { sessionId: 'review-chat' }, { resumed: true },
-    identity('verifier', 'http://10.20.0.187:9080')), /账号或服务/);
+    identity('verifier', 'http://10.0.0.1:9080')), /账号或服务/);
 });
 
 test('损坏或不可读的元数据必须阻断打开，不能降级为普通任务执行', async t => {

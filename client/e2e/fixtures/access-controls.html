@@ -14,7 +14,7 @@
 <script>
 let locale='zh-CN'; window.SoduWorkI18n={t:s=>locale==='en-US'?(SoduWorkLocaleMessages['en-US'][s]||s):s};
 window.esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-window.draw=(request,lang)=>{locale=lang||locale; document.getElementById('card').innerHTML=request?AccessControls.render(request,esc):'';};
+window.draw=(request,lang,options)=>{locale=lang||locale; document.getElementById('card').innerHTML=request?AccessControls.render(request,esc,options):'';};
 window.drawComposer=()=>{document.getElementById('card').hidden=true;const p=document.getElementById('composer');p.hidden=false;p.style.marginTop='260px';ComposeSurface.create({})._upgradeStartComposer(p);document.getElementById('cpPermissionPop').classList.add('show');};
 document.addEventListener('click',async e=>{const b=e.target.closest('[data-ui-answer]');if(b) window.answerResult=await AccessControls.answer(b,soduWorkAPI.conversationSession,'access-e2e');});
 </script></body></html>

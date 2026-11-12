@@ -76,6 +76,22 @@ async def run():
     try:
         while line := await asyncio.to_thread(sys.stdin.readline):
             message = json.loads(line)
+            if message["op"] == "fixture.desktop":
+                from types import SimpleNamespace
+                async def native_plugin(packet):
+                    # Isolated stand-in for the desktop pipe; execution, staging,
+                    # event persistence and duplicate admission remain real.
+                    context = packet["_turnContext"]
+                    if packet["args"]["plugins"] != [{"pluginId":"local:fixture", "checksum":"a" * 64}]:
+                        return {"ok":False,"error":"fixture version mismatch"}
+                    (work / "plugin-start-context.json").write_text(json.dumps(context),encoding="utf-8")
+                    return {"ok":True,"data":{"promptText":context["text"] + "\nVerified fixture method",
+                        "plugins":[{"pluginId":"local:fixture", "name":"Fixture method", "version":"1.0.0"}],
+                        "resourceBundles":[]}}
+                machine.desktop_owned = True
+                machine._desktop_capabilities = SimpleNamespace(call=native_plugin)
+                print(json.dumps({"ok":True}),flush=True)
+                continue
             if message["op"] == "fixture.close":
                 break
             try:

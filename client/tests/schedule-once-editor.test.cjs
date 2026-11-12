@@ -21,6 +21,9 @@ function fixture(existing = null, every = 'once') {
     'schRetry', 'schTitle', 'schNote', 'schWho', 'schRetryLimit', 'schRetryDelay',
     'schCancel', 'schSave', 'schH', 'schM', 'schEnabled', 'schRunAt', 'schOnceWrap',
     'schPluginConfig', 'schMethodWrap', 'schMethod', 'schOnceHint', 'schFlow']) controls[id] = element();
+  controls.schCustomRule = element(existing?.customRule || '');
+  controls.schCustomRuleWrap = element();
+  controls.schDateRange = element();
   Object.assign(controls.schEvery, { value: every });
   Object.assign(controls.schTitle, { value: '一次性工作' });
   Object.assign(controls.schNote, { value: '完整工作说明' });
@@ -77,6 +80,75 @@ test('management editor offers one-time mode and a date-time input in the schedu
   assert.match(html, /id="schRunAt"[^>]*type="datetime-local"|type="datetime-local"[^>]*id="schRunAt"/);
   assert.ok(html.includes('value="' + display + '"'));
   assert.ok(f.timingCalls.some(item => item[0] === 'local' && item[2] === 'Asia/Shanghai'));
+});
+
+test('management custom rule editor preserves and saves the full recurrence rule', async () => {
+  const rule = 'DTSTART;TZID=Asia/Shanghai:20990101T105100\nRRULE:FREQ=MONTHLY;BYMONTHDAY=30,31;COUNT=10';
+  const f = fixture({id:'custom', every:'custom', customRule:rule}, 'custom');
+  const html = f.c._schFormHtml({every:'custom',customRule:rule,timeZone:'Asia/Shanghai'});
+  assert.match(html, /value="custom" selected/);
+  assert.match(html, /id="schCustomRule"/);
+  assert.ok(html.includes(rule));
+  f.wire();
+  assert.equal(f.controls.schCustomRuleWrap.hidden, false);
+  assert.equal(f.controls.schHWrap.style.display, 'none');
+  assert.equal(f.controls.schDateRange.hidden, true);
+  await f.save();
+  assert.equal(f.saves[0].body.customRule, rule);
+  assert.equal(f.saves[0].body.every, 'custom');
+  assert.equal(f.saves[0].body.startDate, null);
+  f.controls.schCustomRule.value = '';
+  await f.save();
+  assert.equal(f.saves.length, 1, 'Clearing a saved rule must not restore the old rule');
+  assert.equal(f.controls.schCustomRule.focused, true);
+});
+
+test('management editor renders calendar-aware timing controls in the live schedule drawer', () => {
+  const f = fixture();
+  const html = f.c._schFormHtml({ every: 'monthly', monthDays: [30, 31], monthDayPolicy: 'last_day',
+    startDate: '2099-01-01', endDate: '2099-12-31', atHour: 18, atMinute: 0 });
+  assert.match(html, /id="schDateRange"/);
+  assert.match(html, /id="schWeekdays"/);
+  assert.match(html, /id="schMonthDays"/);
+  assert.equal((html.match(/class="sch-choice"/g) || []).length, 38);
+  assert.match(html, /id="schMonthLastDay" checked/);
+  assert.match(html, /id="schRunAt" type="datetime-local" step="60"/);
+});
+
+test('management editor saves multi-day timing and optional date bounds', async () => {
+  const f = fixture(null, 'monthly');
+  const control = (value = '', checked = false) => ({ value, checked, style: {}, attrs: {}, listeners: {},
+    classList: { add() {}, remove() {}, toggle() {} }, isConnected: true,
+    addEventListener(name, callback) { this.listeners[name] = callback; },
+    setAttribute(name, value) { this.attrs[name] = value; },
+    removeAttribute(name) { delete this.attrs[name]; },
+    focus() {},
+  });
+  f.controls.schStartDate = control('2099-01-01');
+  f.controls.schEndDate = control('2099-12-31');
+  f.controls.schDateRange = control();
+  f.controls.schWeekdays = control();
+  f.controls.schMonthDays = control();
+  f.controls.schMonthLastDay = control('', true);
+  const weekdays = [1, 3, 5].map(value => control(String(value), true));
+  const monthDays = [30, 31].map(value => control(String(value), true));
+  const originalQuery = f.c.document.querySelectorAll;
+  f.c.document.querySelectorAll = selector => {
+    if (selector === '#schWeekdays input[type="checkbox"]') return weekdays;
+    if (selector === '#schMonthDays input[type="checkbox"]') return monthDays;
+    if (selector === '#schWeekdays input, #schMonthDays input, #schMonthLastDay') {
+      return [...weekdays, ...monthDays, f.controls.schMonthLastDay];
+    }
+    return originalQuery(selector);
+  };
+  f.wire();
+  await f.save();
+  assert.equal(f.saves.length, 1);
+  assert.deepEqual(f.saves[0].body.weekdays, []);
+  assert.deepEqual(f.saves[0].body.monthDays, [30, 31]);
+  assert.equal(f.saves[0].body.monthDayPolicy, 'last_day');
+  assert.equal(f.saves[0].body.startDate, '2099-01-01');
+  assert.equal(f.saves[0].body.endDate, '2099-12-31');
 });
 
 test('automation editor keeps the personal plugin chooser visible and persists the selection', async () => {
@@ -219,6 +291,40 @@ test('legacy direct create preserves the absolute appointment and refuses an inc
   assert.equal(f.saves[0].body.timeZone, 'Asia/Shanghai');
   assert.equal(await f.c._schmCreateAutomation('Incomplete once', { schedule: { every: 'once', runAt: '' } }), false);
   assert.equal(f.saves.length, 1);
+});
+
+test('legacy direct create converts a frozen normalized wall time without mutating the intent', async () => {
+  const f = fixture();
+  const intent = require('../components/panels/work-intent.js').normalize({
+    mode: 'schedule',
+    schedule: { every: 'once', runAt: '2099-10-15T12:30', timeZone: 'Asia/Shanghai' },
+  });
+  const original = copy(intent);
+  assert.equal(Object.isFrozen(intent.schedule), true);
+  f.c.SoduWorkAPI.taskExecutionOptions = async () => ({ substrates: [{ key: 'local:pi', name: 'Pi', available: true }] });
+
+  assert.equal(await f.c._schmCreateAutomation('Work once', intent), true);
+  assert.equal(f.saves.length, 1);
+  assert.equal(f.saves[0].body.runAt, '2099-10-15T04:30:00.000Z');
+  assert.equal(f.saves[0].body.timeZone, 'Asia/Shanghai');
+  assert.deepEqual(copy(intent), original);
+});
+
+test('legacy conversation create forwards custom recurrence without rewriting lines', async () => {
+  const f = fixture();
+  const customRule = 'DTSTART;TZID=Asia/Shanghai:20990101T105100\nRRULE:FREQ=HOURLY;INTERVAL=3;COUNT=6';
+  f.c.SoduWorkAPI.taskExecutionOptions = async () => ({ substrates: [{ key:'local:pi', name:'Pi', available:true }] });
+  assert.equal(await f.c._schmCreateAutomation('Custom work', {schedule:{every:'custom',customRule}}), true);
+  assert.equal(f.saves[0].body.customRule, customRule);
+  assert.equal(f.saves[0].body.every, 'custom');
+});
+
+test('legacy single-weekday intents remain valid through the new array request contract', async () => {
+  const f = fixture();
+  f.c.SoduWorkAPI.taskExecutionOptions = async () => ({ substrates: [{key:'local:pi',name:'Pi',available:true}] });
+  assert.equal(await f.c._schmCreateAutomation('Weekly work', {schedule:{every:'weekly',weekday:3,atHour:9,atMinute:0}}), true);
+  assert.deepEqual(f.saves[0].body.weekdays, [3]);
+  assert.equal(f.c._schCardNext({every:'custom',enabled:true,retrying:true,nextRunAt:null}), '等待重试');
 });
 
 test('an unavailable saved repo remains selected and cannot silently become empty', () => {

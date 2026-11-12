@@ -18,10 +18,24 @@ if (typeof electron === 'string') {
     let businessCalls = 0;
     server = http.createServer((req, res) => {
       assert.equal(req.url, '/mcp');
-      assert.equal(req.headers.authorization, 'Bearer fixture-app-credential');
+      if (req.headers.authorization !== 'Bearer fixture-app-credential') {
+        res.writeHead(401, {'Content-Type':'application/json'});
+        return res.end(JSON.stringify({error:'Invalid application credential'}));
+      }
       businessCalls++;
-      res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { tools: [] } }));
+      let raw = '';
+      req.on('data',chunk=>{raw+=chunk;});
+      req.on('end',()=>{
+        const rpc = JSON.parse(raw || '{}');
+        if (rpc.method?.startsWith('notifications/')) {res.writeHead(202);return res.end();}
+        const result = rpc.method === 'initialize'
+          ? {protocolVersion:rpc.params.protocolVersion,capabilities:{}}
+          : rpc.method === 'tools/call' && rpc.params.name === 'whoami'
+            ? {content:[{type:'text',text:'Fixture account'}],structuredContent:{userId:'fixture-business-user'}}
+            : {tools:[{name:'whoami',description:'Fixture identity',inputSchema:{type:'object',properties:{}}}]};
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: rpc.id ?? 1, result }));
+      });
     });
     await new Promise(r => server.listen(0, '127.0.0.1', r));
     const origin = 'http://127.0.0.1:' + server.address().port;
@@ -52,6 +66,13 @@ if (typeof electron === 'string') {
     assert.ok(metadata?.pluginId, diagnostics);
     const identityOf = async () => ({ hub, clientId: 'fixture-device', session: 'fixture-session' });
     const headers = { Authorization: 'Device fixture-session', 'Content-Type': 'application/json' };
+    const preflight = await fetch(hub + '/fixture/preflight', {method:'POST',headers});
+    assert.equal(preflight.status,200);
+    const checks = await preflight.json();
+    assert.ok(checks.checks.some(row=>row.key==='app-mcp' && row.ok && row.verification==='declaration'));
+    assert.ok(!checks.blockers.some(text=>text.includes('企业尚未启用') || text.includes('只批准插件实际需要')));
+    assert.ok(checks.warnings.some(text=>text.includes('未验证用户凭据或服务连通性')));
+    report.cases.push('The production preflight service recognizes the approved app MCP without company registration and explicitly leaves credentials/connectivity unverified.');
     const install = await fetch(hub + '/api/v1/plugins/' + metadata.pluginId + '/installation', {
       method: 'PUT', headers, body: JSON.stringify({ enabled: true, expectedVersionId: metadata.versionId }),
     });
@@ -59,8 +80,17 @@ if (typeof electron === 'string') {
     const store = require('../main/app-settings-store.cjs');
     store.configure({ app, safeStorage, ownerOf: () => 'fixture-account' });
     store.update({ pluginId: metadata.pluginId, origin }, {
-      values: { ukey: 'fixture-app-credential' }, secretKeys: ['ukey'],
+      values: { ukey: 'fixture-invalid-credential' }, secretKeys: ['ukey'],
     });
+    const invalidContext = await require('../main/app-conversation-connection.cjs').context(app,metadata.pluginId,{app,identityOf});
+    const invalidLease = await require('../main/pi-session/app-mcp-proxy.cjs').create(invalidContext.connection);
+    try {
+      const rejected = await fetch(invalidLease.url,{method:'POST',headers:{Authorization:'Bearer '+invalidLease.token},body:'{}'});
+      assert.equal(rejected.status,401);
+      assert.equal(businessCalls,0);
+    } finally { invalidLease.cleanup(); }
+    store.update({pluginId:metadata.pluginId,origin},{values:{ukey:'fixture-app-credential'},secretKeys:['ukey']});
+    report.cases.push('Invalid stored app credentials still fail at the actual service; installing the app or passing declaration checks cannot bypass authentication.');
     const connection = require('../main/work-preview-app-connection.cjs');
     const item = { appBridge: { appId: 'plugin:' + metadata.pluginId, contributionId: 'main', origin },
       view: { webContents: { isDestroyed: () => false, getURL: () => origin + '/' } } };
@@ -97,10 +127,27 @@ if (typeof electron === 'string') {
     assert.equal((await callRestored()).status, 200);
     assert.equal(businessCalls, 2);
     report.cases.push('A market history turn restores its accepted version and owned MCP from encrypted settings without a window or company connector.');
+    store.update({pluginId:metadata.pluginId,origin}, {values:{theme:'light',accountName:'Updated display name'}});
+    assert.deepEqual((await Promise.all([callRestored(),callRestored()])).map(r=>r.status),[200,200]);
+    assert.equal(businessCalls,4);
+    report.cases.push('Concurrent headless MCP consumers keep using the stored credential after display preferences change; no page login or token exchange occurs.');
+    const identity = await new Promise((resolve,reject)=>{
+      const child = require('node:child_process').spawn(process.execPath,[
+        path.resolve(__dirname,'../../skills/mcp-tools/scripts/mcp.mjs'),
+        '--config',resolved.grant.configFile,'call','fixture-business','whoami','{}',
+      ],{windowsHide:true,env:{...process.env,ELECTRON_RUN_AS_NODE:'1',SODUWORK_MCP_JSON:'1'},stdio:['ignore','pipe','pipe']});
+      let out='',err='';const timer=setTimeout(()=>{child.kill();reject(Error('MCP bridge timeout'));},15000);
+      child.stdout.on('data',data=>{out+=data;});child.stderr.on('data',data=>{err+=data;});
+      child.once('error',error=>{clearTimeout(timer);reject(error);});
+      child.once('exit',code=>{clearTimeout(timer);if(code!==0)reject(Error(err));else {try{resolve(JSON.parse(out));}catch(error){reject(error);}}});
+    });
+    assert.equal(identity.structuredContent.userId,'fixture-business-user');
+    report.cases.push('The production MCP CLI bridge completes initialize and a real tools/call through the restored grant and returns the application identity.');
+    const beforeUninstall = businessCalls;
     const uninstalled = await fetch(hub + '/fixture/uninstall', { method: 'POST', headers });
     assert.equal(uninstalled.status, 200);
     assert.equal((await callRestored()).status, 401);
-    assert.equal(businessCalls, 2);
+    assert.equal(businessCalls, beforeUninstall);
     report.cases.push('Uninstall revokes an existing application lease before another business call.');
     report.ok = true;
   }).catch(error => { report.error = String(error.stack || error); }).finally(async () => {

@@ -111,6 +111,7 @@ const _releaseNotes = require('./main/release-notes').register({ app, ipcMain, B
 _cloudComputerCredentials.install({ app, ipcMain, deviceAuth: _deviceAuth, safeStorage });
 const _applicationMenu = require('./main/app-menu-info.cjs').install({ app, ipcMain, BrowserWindow, dialog, shell,
   quit: _quitSoduWork, getRendererRoot: rendererRoot,
+  releaseNotes: _releaseNotes,
   openNewConversation: () => openDeskWindow({ panel: 'workspace', view: 'create', tab: 'chat', newSession: true }, null) });
 const _workspaceTitlebar = require('./main/workspace-titlebar.cjs').create({ app, ipcMain, BrowserWindow, Menu,
   getRendererRoot: rendererRoot, fallbackCommand: _applicationMenu.nativeCommand,
@@ -450,7 +451,10 @@ function applyDeskFlags(pushToRenderer) {
   }
 }
 
-/* Tray activation opens the main workspace without changing persisted pet or dock visibility preferences. */
+/*
+ * Tray double-click opens the workspace without changing pet or dock visibility
+ * preferences.
+ */
 function revealSoduWorkSuite() {
   if (!_desktopOverlay.window || _desktopOverlay.window.isDestroyed()) _desktopOverlay.createWindow();
 

@@ -59,7 +59,7 @@ def _bundle(installer, *, version="1.12.69", artifact_name=None, release_id=None
         "minVersion": "",
         "notes": "",
         "publishedAt": "2026-10-12T08:00:00Z",
-        "keyId": "fixture-release-key",
+        "keyId": "soduwork-client-release-2026b",
         "signature": "irrelevant",
     }
 
@@ -72,7 +72,7 @@ def _release_row(release_id, version, name, *, enabled=True, platform="linux", a
         arch=arch, artifact_name=name,
         artifact_path=f"{channel}/{platform}/{arch}/{version}/{name}",
         artifact_size=2, sha256=hashlib.sha256(b"00").hexdigest(),
-        key_id="fixture-release-key", signature="s" * 88,
+        key_id="soduwork-client-release-2026b", signature="s" * 88,
         notes="", mandatory=False, min_version="", enabled=enabled,
         created_by="test", created_at=None)
 
@@ -311,12 +311,6 @@ class WindowsDownloadRouteTests(_SqliteIsolated):
         self.assertIn('filename="SoduWork-Setup.exe"', response.headers["content-disposition"])
 
 
-class PublicDownloadSurfaceTests(unittest.TestCase):
-    def test_excluded_mobile_packages_have_no_download_routes(self):
-        paths = {route.path for route in download.router.routes}
-        self.assertFalse(any('/mobile' in route for route in paths))
-
-
 class PublicBetaDownloadTests(_SqliteIsolated):
     targets = (
         ("win32", "x64", "Setup.exe", ""),
@@ -408,6 +402,32 @@ class PublicBetaDownloadTests(_SqliteIsolated):
                 self.assertEqual((await client.get("/api/v1/download/client/linux/deb")).status_code, 200)
 
 
+class PublicMobileAvailabilityTests(_SqliteIsolated):
+    async def test_excluded_mobile_artifacts_are_unavailable_without_breaking_desktop(self):
+        app = await self._app([])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for filename in ("SoduWork-Mobile.apk", "SoduWork-Mobile-1.2.3.apk"):
+                (root / filename).write_bytes(b"isolated-apk")
+            (root / "SoduWork-1.2.3-Setup.exe").write_bytes(b"isolated-desktop")
+            with patch.object(download, "_DIR", root):
+                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                             base_url="http://test") as client:
+                    response = await client.get("/api/v1/download/mobile/info")
+                    self.assertEqual(response.status_code, 200)
+                    info = response.json()
+                    self.assertFalse(info["available"])
+                    self.assertEqual(info["version"], "")
+                    self.assertEqual(info["webUrl"], "")
+                    for suffix in ("", "/SoduWork-Mobile-1.2.3.apk"):
+                        response = await client.get("/api/v1/download/mobile/android" + suffix)
+                        self.assertEqual(response.status_code, 404)
+                    desktop = await client.get("/api/v1/download/client/info")
+                    self.assertTrue(desktop.json()["available"])
+                    self.assertEqual(desktop.json()["version"], "1.2.3")
+                    desktop = await client.get("/api/v1/download/client")
+                    self.assertEqual(desktop.status_code, 200)
+                    self.assertEqual(desktop.content, b"isolated-desktop")
 
 
 if __name__ == "__main__":

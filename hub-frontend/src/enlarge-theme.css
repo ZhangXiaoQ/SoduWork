@@ -1,0 +1,61 @@
+/*
+ * Display-scale preference (issue #27) — a font-size step control, independent
+ * of the light/dark color theme. The UI markup only carries one attribute:
+ *   <html data-scale="-1">     (or "-2", "1", "2"; absent = standard size)
+ * Everything visual lives here so future scale levels can join as extra
+ * selectors without touching the base stylesheets.
+ *
+ * The admin stylesheets size text through
+ *   font-size: max(var(--font-min-readable, 14.5px), <compact-px>)
+ * so raising or lowering the shared floor moves body copy, controls,
+ * navigation, and form labels everywhere at once. Rules below then adjust the
+ * few hardcoded display sizes and fixed layouts that would otherwise feel
+ * cramped. Each step carries two multipliers:
+ *   --scale-display  sizes the hardcoded display type (headings, figures)
+ *   --scale-space    sizes control boxes and card padding
+ */
+
+/* One step per level: the readable floor plus the two layout multipliers. */
+:root[data-scale="-2"] { --font-min-readable: 12.5px; --scale-display: .86; --scale-space: .9; }
+:root[data-scale="-1"] { --font-min-readable: 13.5px; --scale-display: .93; --scale-space: .95; }
+:root[data-scale="1"]  { --font-min-readable: 16px;   --scale-display: 1.09; --scale-space: 1.12; }
+:root[data-scale="2"]  { --font-min-readable: 17.5px; --scale-display: 1.18; --scale-space: 1.24; }
+
+/* Hardcoded display sizes in design-system.css: scale with the step. */
+:root[data-scale] .app .page-title h1 { font-size: calc(23px * var(--scale-display)); }
+:root[data-scale] .app .content .tile .val { font-size: calc(28px * var(--scale-display)); }
+:root[data-scale] .app .content .stat .sv { font-size: calc(22px * var(--scale-display)); }
+:root[data-scale] .app .brand-copy b { font-size: calc(15.5px * var(--scale-display)); }
+
+/* Controls need breathing room once text grows. */
+:root[data-scale] .btn { min-height: calc(34px * var(--scale-space)); padding: calc(7px * var(--scale-space)) calc(13px * var(--scale-space)); }
+:root[data-scale] .hubtab { min-height: calc(34px * var(--scale-space)); }
+:root[data-scale] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="hidden"]),
+:root[data-scale] select,
+:root[data-scale] textarea { min-height: calc(38px * var(--scale-space)); }
+:root[data-scale] .icon-btn,
+:root[data-scale] .theme-toggle { width: calc(38px * var(--scale-space)); height: calc(38px * var(--scale-space)); }
+/* The settings popover keeps its compact controls so the rows stay aligned. */
+:root[data-scale] .profile-menu-actions .icon-btn { width: calc(30px * var(--scale-space)); height: calc(30px * var(--scale-space)); }
+
+/* The scale toggles carry text ("A+"/"A-") instead of an svg icon. */
+.scale-steps { display: inline-flex; align-items: center; gap: 6px; }
+.scale-toggle { font-family: var(--mono, monospace); font-size: max(12px, calc(13px * var(--scale-display, 1))); font-weight: 700; letter-spacing: .5px; }
+.scale-toggle:disabled { opacity: .45; cursor: default; }
+.scale-level { min-width: 20px; font: 700 12px var(--mono, monospace); color: var(--ink-3); text-align: center; }
+
+/* Adaptive layout: longer labels must not clip against fixed columns. */
+:root[data-scale] .page-title p { white-space: normal; }
+:root[data-scale] .side-context b,
+:root[data-scale] .side-context small { white-space: normal; }
+:root[data-scale] .nav-item { min-height: calc(37px * var(--scale-space)); }
+:root[data-scale] .nav-label { letter-spacing: 1px; }
+
+/* Tables and cards: let dense rows wrap instead of truncating. */
+:root[data-scale] .card-body { padding: calc(8px * var(--scale-space)) calc(10px * var(--scale-space)); }
+:root[data-scale] .card-head { min-height: calc(50px * var(--scale-space)); padding: calc(14px * var(--scale-space)) calc(18px * var(--scale-space)); }
+
+/* Keep the narrow-screen heading in step with its own base size. */
+@media (max-width: 760px) {
+  :root[data-scale] .app .page-title h1 { font-size: calc(20px * var(--scale-display)); }
+}

@@ -24,6 +24,7 @@ async function fixture(t, options = {}) {
     process: Object.assign(Object.create(process), { resourcesPath: resources }),
     setTimeout: fn => { timers.push(fn); return fn; }, clearTimeout() {},
     require(name) {
+      if (name === './runner-process-lifecycle.cjs') return { supervise: () => ({ stop: async () => {} }) };
       if (name === 'fs' && options.missingPython) return { ...fs,
         existsSync: file => /[\\/]\.venv[\\/](?:Scripts[\\/]python\.exe|bin[\\/]python)$/.test(file)
           ? false : fs.existsSync(file) };

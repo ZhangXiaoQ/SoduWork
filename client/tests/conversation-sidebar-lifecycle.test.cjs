@@ -62,6 +62,30 @@ test('a newly bound conversation receives a timestamp on first insertion', () =>
   assert.ok(f.row().at > 0);
 });
 
+test('account projections and replay copies reconcile by origin while namesake chats remain', () => {
+  const f = fixture({ initialRows: [{ id: 'copy-1', title: 'Same title', cached: true,
+    source: { id: 'acct-1' }, sourceSessionId: 'native-1', at: 20 }] });
+  const rows = f.history._reconcileChats([{ id: 'copy-1', title: 'Same title', cached: true,
+    source: { id: 'acct-1' }, sourceSessionId: 'native-1', at: 20 }], [
+    { id: 'acct-1', title: 'Same title', accountConversation: true, accountProjection: true,
+      sourceSessionId: 'native-1', at: 30 },
+    { id: 'independent', title: 'Same title', at: 10 },
+  ], 1000);
+  assert.deepEqual(rows.map(row => row.id), ['acct-1', 'independent']);
+});
+
+test('account projections from multiple devices sharing one source session stay one row', () => {
+  const accountA = { id: 'acct-current', title: 'Same title', accountConversation: true,
+    sourceSessionId: 'native-shared', sourceClientId: 'current', accountCanSend: true, at: 20 };
+  const accountB = { id: 'acct-old', title: 'Same title', accountConversation: true,
+    sourceSessionId: 'native-shared', sourceClientId: 'old-device', accountCanSend: true, at: 30 };
+  const independent = { id: 'acct-independent', title: 'Same title', accountConversation: true,
+    sourceSessionId: 'native-other', sourceClientId: 'old-device', at: 10 };
+  const history = fixture().history;
+  assert.deepEqual(history._reconcileChats([], [accountA, accountB, independent], 100)
+    .map(row => row.id), ['acct-old', 'acct-independent']);
+});
+
 for (const status of ['todo', 'completed', 'cancelled']) {
   test('binding an idle ' + status + ' requirement keeps its conversation deletable after history refresh', () => {
     const f = fixture();

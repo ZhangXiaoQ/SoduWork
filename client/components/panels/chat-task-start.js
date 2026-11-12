@@ -218,7 +218,7 @@
       const ec = config.executionContext, controlled = selection.controlled, kind = selection.adapterId;
       const info = ctx.sessionInfo();
       const hasExecutionReceipt = Boolean(task.workRouting?.conversationTurn?.conversationId);
-      /* The first dispatch of a pending requirement needs an independent execution session. A creation-time draft mapping is not an execution receipt and must not route dispatch into an old conversation. */
+      // Same-owner dispatch reuses verified provenance; unrelated visible chats remain isolated.
       const firstDispatch = opts.source === 'task-dispatch' && task.status === 'todo' &&
         !hasExecutionReceipt && !opts.reuseConversation && !opts.chatId;
       const forceNew = opts.forceNew === true || firstDispatch;

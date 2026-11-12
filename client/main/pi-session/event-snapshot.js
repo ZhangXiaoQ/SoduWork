@@ -22,13 +22,17 @@ function _snapshotCache(state) {
 
 function accountingReceipts(state, cache) {
   if (cache.receiptRevision === state.usageRevision && cache.receiptMessages === state.messages &&
-      cache.receiptCount === state.messages.length && cache.receipts) return cache.receipts;
+      cache.receiptCount === state.messages.length && cache.receiptHistory === state.accountingHistory && cache.receipts) return cache.receipts;
   cache.receiptRevision = state.usageRevision;
   cache.receiptMessages = state.messages;
   cache.receiptCount = state.messages.length;
-  cache.receipts = state.messages.filter(m => m.role === 'assistant' && m.done && m.usage)
+  cache.receiptHistory = state.accountingHistory;
+  const history = Array.isArray(state.accountingHistory) ? state.accountingHistory : [];
+  const live = state.messages.slice(state.accountingMessageFrom || 0);
+  cache.receipts = history.concat(live.filter(m => m.role === 'assistant' && m.done && m.usage)
     .map(m => ({ usage: m.usage, at: m.usageAt || m.completedAt || 0,
-      model: m.usageModel || '', provider: m.usageProvider || '', agent: m.sourceAgent?.agentId || '' }));
+      model: m.usageModel || '', provider: m.usageProvider || '', agent: m.sourceAgent?.agentId || '',
+      ...(m.quotaUsageToken ? { quotaUsageToken: m.quotaUsageToken } : {}) })));
   return cache.receipts;
 }
 

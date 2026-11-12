@@ -13,10 +13,14 @@
   const multiline = (value, max) => String(value || '').replace(/\r\n?/g, '\n')
     .split('\n').map((line) => line.replace(/[ \t]+/g, ' ').trim())
     .filter(Boolean).join('\n').slice(0, max);
+  const wiTx = (value) => (typeof window !== 'undefined' && window.SoduWorkI18n?.translateText
+    ? window.SoduWorkI18n.translateText(value) : value);
   const GOAL_PHASES = Object.freeze([
     ['understand', '理解目标'], ['plan', '形成计划'], ['execute', '完成工作'],
     ['verify', '验证结果'], ['deliver', '整理交付'],
   ]);
+  const SCHEDULE_WEEKDAYS = Object.freeze(['一', '二', '三', '四', '五', '六', '日']);
+  const SCHEDULE_MONTH_DAYS = Object.freeze(Array.from({ length: 31 }, (_, index) => index + 1));
 
   const ICONS = Object.freeze({
     goal: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7.5"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M22 12h-3M12 22v-3M2 12h3"/></svg>',
@@ -91,15 +95,25 @@
    */
   function cleanSchedule(raw) {
     const value = raw || {};
-    const every = ['daily', 'weekly', 'hourly', 'once'].includes(value.every) ? value.every : 'daily';
+    const every = ['daily', 'weekly', 'monthly', 'hourly', 'once', 'custom'].includes(value.every) ? value.every : 'daily';
+    const hasWeekdays = Array.isArray(value.weekdays);
+    const weekdays = hasWeekdays ? [...new Set(value.weekdays.map(item => parseInt(item, 10)).filter(item => item >= 1 && item <= 7))].sort((a, b) => a - b) : [];
+    const monthDays = Array.isArray(value.monthDays) ? [...new Set(value.monthDays.map(item => parseInt(item, 10)).filter(item => item >= 1 && item <= 31))].sort((a, b) => a - b) : [];
     const pluginKey = text(value.personalPluginKey, 64);
     const timeZone = text(value.timeZone, 64);
     return Object.freeze({
       every,
       atHour: Math.max(0, Math.min(23, parseInt(value.atHour, 10) || 0)),
       atMinute: Math.max(0, Math.min(59, parseInt(value.atMinute, 10) || 0)),
-      weekday: Math.max(1, Math.min(7, parseInt(value.weekday, 10) || 1)),
+      weekday: every === 'weekly' && hasWeekdays && !weekdays.length
+        ? null : weekdays[0] || Math.max(1, Math.min(7, parseInt(value.weekday, 10) || 1)),
+      weekdays,
+      monthDays,
+      monthDayPolicy: value.monthDayPolicy === 'last_day' ? 'last_day' : 'skip',
+      startDate: text(value.startDate, 10),
+      endDate: text(value.endDate, 10),
       ...(every === 'once' ? { runAt: text(value.runAt, 80) } : {}),
+      ...(every === 'custom' ? { customRule: String(value.customRule || '').replace(/\r\n?/g, '\n').trim() } : {}),
       ...(timeZone ? { timeZone } : {}),
       ...(pluginKey ? { personalPluginKey: pluginKey } : {}),
     });
@@ -189,17 +203,33 @@
         '<span class="wi-brief-copy"><b id="' + p + 'IntentLabel">设定目标</b>' +
         '<i id="' + p + 'IntentSummary">上方描述就是本次目标</i></span></div>' +
       (goalOnly ? '' : '<div class="wi-schedule-row" id="' + p + 'IntentScheduleRow" hidden>' +
-        '<span>执行时间</span>' +
-        '<select id="' + p + 'IntentSchEvery" aria-label="频率">' +
-          '<option value="daily">每天</option><option value="weekly">每周</option>' +
-          '<option value="hourly">每小时</option></select>' +
+        '<span>' + esc(wiTx('执行时间')) + '</span>' +
+        '<select id="' + p + 'IntentSchEvery" aria-label="' + esc(wiTx('频率')) + '">' +
+          '<option value="daily">' + esc(wiTx('每天')) + '</option><option value="weekly">' + esc(wiTx('每周')) + '</option><option value="monthly">' + esc(wiTx('每月')) + '</option>' +
+          '<option value="hourly">' + esc(wiTx('每小时')) + '</option><option value="once">' + esc(wiTx('指定日期时间 · 仅一次')) + '</option>' +
+          '<option value="custom">' + esc(wiTx('自定义')) + '</option></select>' +
         '<select id="' + p + 'IntentSchWeekday" aria-label="星期几" hidden>' +
-          ['一', '二', '三', '四', '五', '六', '日'].map((d, i) =>
+          SCHEDULE_WEEKDAYS.map((d, i) =>
             '<option value="' + (i + 1) + '">周' + d + '</option>').join('') + '</select>' +
-        '<input id="' + p + 'IntentSchTime" type="time" value="09:00" aria-label="时刻">' +
+        '<div class="wi-schedule-weekdays" data-wi-weekdays hidden>' +
+          '<span>' + esc(wiTx('星期')) + '</span><div>' + SCHEDULE_WEEKDAYS.map((d, i) =>
+            '<label><input type="checkbox" data-wi-weekday value="' + (i + 1) + '"' +
+            (i === 0 ? ' checked' : '') + '><b>' + esc(wiTx('周' + d)) + '</b></label>').join('') + '</div></div>' +
+        '<div class="wi-schedule-monthdays" data-wi-monthdays hidden>' +
+          '<span>' + esc(wiTx('每月日期')) + '</span><div>' + SCHEDULE_MONTH_DAYS.map((day) =>
+            '<label><input type="checkbox" data-wi-monthday value="' + day + '"><b>' + String(day).padStart(2, '0') + '</b></label>').join('') + '</div>' +
+          '<label class="wi-schedule-lastday"><input type="checkbox" data-wi-lastday><b>' + esc(wiTx('缺少日期时使用当月最后一天')) + '</b></label></div>' +
+        '<div class="wi-schedule-range" data-wi-range>' +
+          '<label>' + esc(wiTx('开始日期')) + '<input id="' + p + 'IntentSchStartDate" type="date" aria-label="' + esc(wiTx('开始日期')) + '"></label>' +
+          '<label>' + esc(wiTx('结束日期')) + '<input id="' + p + 'IntentSchEndDate" type="date" aria-label="' + esc(wiTx('结束日期')) + '"></label></div>' +
+        '<input id="' + p + 'IntentSchRunAt" type="datetime-local" step="60" aria-label="' + esc(wiTx('执行日期时间')) + '" hidden>' +
+        '<label class="wi-schedule-custom" data-wi-custom hidden><span>' + esc(wiTx('自定义规则')) + '</span>' +
+          '<textarea id="' + p + 'IntentSchCustomRule" rows="4" maxlength="4096" spellcheck="false" data-user-content aria-label="' + esc(wiTx('自定义规则')) + '"></textarea>' +
+          '<small>' + esc(wiTx('可使用 DTSTART 与 RRULE 精确指定开始时间、时区和重复规则')) + '</small></label>' +
+        '<input id="' + p + 'IntentSchTime" type="time" value="09:00" aria-label="' + esc(wiTx('时刻')) + '">' +
         '<select id="' + p + 'IntentSchPlugin" aria-label="工作方法" hidden>' +
           '<option value="">不用插件</option></select>' +
-        '<i>按这台电脑的时区执行</i></div>') +
+        '<i>' + esc(wiTx('按这台电脑的时区执行')) + '</i></div>') +
       '<label class="wi-acceptance-row" for="' + p + 'IntentAcceptance">' +
         '<span>完成标准 <i>可选</i></span>' +
         '<textarea id="' + p + 'IntentAcceptance" rows="1" maxlength="1600" ' +
@@ -223,7 +253,21 @@
     const scheduleRow = byId('IntentScheduleRow');
     const schEvery = byId('IntentSchEvery');
     const schWeekday = byId('IntentSchWeekday');
+    const schWeekdays = [...node.querySelectorAll('[data-wi-weekday]')];
+    const schMonthdays = [...node.querySelectorAll('[data-wi-monthday]')];
+    const schLastday = node.querySelector('[data-wi-lastday]');
+    const schWeekdayGroup = node.querySelector('[data-wi-weekdays]');
+    const schMonthdayGroup = node.querySelector('[data-wi-monthdays]');
+    const schRange = node.querySelector('[data-wi-range]');
+    const schStartDate = byId('IntentSchStartDate');
+    const schEndDate = byId('IntentSchEndDate');
     const schTime = byId('IntentSchTime');
+    const schRunAt = byId('IntentSchRunAt');
+    const schCustomRule = byId('IntentSchCustomRule');
+    const schCustomRuleWrap = node.querySelector('[data-wi-custom]');
+    if (schCustomRule && typeof window !== 'undefined' && window.ScheduleTiming) {
+      schCustomRule.placeholder = window.ScheduleTiming.customExample();
+    }
     const schPlugin = byId('IntentSchPlugin');
     /*
      * Load host-provided automationMethods on first entry into automation mode; hide the
@@ -270,9 +314,22 @@
 
     function scheduleValue() {
       const time = String((schTime && schTime.value) || '09:00').split(':');
+      const every = (schEvery && schEvery.value) || 'daily';
+      const weekdays = every === 'weekly'
+        ? schWeekdays.filter((input) => input.checked).map((input) => Number(input.value)) : [];
+      const monthDays = every === 'monthly'
+        ? schMonthdays.filter((input) => input.checked).map((input) => Number(input.value)) : [];
       return {
-        every: (schEvery && schEvery.value) || 'daily',
-        weekday: parseInt((schWeekday && schWeekday.value) || '1', 10),
+        every,
+        weekday: weekdays[0] || (every === 'weekly' ? null :
+          parseInt((schWeekday && schWeekday.value) || '1', 10)),
+        weekdays,
+        monthDays,
+        monthDayPolicy: schLastday && schLastday.checked ? 'last_day' : 'skip',
+        startDate: every === 'custom' ? '' : (schStartDate ? schStartDate.value : ''),
+        endDate: every === 'custom' ? '' : (schEndDate ? schEndDate.value : ''),
+        ...(schRunAt && schRunAt.value ? { runAt: schRunAt.value } : {}),
+        ...(every === 'custom' && schCustomRule ? { customRule: schCustomRule.value.trim() } : {}),
         atHour: parseInt(time[0], 10) || 0,
         atMinute: parseInt(time[1], 10) || 0,
         personalPluginKey: (schPlugin && schPlugin.value) || '',
@@ -316,8 +373,13 @@
       }
       if (scheduleRow) {
         scheduleRow.hidden = !scheduleOn;
-        if (schWeekday) schWeekday.hidden = !(schEvery && schEvery.value === 'weekly');
-        if (schTime) schTime.hidden = !!(schEvery && schEvery.value === 'hourly');
+        if (schWeekday) schWeekday.hidden = true;
+        if (schWeekdayGroup) schWeekdayGroup.hidden = !(schEvery && schEvery.value === 'weekly');
+        if (schMonthdayGroup) schMonthdayGroup.hidden = !(schEvery && schEvery.value === 'monthly');
+        if (schRange) schRange.hidden = !(schEvery && ['daily', 'weekly', 'monthly', 'hourly'].includes(schEvery.value));
+        if (schRunAt) schRunAt.hidden = !(schEvery && schEvery.value === 'once');
+        if (schCustomRuleWrap) schCustomRuleWrap.hidden = !(schEvery && schEvery.value === 'custom');
+        if (schTime) schTime.hidden = !!(schEvery && ['hourly', 'once', 'custom'].includes(schEvery.value));
         if (schPlugin) schPlugin.hidden = !scheduleOn || !(methodItems || []).length;
         if (scheduleOn) ensureMethods();
       }
@@ -395,6 +457,13 @@
         acceptanceInput.style.height = '';
       }
       if (schPlugin) schPlugin.value = '';
+      schWeekdays.forEach((input, index) => { input.checked = index === 0; });
+      schMonthdays.forEach((input) => { input.checked = false; });
+      if (schLastday) schLastday.checked = false;
+      if (schStartDate) schStartDate.value = '';
+      if (schEndDate) schEndDate.value = '';
+      if (schRunAt) schRunAt.value = '';
+      if (schCustomRule) schCustomRule.value = '';
       state = { mode: 'chat', goal: '', acceptance: '' };
       closeChooser(); paint();
       if (o.input) o.input.focus();
@@ -419,6 +488,13 @@
           acceptanceInput.style.height = '';
         }
         if (schPlugin) schPlugin.value = '';
+        schWeekdays.forEach((input, index) => { input.checked = index === 0; });
+        schMonthdays.forEach((input) => { input.checked = false; });
+        if (schLastday) schLastday.checked = false;
+        if (schStartDate) schStartDate.value = '';
+        if (schEndDate) schEndDate.value = '';
+        if (schRunAt) schRunAt.value = '';
+        if (schCustomRule) schCustomRule.value = '';
         state = { mode: 'chat', goal: '', acceptance: '' };
         closeChooser(); paint();
       },

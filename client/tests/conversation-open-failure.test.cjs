@@ -83,3 +83,21 @@ test('retrying a failed historical attach clears stale task context before conti
   assert.equal(ctx._taskSession, null);
 });
 
+test('retrying unreadable work cards restores the same archive before opening any Agent', async () => {
+  const body = require('./renderer-source.cjs')
+    .factoryFunction('chat-session-controller.js', 'ChatSessionController', '_retryOpenChat');
+  const restored = [];
+  const options = { taskRef: 'task-a', adapterId: 'qwen', modelName: 'selected-model' };
+  const ctx = {
+    _sessionId: 'draft-a', _ref: '', _openingTask: null, _sessionOptions: options,
+    _snap: { status: 'unreachable', sessionOpenCode: 'WORK_CARDS_BLOCKED' },
+    enter: async (...args) => { restored.push(args); return true; },
+  };
+  const sandbox = { ctx, _ensure: () => assert.fail('Unreadable cards must not bypass archive recovery') };
+  require('node:vm').createContext(sandbox);
+  require('node:vm').runInContext(body, sandbox);
+  assert.equal(await sandbox._retryOpenChat(), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(restored)), [['', 'draft-a', options]]);
+  assert.equal(ctx._sessionOptions, options);
+});
+

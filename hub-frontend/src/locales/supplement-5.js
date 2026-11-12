@@ -1,4 +1,6 @@
 export default {
+  "管理桌面与 Android 安装包。上传后默认停用；启用前服务端会重新校验签名与完整性。": "Manage desktop and Android packages. Uploads start disabled; enabling verifies their signature and integrity again.",
+  "启用后可从首页下载此 Android 安装包；停用后下载入口将不可用。已有安装不会被卸载。": "Enabling makes this Android package available for download. Disabling removes access to this package. Existing installations are not removed.",
   "图片识别": "Image understanding",
   "使用模型自身的视觉能力": "Use this model's vision capability",
   "通过独立视觉模型识别": "Use a separate vision model",

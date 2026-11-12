@@ -34,6 +34,12 @@ log = logging.getLogger("uvicorn.error")
 
 COMPANY = "company"
 
+# Normalize former organization-model aliases to the current product name.
+# Accept old names for compatibility without offering them in new dispatch selectors.
+MODEL_ALIASES = {
+    "dev-coding-large-agent-hugengyong": "dev-coding-large-agent-soduwork",
+}
+MODEL_RENAME_FLAG = "model_rename_company_soduwork_20260824"
 MEDIA_MODEL_ALIASES = {
     "doubao-seedance-1-0-pro-250528": "doubao-seedance-2-0",
 }
@@ -45,6 +51,7 @@ FLASH_THINKING_UPGRADE_FLAG = "model_thinking_glm53_flash_controllable_20261022"
 
 def canonical_model_name(value: str) -> str:
     name = str(value or "").strip()
+    name = MODEL_ALIASES.get(name, name)
     return MEDIA_MODEL_ALIASES.get(name, name)
 
 # Provider templates are the only catalog rows startup may add.
@@ -76,6 +83,7 @@ BUILTIN_PROVIDERS: list[dict] = [
 
 # Historical presets support explicit migration helpers and their protocol regressions.
 # They are not an initialization list; startup never creates or repairs model rows.
+# Historical verification is recorded in docs/development/builtin-model-catalog.md.
 def _always_thinking_config(format: str) -> dict:
     return {"thinkingMode": "always", "thinkingFormat": format,
             "supportsReasoningEffort": True,
@@ -461,7 +469,8 @@ async def usable(session: AsyncSession, client=None, modality: str = "chat") -> 
         if not key_from:
             continue
         seen.add((p["id"], m.name))
-        out.append({**_m_api(m), "providerName": p["name"], "keyFrom": key_from, "own": False})
+        out.append({**_m_api(m), "providerName": p["name"], "providerKind": p["kind"],
+                    "keyFrom": key_from, "own": False})
     # Include personal models absent from the organization catalog.
     for c in (getattr(client, "models", None) or []) if client is not None else []:
         if not isinstance(c, dict) or normalize_modality(c.get("modality")) != wanted:
@@ -487,7 +496,7 @@ async def usable(session: AsyncSession, client=None, modality: str = "chat") -> 
                     "contextWindowSource": resolved["contextWindowSource"],
                     "modality": wanted,
                     "config": model_config(c.get("config"), wanted),
-                    "note": "我自己加的", "providerName": p["name"],
+                    "note": "我自己加的", "providerName": p["name"], "providerKind": p["kind"],
                     "keyFrom": key_from, "own": True})
     return await model_capabilities.enrich(session, out, ps, client)
 
@@ -522,14 +531,24 @@ def probe_sync(base: str, key: str, model: str, kind: str = "openai-compat") -> 
     """Test the configured key and return {ok, detail}, with a human-readable detail message.
     
     A model service can reject /v1/models while still accepting chat requests. Try /models first,
-    then fall back to a minimal chat request (max_tokens=1). Report failure only if both probes fail,
-    including the status code and an initial response excerpt. Connect directly to the configured
+    then fall back to a minimal chat request (max_tokens=1). Report safe diagnostics without raw
+    provider bodies or credentials. Connect directly to the configured
     model service without inheriting system proxies.
     """
     import json as _json
     import ssl
     import urllib.error
     import urllib.request
+    from . import model_errors
+
+    def failure(error):
+        status = error.code
+        body = error.read(16000).decode("utf-8", "replace")
+        billing = model_errors.billing_diagnostic(body)
+        detail = (model_errors.billing_message(billing) + f"（HTTP {status}）"
+                  if billing else model_errors.public_failure(f"HTTP {status}"))
+        return {"ok": False, "detail": detail,
+                **(billing or {})}
 
     def _open(path: str, body: dict | None):
         url = base.rstrip("/") + path
@@ -554,12 +573,13 @@ def probe_sync(base: str, key: str, model: str, kind: str = "openai-compat") -> 
     try:
         st, _ = _open("/v1/models" if kind == "anthropic" else "/models", None)
         if st == 200:
-            return {"ok": True, "detail": "通了（模型列表读得到）"}
+            return {"ok": True, "probe": "models",
+                    "detail": "模型列表可访问；尚未验证聊天生成、余额或当前 Agent 的协议兼容性"}
     except urllib.error.HTTPError as e:
         if e.code not in (401, 403, 404, 405):
-            return {"ok": False, "detail": f"HTTP {e.code}：{e.read(200).decode('utf-8', 'replace')[:120]}"}
+            return failure(e)
     except Exception as e:  # noqa: BLE001 - Explain connectivity, timeout, and certificate failures.
-        return {"ok": False, "detail": f"连不上（{type(e).__name__}）：{str(e)[:110]}"}
+        return {"ok": False, "detail": "连接失败，请检查 API 地址、网络和证书"}
     # Fall back to a minimal chat request when model discovery is denied.
     if not model:
         return {"ok": False, "detail": "这家的模型列表接口不给用，又没有可试的模型——先加一个模型再测"}
@@ -567,16 +587,12 @@ def probe_sync(base: str, key: str, model: str, kind: str = "openai-compat") -> 
         path = "/v1/messages" if kind == "anthropic" else "/chat/completions"
         st, _ = _open(path, {"model": model, "max_tokens": 1,
                             "messages": [{"role": "user", "content": "hi"}]})
-        return {"ok": st == 200, "detail": "通了（用「%s」试聊了一句）" % model if st == 200
+        return {"ok": st == 200, "probe": "chat", "detail": "最小聊天请求成功；当前 Agent 的协议兼容性仍需单独确认" if st == 200
                                           else f"HTTP {st}"}
     except urllib.error.HTTPError as e:
-        body = e.read(300).decode("utf-8", "replace")
-        hint = {401: "密钥不对或已过期", 403: "这把密钥没有这个模型的权限",
-                404: "地址或模型名不对"}.get(e.code, "")
-        return {"ok": False, "detail": (f"HTTP {e.code}" + ("：" + hint if hint else "") +
-                                        "　" + body[:120]).strip()}
+        return failure(e)
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "detail": f"连不上（{type(e).__name__}）：{str(e)[:110]}"}
+        return {"ok": False, "detail": "连接失败，请检查 API 地址、网络和证书"}
 
 
 async def resolve(session: AsyncSession, client, model_name: str = "",
@@ -614,9 +630,13 @@ async def resolve(session: AsyncSession, client, model_name: str = "",
         "contextWindow": m.get("ctxWindow"), "modelName": m.get("name"),
         "providerId": m.get("providerId"),
     })
+    from . import model_quota
     return {"base": p["baseUrl"], "key": key, "model": m["name"],
             "user": str(getattr(client, "user_ref", None) or getattr(client, "id", "") or "internal"),
             "quotaUserId": str(getattr(client, "user_ref", None) or ""),
+            "quotaClientId": str(getattr(client, "id", None) or ""),
+            "quotaAuthVersion": int(getattr(client, "auth_version", 1) or 1),
+            "fundingScope": model_quota.scope(p, key_from), "quotaScope": "platform",
             "provider": p["id"], "kind": p["kind"], "keyFrom": key_from,
             "contextWindow": resolved_window["contextWindow"],
             "contextWindowKnown": resolved_window["contextWindowKnown"],

@@ -52,7 +52,7 @@ function _executionStreamMarkdown(text) {
     if (window.marked && window.DOMPurify) {
       const html = window.DOMPurify.sanitize(window.marked.parse(text), {
         FORBID_TAGS: ['style', 'form', 'input', 'button'], ADD_ATTR: ['target'] });
-      return '<div class="ntext dks-bubble dks-md">' + html + '</div>';
+      return '<div class="ntext dks-bubble dks-md nmd">' + html + '</div>';
     }
   } catch (e) { /* Fall back to plain text if rendering fails. */ }
   return '<div class="ntext dks-bubble dks-plain">' + esc(text) + '</div>';
@@ -108,8 +108,9 @@ function _executionStreamVisibleItems(items) {
   const visible = [];
   const seenSources = new Set();
   const seenSays = new Set();
+  const seenDeltas = new Set();
   let scope = '';
-  const reset = () => { seenSources.clear(); seenSays.clear(); };
+  const reset = () => { seenSources.clear(); seenSays.clear(); seenDeltas.clear(); };
   (items || []).forEach((value) => {
     if (!value || typeof value !== 'object') return;
     const item = value;
@@ -127,11 +128,19 @@ function _executionStreamVisibleItems(items) {
     const text = _executionStreamText(item).replace(/\s+/g, ' ').trim();
     const source = String(item.sourceId || item._sourceId || '').trim();
     const sourceKey = source ? [source, kind, String(item.tool || '').toLowerCase(), text].join('|') : '';
-    if (sourceKey && seenSources.has(sourceKey)) return;
-    if (kind === 'say' && text && seenSays.has(text)) return;
+    const streaming = kind === 'say' && (item.delta || item.streamId);
+    if (!streaming && sourceKey && seenSources.has(sourceKey)) return;
+    // Repeated words and whitespace are real tokens. Only an event identity
+    // can deduplicate a stream when historical pages overlap.
+    if (streaming && Number.isSafeInteger(item.seq) && item.seq > 0) {
+      const eventKey = [scope, item.seg || 1, item.seq].join(':');
+      if (seenDeltas.has(eventKey)) return;
+      seenDeltas.add(eventKey);
+    }
+    if (kind === 'say' && !streaming && text && seenSays.has(text)) return;
     visible.push(item);
-    if (sourceKey) seenSources.add(sourceKey);
-    if (kind === 'say' && text) seenSays.add(text);
+    if (!streaming && sourceKey) seenSources.add(sourceKey);
+    if (kind === 'say' && !streaming && text) seenSays.add(text);
   });
   return visible;
 }
@@ -145,6 +154,7 @@ function _executionStreamRows(items, status) {
   const visibleItems = _executionStreamVisibleItems(items);
   const seenTools = [];
   const thoughts = new Map();
+  const replies = new Map();
   const preparations = new Map();
   let preparationRound, preparationSegment;
   const callKey = item => [item.round || item._round || 1, item.seg || 1, item.callId || ''].join(':');
@@ -212,6 +222,7 @@ function _executionStreamRows(items, status) {
     }
     if (kind === 'user') {
       flushTool(); flushDiagnostics();
+      replies.clear();
       thoughts.forEach(thought => { thought.done = true; });
       rows.push({ type: 'user', key: 'user-' + Number(item.seq || rows.length), item });
       return;
@@ -223,6 +234,24 @@ function _executionStreamRows(items, status) {
     }
     if (kind === 'say') {
       flushTool(); flushDiagnostics();
+      if (item.delta || item.streamId) {
+        const key = [item.round || item._round || 1, item.seg || 1,
+          item.streamId || 'message'].join(':');
+        let reply = replies.get(key);
+        if (!reply) {
+          if (!item.full && !item.text) return;
+          reply = { type: kind, key: kind + '-' + Number(item.seq || rows.length),
+            item: { ...item, text: '', full: '' } };
+          replies.set(key, reply); rows.push(reply);
+        }
+        // Match the live transcript contract: full snapshots replace, deltas
+        // append, and empty terminal receipts retain the accumulated answer.
+        if (Object.prototype.hasOwnProperty.call(item, 'full')) reply.item.text = String(item.full);
+        else if (item.delta) reply.item.text += String(item.text || '');
+        else if (item.text || !item.done) reply.item.text = String(item.text || '');
+        reply.item.done = item.done === true;
+        return;
+      }
       rows.push({ type: kind, key: kind + '-' + Number(item.seq || rows.length), item });
       return;
     }

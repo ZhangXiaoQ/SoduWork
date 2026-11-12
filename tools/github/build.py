@@ -48,6 +48,20 @@ def prepare_python(scratch, shard):
     run(python, "-m", "pip", "install", "-r", ROOT / "hub-backend/requirements-runner-build.txt")
 
 
+def configure_macos_signing(env, *, validation=False):
+    """Require production signing and notarization for public macOS builds."""
+    if validation:
+        return env
+    require(env.get("SODUWORK_MAC_SIGN_IDENTITY"),
+            "Public macOS releases require SODUWORK_MAC_SIGN_IDENTITY")
+    skip = env.get("SODUWORK_MAC_SKIP_NOTARIZE", "").strip().lower()
+    require(skip not in {"1", "true", "yes"},
+            "Public macOS releases cannot skip notarization")
+    env["SODUWORK_MAC_RELEASE"] = "1"
+    env["SODUWORK_MAC_REAL_KEYCHAIN"] = "1"
+    return env
+
+
 def package_native(ctx, shard, scratch, *, validation=False):
     host = {"windows": "Windows", "linux": "Linux", "macos-arm64": "Darwin", "macos-x64": "Darwin"}[shard]
     require(platform.system() == host, "Native host required")
@@ -69,6 +83,8 @@ def package_native(ctx, shard, scratch, *, validation=False):
         # Validation emits only a checksum report. Public release entry points
         # still require the distribution review and full upgrade acceptance.
         env["SODUWORK_INTERNAL_BUILD"] = "1"
+    if shard.startswith("macos-"):
+        configure_macos_signing(env, validation=validation)
     npm = "npm.cmd" if shard == "windows" else "npm"
     run(npm, "ci", cwd=ROOT / "client", env=env)
     if shard.startswith("macos-"):

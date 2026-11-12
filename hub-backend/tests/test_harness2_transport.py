@@ -13,10 +13,12 @@ import urllib.error
 from unittest.mock import patch
 
 from app.services import harness2_bridge as bridge, harness2_runtime as runtime
+from app.services import harness2_provider as provider
+from tests.test_harness2_native_provider import Response
 
 
 def response(payload):
-    return contextlib.closing(io.BytesIO(json.dumps(payload).encode()))
+    return Response(payload)
 
 
 PLAN = {"choices": [{"message": {"content": "Inspect inputs and verify the result."},
@@ -31,7 +33,7 @@ class Harness2TransportTests(unittest.TestCase):
                    "usage": {"prompt_tokens": 12000, "completion_tokens": 1}}
         budget = RefinementBudget()
         observed = []
-        with patch.object(bridge.urllib.request.OpenerDirector, "open",
+        with patch.object(provider.urllib.request.OpenerDirector, "open",
                           return_value=response(payload)):
             with self.assertRaises(bridge.StructuredFailure) as caught:
                 budget.run({"base": "https://fixture.invalid/v1", "key": "private-key", "model": "fixture"},
@@ -56,13 +58,16 @@ class Harness2TransportTests(unittest.TestCase):
         ]
         for failure, code, text in failures:
             with self.subTest(code=code), tempfile.TemporaryDirectory() as directory:
-                count = 0
+                stages = []
 
-                def request(*_args, **_kwargs):
-                    nonlocal count
-                    count += 1
-                    if count == 1:
+                def request(req, **_kwargs):
+                    system = json.loads(req.data)["messages"][0]["content"]
+                    stage = system.split("stage=", 1)[1].splitlines()[0]
+                    stages.append(stage)
+                    if stage == "base1":
                         return response(PLAN)
+                    if stage == "dom1.a1":
+                        return response({"choices": [{"message": {"content": '{"files":{},"notes":""}'}, "finish_reason": "stop"}]})
                     if isinstance(failure, Exception):
                         raise failure
                     return response(failure)
@@ -76,14 +81,15 @@ class Harness2TransportTests(unittest.TestCase):
                         runtime.EXECUTOR_ENV: sys.executable,
                         runtime.ROOT_ENV: str(root / "evidence"),
                       }),
-                      patch.object(bridge.urllib.request.OpenerDirector, "open", side_effect=request),
+                      patch.object(provider.urllib.request.OpenerDirector, "open", side_effect=request),
                       patch.object(sys, "stdin", io.StringIO("Plan a minimal answer.")),
                       contextlib.redirect_stdout(output),
                       patch.object(bridge, "execute") as execute):
                     result = bridge.main(["--cwd", str(root), "--refine"])
                 self.assertEqual(result, 2)
                 execute.assert_not_called()
-                self.assertEqual(count, 2, "No new model calls after the first failure")
+                self.assertEqual(stages, ["base1", "inv1.a1"],
+                                 "No later model call starts after the failed proposal")
                 errors = [json.loads(line)["error"] for line in output.getvalue().splitlines()
                           if "error" in json.loads(line)]
                 self.assertEqual(errors[-1].get("code"), code)

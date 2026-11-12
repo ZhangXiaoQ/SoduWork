@@ -1,7 +1,6 @@
 """Runner-local enablement for the bundled Harness² core.
 
-Uninstalling this runtime never removes its bundled code or the OpenCode
-installation shared with the standalone OpenCode runtime.
+Disabling this runtime retains bundled code and does not modify other runtimes.
 """
 from __future__ import annotations
 
@@ -18,7 +17,7 @@ def _marker() -> Path:
 
 def disabled_issue() -> str:
     if _marker().exists():
-        return "Google Harness² 已卸载；点「装上」重新启用。共享 OpenCode 执行组件已保留。"
+        return "Google Harness² 已停用；点「装上」重新启用。"
     return ""
 
 

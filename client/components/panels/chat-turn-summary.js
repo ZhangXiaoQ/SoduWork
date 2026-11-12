@@ -56,7 +56,7 @@
     const expanded = new Set();
     let scope = '', turns = [], byIndex = new Map(), boundList = null;
     const duration = value => {
-      if (value === null) return '—';
+      if (value === null) return ctx.esc(tx('未记录'));
       const seconds = Math.floor(Math.max(0, value) / 1000);
       return seconds < 60 ? seconds + 's' : Math.floor(seconds / 60) + 'm ' + String(seconds % 60).padStart(2, '0') + 's';
     };

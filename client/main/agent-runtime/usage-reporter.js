@@ -145,7 +145,7 @@ function createUsageReporter(options) {
       function checkpoint(payload) {
         const day = new Date(Date.parse(payload.occurredAt) + 8 * 3600000).toISOString().slice(0, 10);
         const bucket = JSON.stringify([day, payload.agent, payload.provider, payload.model,
-          payload.credentialScope, payload.billingMode]);
+          payload.credentialScope, payload.billingMode, payload.quotaUsageToken || '']);
         if (outbox.enqueue({ hub: identity.hub, clientId: identity.clientId, accountScope: identity.accountScope || '',
           scope, bucket, payload })) schedule();
       }
@@ -156,6 +156,8 @@ function createUsageReporter(options) {
           checkpoint({ ...base, usage: { ...cumulative }, model: receipt.model || model,
             agent: receipt.agent || base.agent,
             provider: receipt.provider !== undefined ? receipt.provider : base.provider,
+            ...(typeof receipt.quotaUsageToken === 'string' && receipt.quotaUsageToken
+              ? { quotaUsageToken: receipt.quotaUsageToken } : {}),
             occurredAt: receipt.at ? new Date(receipt.at).toISOString() : base.occurredAt });
         }
       } else checkpoint(base);

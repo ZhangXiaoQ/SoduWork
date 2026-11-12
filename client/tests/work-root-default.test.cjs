@@ -18,7 +18,7 @@ test('main process preserves the public default workspace directory', t => {
   assert.ok(handler, '主进程必须注册默认工作目录 IPC');
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-default-work-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  {
+  for (const id of ['stage', 'internal', 'cn', 'global']) {
     let callback;
     const profile = require('../main/distribution.cjs').current();
     vm.runInNewContext(handler, { _distribution: { current: () => profile },

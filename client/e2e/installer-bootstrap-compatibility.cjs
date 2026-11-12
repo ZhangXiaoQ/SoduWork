@@ -36,7 +36,7 @@ async function main() {
   const before = await fs.readFile(path.join(installed, '.soduwork-active'), 'utf8');
   const base = JSON.parse(await fs.readFile(path.join(client, 'package.json'), 'utf8')).build;
   let setup;
-  if (process.argv.includes('--reuse')) setup = path.join(root, 'bootstrap-skip-dist', 'SoduWork-1.0.1-Setup.exe');
+  if (process.argv.includes('--reuse')) setup = path.join(root, 'bootstrap-skip-dist', productName + '-1.0.1-Setup.exe');
   else {
     await prepareFixtureLauncher(client, data);
     const staging = path.join(client, '.runtime/installer');
@@ -73,7 +73,7 @@ async function main() {
   assert.equal(details.contentCheckSkips[0].filesystemSize, original.length + 4096);
   assert.match(await fs.readFile(path.join(installed, '.soduwork-update.log'), 'utf8'), /verification-policy=bootstrap-existence-only/);
   const launchOutput = path.join(root, 'launched-after-bootstrap-skip-' + Date.now() + '.json');
-  const launchCode = await run(path.join(installed, 'SoduWork.exe'), [], {
+  const launchCode = await run(path.join(installed, executableName + '.exe'), [], {
     SODUWORK_UPDATE_E2E_PROFILE: path.join(root, 'profile'), SODUWORK_UPDATE_E2E_OUTPUT: launchOutput,
   });
   assert.equal(launchCode, 0);
@@ -83,7 +83,7 @@ async function main() {
     await new Promise(resolve => setTimeout(resolve, 50));
   }
   const launched = JSON.parse(await fs.readFile(launchOutput, 'utf8'));
-  assert.equal(launched.exe, path.join(installed, '.soduwork-versions', active, 'SoduWork.exe'));
+  assert.equal(launched.exe, path.join(installed, '.soduwork-versions', active, executableName + '.exe'));
   assert.equal(await fs.readFile(path.join(root, 'profile', 'sentinel.txt'), 'utf8'), 'keep user data');
   const result = { root, installed, setup, code, bootstrapContentCheckSkipped: true, newVersionActivated: true,
     installedFixtureLaunched: true, userDataPreserved: true, details };

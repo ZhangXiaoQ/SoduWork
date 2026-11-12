@@ -72,6 +72,51 @@ test('Hub packages use authorized immutable bytes and fail closed on revoked or 
   allowed = true; corrupt = true;
   await assert.rejects(pages.prepare(f.deps, raw), /校验不一致/);
 });
+
+test('market package reads use the authenticated account session when device identity has no session', async t => {
+  const f = fixture(t); f.setOwner('hub/account-a');
+  let sessions = 0, allowed = true;
+  f.deps.identityOf = () => ({ hub: 'https://strict.invalid', clientId: 'fixture', secret: 'fixture-device-only' });
+  f.deps.authenticatedIdentityOf = async () => {
+    sessions++; return { hub: 'https://strict.invalid', clientId: 'fixture', session: 'fixture-account-session' };
+  };
+  f.deps.fetchImpl = async (_url, options) => {
+    if (options.headers.Authorization !== 'Device fixture-account-session') return new Response('', { status: 401 });
+    assert.equal(options.headers['X-SoduWork-Device-Secret'], undefined);
+    return allowed ? Response.json({ ui: f.body.ui, resources: f.body.resources }) : new Response('', { status: 403 });
+  };
+  const opened = await pages.prepare(f.deps, { pluginId: 'market-session-app', contributionId: 'main' });
+  assert.equal((await f.request(opened.url)).status, 200);
+  assert.equal(sessions, 2, 'opening and resource reads obtain the current authenticated identity');
+  allowed = false; assert.equal((await f.request(opened.url)).status, 403);
+  f.deps.authenticatedIdentityOf = async () => { throw Error('Account renewal unavailable'); };
+  f.deps.fetchImpl = async () => assert.fail('failed renewal cannot fall back to device-secret authentication');
+  await assert.rejects(pages.prepare(f.deps, { pluginId: 'market-session-app', contributionId: 'main' }), /Account renewal unavailable/);
+});
+
+test('conditional Hub reads recheck authorization without retransmitting packages and recover after cache clear', async t => {
+  const f = fixture(t); f.setOwner('hub/account-a');
+  f.deps.identityOf = async () => ({ hub: 'https://conditional.invalid', clientId: 'fixture', session: 'isolated-session' });
+  const cache = require('../main/app-resource-cache.cjs');
+  let requests = 0, bodies = 0, allowed = true, etag = '"version-one"';
+  f.deps.fetchImpl = async (_url, options) => {
+    requests++;
+    if (!allowed) return new Response('', { status: 403 });
+    if (options.headers['If-None-Match'] === etag) return new Response(null, { status: 304, headers: { etag } });
+    bodies++; return Response.json({ ui: f.body.ui, resources: f.body.resources }, { headers: { etag } });
+  };
+  const raw = { pluginId: 'conditional-app', contributionId: 'main' };
+  const opened = await pages.prepare(f.deps, raw);
+  for (let i = 0; i < 10; i++) assert.equal((await f.request(opened.url)).status, 200);
+  assert.equal(requests, 11, 'every resource rechecks Hub authorization'); assert.equal(bodies, 1);
+  etag = '"version-two"'; const updated = await pages.prepare(f.deps, raw);
+  assert.notEqual(updated.revision, opened.revision); assert.equal(bodies, 2);
+  await cache.request({ profile: f.app.getPath('userData'), pluginId: raw.pluginId, action: 'clear' });
+  assert.equal((await f.request(updated.url)).status, 200); assert.equal(bodies, 3, 'eviction triggers a fresh verified package response');
+  allowed = false;
+  assert.equal((await f.request(updated.url)).status, 403, 'revocation beats a matching cache tag');
+  assert.equal((await cache.request({ profile: f.app.getPath('userData'), pluginId: raw.pluginId, action: 'stats' })).bytes, 0);
+});
 test('remote pages reject missing account ownership before using a legacy device identity', async t => {
   const f = fixture(t); let identityReads = 0, requests = 0, partitions = 0;
   f.deps.identityOf = async () => {

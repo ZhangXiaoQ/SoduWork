@@ -52,12 +52,13 @@
   function contextButton(options) {
     const o = options || {};
     const icon = String(o.iconHtml || '') || ICONS[o.icon] || '';
-    return '<button class="wc-context-button' + (o.muted ? ' muted' : '') + '" id="' + esc(o.id) + '"' +
+    const tag = o.readOnly ? 'span' : 'button';
+    return '<' + tag + ' class="wc-context-button' + (o.readOnly ? ' wc-context-static' : '') + (o.muted ? ' muted' : '') + '" id="' + esc(o.id) + '"' +
       (o.popup ? ' aria-haspopup="true" aria-expanded="false"' : '') +
       ' aria-label="' + esc(o.title || o.value || o.label || '') + '" title="' + esc(o.title || '') + '">' +
       icon + '<span class="wc-context-copy"><i>' + esc(o.label || '') + '</i><b id="' + esc(o.valueId || '') + '">' +
       esc(o.value || '') + '</b></span>' +
-      (o.popup && o.chevron !== false && o.id !== 'cpWorkspace' ? '<span class="wc-chevron">⌄</span>' : '') + '</button>';
+      (o.popup && o.chevron !== false && o.id !== 'cpWorkspace' ? '<span class="wc-chevron">⌄</span>' : '') + '</' + tag + '>';
   }
 
   function syntaxHint() {
@@ -156,14 +157,17 @@
     const selected = new Set((selection || []).map(item => item.pluginId));
     return items.map(item => {
       const state = global.ChatPluginMention.availability(item, '');
-      const description = item.description || '选择后用于本轮对话';
+      const display = field => global.ChatPluginMentionModel?.displayText(item, field,
+        value => global.SoduWorkI18n?.translateText?.(value) || value) || item[field] || '';
+      const name = display('name');
+      const description = display('description') || '选择后用于本轮对话';
       const icons = global.SoduWorkPluginIcon;
       const icon = icons?.markup?.(item) || icons?.imageFor?.(item) || ICONS.ability;
       return '<button type="button" class="wc-more-plugin" data-more-plugin="' + esc(item.pluginId || '') +
         '" aria-pressed="' + selected.has(item.pluginId) + '"' + (!state.available ? ' disabled' : '') +
-        ' title="' + esc(item.name + '：' + (state.available ? description : state.label)) + '">' +
+        ' title="' + esc(name + '：' + (state.available ? description : state.label)) + '">' +
         '<i class="wc-plugin-icon" aria-hidden="true">' + icon + '</i>' +
-        '<span><b data-user-content>' + esc(item.name) + '</b><small>' + esc(description) + '</small></span>' +
+        '<span><b data-user-content>' + esc(name) + '</b><small' + (item.description ? ' data-user-content' : '') + '>' + esc(description) + '</small></span>' +
         (selected.has(item.pluginId) ? '<em class="wc-plugin-selected" aria-label="已选择">✓</em>' :
           !state.available ? '<em>' + esc(state.label) + '</em>' : '') + '</button>';
     }).join('');
@@ -427,7 +431,7 @@
       contextButton({ id: 'nchatMode', valueId: 'nchatModeName', icon: 'shield',
         label: '权限', value: '兼容权限', title: '本次会话权限', popup: true, chevron: false }) +
       contextButton({ id: 'nchatWd', valueId: 'nchatWdName', icon: 'folder',
-        label: '工作位置', value: '准备工作区', title: '打开本次会话的工作文件夹' }) +
+        label: '工作位置', value: '准备工作区', title: '工作位置', readOnly: true }) +
       contextButton({ id: 'nchatAbility', valueId: 'nchatAbilityName', icon: 'ability',
         label: '能力', value: '基础对话', title: '能力在会话开始时确定', muted: true }) + '</div>';
     const next = replace(node, {

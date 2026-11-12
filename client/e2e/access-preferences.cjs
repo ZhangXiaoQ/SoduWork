@@ -68,6 +68,7 @@ if (typeof electron === 'string') {
     fs.writeFileSync(path.join(out, `settings-${width}-${lang}-${theme}.png`), (await owner.webContents.capturePage()).toPNG());
   }
   app.whenReady().then(async () => {
+    locale.setLocale('zh-CN');
     // Replace only the outer desktop shell with the actual settings section.
     // This keeps its trusted production URL while avoiding auth/model startup.
     protocol.handle('file', request => {
@@ -83,6 +84,15 @@ if (typeof electron === 'string') {
     const confirm = require('../main/access-control/full-access-consent').create({ BrowserWindow: HiddenConsent, ipcMain, screen });
     preferences.install({ app, ipcMain, BrowserWindow, confirmFullAccess: confirm });
     owner = await window(); peer = await window();
+    await selected(owner, 'full'); await selected(peer, 'full');
+    assert.equal(preferences.forNewChat(app, { adapterId: 'pi' }, true).accessMode, 'full');
+    assert.equal(preferences.hasFullConsent(app, {}), true);
+    assert.equal(fs.existsSync(path.join(app.getPath('userData'), 'access-preferences.json')), false);
+    await js(owner, 'SoduWorkI18n.setLocale("zh-CN")'); await delay(100);
+    assert.match(await js(owner, 'document.querySelector("#defaultAccessStatus").textContent'), /新建对话将默认完全访问/);
+    await owner.webContents.capturePage(); await delay(120);
+    fs.writeFileSync(path.join(out, 'new-user-default-full-zh.png'), (await owner.webContents.capturePage()).toPNG());
+    report.cases.push('Fresh profile settings select full access and supported new chats inherit it without altering an existing saved choice.');
     await click(owner, '[data-default-access=readonly]'); await selected(owner, 'readonly'); await selected(peer, 'readonly');
     for (const adapterId of ['pi', 'opencode', 'codex-harness', 'qwen']) assert.equal(preferences.forNewChat(app, { adapterId }, true).accessMode, 'readonly');
     report.cases.push('Real mouse setting change persists through trusted IPC and synchronizes a second desktop window; all supported new-chat adapters inherit readonly.');
@@ -107,7 +117,7 @@ if (typeof electron === 'string') {
       assert.deepEqual(preferences.forNewChat(app, opts, true), { ...opts, accessMode: 'full' });
     }
     report.cases.push('Checked native consent persists through reload; all supported new chats and new local tasks inherit it, while existing chats, automation and explicit session modes retain their grants.');
-    for (const [width, lang, theme] of [[1120, 'zh-CN', 'azure'], [360, 'en-US', 'ruby'], [360, 'zh-CN', 'azure'], [1120, 'en-US', 'ruby']]) await layout(width, lang, theme);
+    for (const [width, lang, theme] of [[1120, 'zh-CN', 'azure'], [360, 'en-US', 'cnbm'], [360, 'zh-CN', 'azure'], [1120, 'en-US', 'cnbm']]) await layout(width, lang, theme);
     await click(owner, '[data-default-access=standard]'); await selected(owner, 'standard'); await selected(peer, 'standard');
     assert.equal(preferences.hasFullConsent(app, {}), false);
     locale.setLocale('en-US');

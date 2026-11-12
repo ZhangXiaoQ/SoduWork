@@ -184,9 +184,12 @@ async def open_response(conf, path, body, *, stream=False, timeout=None):
             from . import client_access
             async with model_runtime.SessionLocal() as quota_session:
                 try:
+                    from .model_quota import revalidate_selection
+                    await revalidate_selection(quota_session, conf)
                     await client_access.assert_quota(quota_session, conf["quotaUserId"],
                                                      provider=conf.get("provider", ""),
-                                                     model=conf.get("model", ""))
+                                                     model=conf.get("model", ""),
+                                                     personal=conf.get("quotaScope") == "personal")
                 except client_access.ClientAccessError as exc:
                     error = UpstreamError(exc.status, "", str(exc))
                     error.quota_detail = exc.detail()

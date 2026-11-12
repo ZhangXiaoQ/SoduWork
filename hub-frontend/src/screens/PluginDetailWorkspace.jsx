@@ -24,7 +24,7 @@ const PublicationEvaluationPanel = lazy(() => import('./PluginEvaluationPanel.js
   .then((module) => ({ default: module.PublicationEvaluationPanel })))
 
 const APP_CATEGORY = localeMap(() => ({ office: '工具办公', game: '小游戏', robot: '机器人', other: '其他' }))
-const SOURCE = localeMap(() => ({ builtin: 'SoduWork 内置', adapter: '兼容导入', codex: 'Codex', claude: 'Claude' }))
+const SOURCE = localeMap(() => ({ builtin: 'SoduWork 内置', soduwork: 'SoduWork 原生', adapter: '兼容导入', codex: 'Codex', claude: 'Claude' }))
 const NODE = localeMap(() => ({ ai: 'AI 执行', ai_review: 'AI 代码审查', spec: '需求定版', quality: '质量门禁', validate: '制品校验', human_review: '人工验收', approval: '发布审批', merge: '代码合并', condition: '条件判断', deploy: '环境发布', deploy_chain: '发布链', publish: '交付完成', script: '受信脚本', tool: '工具调用' }))
 const RUN = localeMap(() => ({ running: '运行中', dispatching: '正在派发', queued: '排队中', waiting_human: '等待人工', waiting_external: '等待环境', rework: '返修中', succeeded: '已完成', failed: '运行失败', skipped: '已跳过', cancelled: '已取消' }))
 const fmt = (ms) => ms ? new Date(ms).toLocaleString(getLocale(), { hour12: false }) : '—'

@@ -240,19 +240,20 @@ class MultimodalProxyTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(send.call_count,2)
 
     async def test_asgi_routes_pass_native_images_and_config_declares_the_transport_contract(self):
-        from types import SimpleNamespace
+        from app.models import Client
         import httpx
         from fastapi import FastAPI
         from app.api import ai_proxy
-        client = SimpleNamespace(id="isolated-client", user_ref="isolated-user")
+        client = Client(id="isolated-client", user_ref="isolated-user", auth_version=1)
         app = FastAPI()
         app.include_router(ai_proxy.router)
         app.dependency_overrides[ai_proxy._client_by_bearer] = lambda: client
-        app.dependency_overrides[ai_proxy.current_ai_client] = lambda: client
+        app.dependency_overrides[ai_proxy.current_model_client] = lambda: client
         app.dependency_overrides[ai_proxy.get_session] = lambda: None
         conf = {**CONF,"kind":"openai-compat","model":"arbitrary-alias"}
         with patch.object(ai_proxy.model_catalog,"usable",AsyncMock(return_value=[{"name":"arbitrary-alias"}])), \
              patch.object(ai_proxy.model_catalog,"resolve",AsyncMock(return_value=conf)), \
+             patch("app.deps.enforce_client_access",AsyncMock()), \
              patch("app.services.client_access.assert_quota",AsyncMock()) as admission, \
              patch.object(ai_proxy.device_auth,"issue_proxy_ticket",return_value=("fixture-proxy",60)), \
              patch.object(ai_proxy.device_auth,"issue_mcp_ticket",return_value=("fixture-mcp",60)), \
@@ -263,7 +264,7 @@ class MultimodalProxyTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(config["imageRouting"],"native")
                 self.assertIs(config["visionFallbackAvailable"], False)
                 admission.assert_awaited_once_with(None, "isolated-user",
-                    provider=conf.get("provider", ""), model="arbitrary-alias")
+                    policy_rows=None, provider=conf.get("provider", ""), model="arbitrary-alias", personal=False)
                 for route in ("/chat/completions","/responses"):
                     for streaming in (True,False):
                         body=payload(route)

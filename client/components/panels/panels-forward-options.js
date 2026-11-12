@@ -388,7 +388,7 @@ function _fwdSyncConfirm(tid) {
   const modelState = _fwpModelState(_fwdOptions, _fwdModel);
   const modelHtml = agent && agent.modelPick !== false && (modelState.models.length || modelState.stale)
     ? '<label class="fwd-model"><span>本次模型</span><select id="fwdModel"' + (busy ? ' disabled' : '') + '>' +
-      _fwpModelOptions(modelState, '跟随底座默认') +
+      _fwpModelOptions(modelState, _fwpDefaultModelLabel(_fwdOptions, agent)) +
       '</select></label>' : '';
   let directoryHint = '';
   if (choice.type === 'direct' || choice.type === 'native') {

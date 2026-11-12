@@ -12,6 +12,7 @@ async function mount(t, { permissions = ['identity.manage', 'task.view'], active
   Object.defineProperty(globalThis, 'window', { configurable: true, value: {
     location: { hash: '', pathname: '/', search: '' }, history: { replaceState() {} },
     addEventListener: events.addEventListener.bind(events), removeEventListener: events.removeEventListener.bind(events),
+    dispatchEvent: events.dispatchEvent.bind(events),
     setInterval() { return 1 }, clearInterval() {}, scrollTo() {},
   } })
   Object.defineProperty(globalThis, 'document', { configurable: true, value: {
@@ -36,7 +37,8 @@ async function mount(t, { permissions = ['identity.manage', 'task.view'], active
   const buttons = () => page.nodes(node => node.type === 'button' && String(node.props.className).startsWith('nav-item'))
   const account = () => buttons().find(node => node.props.children[1].props.children === '账户与安全')
   const screen = () => page.nodes(node => node.props.className === 'app')[0].props['data-screen']
-  return { page, account, screen, values }
+  const legal = () => buttons().find(node => node.props.children[1].props.children === '协议与隐私政策')
+  return { page, account, legal, screen, values, events }
 }
 
 test('identity administrator can open account security from the visible organization navigation', async t => {
@@ -57,5 +59,48 @@ test('saved account security selection reopens the configured page after refresh
 test('integration management alone cannot expose or restore the identity-protected page', async t => {
   const { account, screen } = await mount(t, { permissions: ['integration.manage', 'task.view'], active: 'account-security' })
   assert.equal(account(), undefined)
+  assert.equal(screen(), 'overview')
+})
+
+test('ordinary administrators cannot expose or restore superuser-only legal management', async t => {
+  const regular = await mount(t, { active: 'legal-documents' })
+  assert.equal(regular.legal(), undefined)
+  assert.equal(regular.screen(), 'overview')
+})
+
+test('platform administrators can open legal publication management', async t => {
+  const { page, legal, screen } = await mount(t, { isSuper: true })
+  assert.ok(legal())
+  page.act(() => legal().props.onClick())
+  assert.equal(screen(), 'legal-documents')
+})
+
+test('unsaved-page guards can cancel sidebar and cross-page navigation without changing the stored screen', async t => {
+  const { page, account, screen, values, events } = await mount(t)
+  const keepDraft = event => event.preventDefault()
+  events.addEventListener('soduwork-before-admin-leave', keepDraft)
+  page.act(() => account().props.onClick())
+  assert.equal(screen(), 'overview')
+  page.act(() => events.dispatchEvent(new CustomEvent('soduwork-hub-nav', { detail: { screen: 'account-security' } })))
+  assert.equal(screen(), 'overview')
+  assert.equal(values.get('soduwork-hub-screen'), 'overview')
+  events.removeEventListener('soduwork-before-admin-leave', keepDraft)
+  page.act(() => account().props.onClick())
+  assert.equal(screen(), 'account-security')
+})
+
+test('a confirmed asynchronous guard resumes only its requested navigation once', async t => {
+  const { page, account, screen, events } = await mount(t)
+  let proceed
+  const defer = event => { event.preventDefault(); proceed = event.detail.proceed }
+  events.addEventListener('soduwork-before-admin-leave', defer)
+  page.act(() => account().props.onClick())
+  assert.equal(screen(), 'overview')
+  assert.equal(typeof proceed, 'function')
+  page.act(() => proceed())
+  assert.equal(screen(), 'account-security')
+  events.removeEventListener('soduwork-before-admin-leave', defer)
+  page.act(() => events.dispatchEvent(new CustomEvent('soduwork-hub-nav', { detail: { screen: 'overview' } })))
+  page.act(() => proceed())
   assert.equal(screen(), 'overview')
 })

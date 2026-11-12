@@ -91,7 +91,8 @@ html[data-desk-panel='workspace'] .work-composer .wc-input:focus-visible{outline
   transition:background-color .13s ease,color .13s ease}
 .wc-context-button:first-of-type{flex:1 1 auto;max-width:45%}
 .wc-context-button:not(:first-of-type){flex:0 1 auto}
-.wc-context-button:hover,.wc-context-button[aria-expanded="true"]{background:var(--bg-2);color:var(--ink-2)}
+.wc-context-button:not(.wc-context-static):hover,.wc-context-button[aria-expanded="true"]{background:var(--bg-2);color:var(--ink-2)}
+.wc-context-static{cursor:default}
 .wc-context-button:disabled{cursor:default;opacity:.78}
 .wc-context-button:disabled:hover{background:transparent;color:var(--ink-4)}
 .wc-context-button>svg{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;stroke-width:1.65;

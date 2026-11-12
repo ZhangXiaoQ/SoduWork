@@ -231,7 +231,7 @@ export default function PluginCenter({ setupContext, onNavigate }) {
   }
   function chooseBulkFiles() {
     const input = document.createElement('input')
-    input.type = 'file'; input.multiple = true; input.accept = '.soduwork-plugin,.zip'
+    input.type = 'file'; input.multiple = true; input.accept = '.soduwork-plugin,.soduwork-plugin,.soduwork-plugin,.zip'
     input.addEventListener('change', () => {
       const files = Array.from(input.files || []).slice(0, 30)
       if (files.length) setBulkImport({ files })
@@ -473,7 +473,7 @@ export default function PluginCenter({ setupContext, onNavigate }) {
   const recommended = pickRecommended(data)
 
   return <div className="plugin-page">
-    {can('plugin.manage') && <input ref={fileRef} type="file" accept=".soduwork-plugin,.zip" hidden onChange={(e) => { importFile(e.target.files[0]); e.target.value = '' }} />}
+    {can('plugin.manage') && <input ref={fileRef} type="file" accept=".soduwork-plugin,.soduwork-plugin,.soduwork-plugin,.zip" hidden onChange={(e) => { importFile(e.target.files[0]); e.target.value = '' }} />}
     {governanceError && <div className="plugin-sync-alert" role="status"><Icon name="alert" /><span><b>{tx("待处理状态暂未更新")}</b><small>{governanceError}{tx("；当前仍可浏览插件目录。")}</small></span><button onClick={() => refreshGovernance(false)}>{tx("重试")}</button></div>}
 
     {setupProject && <section className="plugin-quick-setup">

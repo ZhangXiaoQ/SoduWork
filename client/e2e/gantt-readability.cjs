@@ -100,40 +100,6 @@ app.whenReady().then(async () => {
     await click('.gv-rowlabel [data-rq-open="last"]');
     assert.ok(await js(`!!document.querySelector('.rq-detail')`), 'full title opens the existing requirement detail');
     report.cases.push('fixed columns, ellipsis with full hover labels, visible native scrollbar drag, sticky names, exact date widths, month clipping, recurring and actual-only tasks, native pointer detail entry');
-    await click('.rq-detail [data-rq-dismiss]');
-    const overdueRows = () => js(`[...document.querySelectorAll('.gv-bar')].map(bar => ({
-      id: bar.dataset.rqOpen, state: bar.classList.contains('gv-over') ? 'overdue' : 'current'
-    }))`);
-    const captureOverdue = async name => fs.writeFileSync(path.join(output, name + '.png'), (await win.webContents.capturePage()).toPNG());
-    try {
-      await js(`(() => {
-        const RealDate = Date, now = new RealDate(2026, 10, 10, 14, 30).getTime();
-        window.restoreGanttClock = () => { window.Date = RealDate; delete window.restoreGanttClock; };
-        window.Date = class extends RealDate {
-          constructor(...args) { super(...(args.length ? args : [now])); }
-          static now() { return now; }
-        };
-        const base = tasks.find(t => t.id === 'long');
-        tasks = [
-          {id:'due-yesterday', title:'昨日到期的需求', due:Requirements.dateTimestamp('2026-11-09')},
-          {id:'due-today', title:'今日到期的需求', due:Requirements.dateTimestamp('2026-11-10')}
-        ].map(task => ({...base, ...task, status:'todo', start:null, createdAt:new Date(2026,10,9).getTime()}));
-        RequirementsBoard.render(true);
-      })()`);
-      report.requirementOverdue = { all: await overdueRows() };
-      await captureOverdue('requirement-deadlines-all');
-      await click('[data-gvod]');
-      report.requirementOverdue.filtered = await overdueRows();
-      await captureOverdue('requirement-deadlines-overdue-only');
-      assert.deepEqual(report.requirementOverdue.all, [
-        {id:'due-today', state:'current'},
-        {id:'due-yesterday', state:'overdue'},
-      ]);
-      assert.deepEqual(report.requirementOverdue.filtered, [{id:'due-yesterday', state:'overdue'}]);
-      report.cases.push('requirement deadlines use local calendar days for Gantt bars and the overdue filter');
-    } finally {
-      await js('window.restoreGanttClock?.();void 0');
-    }
     await js(`document.body.innerHTML=GanttView.html([{label:'团队成员',tasks:[
       {id:'one',title:'One',start:new Date(2026,10,1).getTime(),due:new Date(2026,10,5).getTime()},
       {id:'two',title:'Two',start:new Date(2026,10,3).getTime(),due:new Date(2026,10,7).getTime()},

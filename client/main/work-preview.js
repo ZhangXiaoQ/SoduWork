@@ -11,7 +11,6 @@ const sessions = require('./agent-runtime/pi-session-bridge');
 const outputs = require('./pi-session/outputs');
 const artifactRuntime = require('./conversation/artifact-runtime');
 const appBridgeContract = require('./soduwork-app-bridge-contract.cjs');
-const appOwner = require('./work-preview-app-owner.cjs');
 // The main process always exposes __dirname. Parser/lifecycle fixtures load
 // this module in a VM, where it is intentionally absent, so keep the bridge
 // path deterministic without making those isolated tests depend on a global.
@@ -28,9 +27,9 @@ const OCCLUSION = new WeakMap();
 const WATCHED_DOCUMENTS = new WeakSet();
 let DEPS = null;
 let SESSION_POOL = null;
-const { showDetached, windowDisplay, appContextFor, appContextForPlugin, isAppComposer, composerTurnSettled, composerControl, composerSend, composerHello, composerWidth, composerModeSet, chromeAction, composerDock, composerStep, composerState, composerSent } = require('./work-preview-app-window.cjs').create({
+const { composerActivity, showDetached, showEmbedded, embeddedBounds, windowDisplay, appContextFor, appContextForPlugin, isAppComposer, composerTurnSettled, composerControl, composerSend, composerHello, composerWidth, composerModeSet, chromeAction, composerDock, composerStep, composerState, composerSent } = require('./work-preview-app-window.cjs').create({
   owners: OWNERS, getDeps: () => DEPS, ownerFor, ownerSession, safeWebUrl,
-  normalizeAppBridge, cleanTabId, createView, destroyTab, liveContents, loadTarget,
+  normalizeAppBridge, cleanTabId, createView, destroyTab, liveContents, loadTarget, syncVisibility, clampBounds,
 });
 
 function normalizeAddress(raw) {
@@ -196,6 +195,7 @@ async function appRequest(event, raw) {
   if (request.method.startsWith('composer.')) return composerControl(owner, item.appWindowRoot || item, request, item);
   if (request.method === 'mcp.connect') return require('./work-preview-app-connection.cjs').connect(found, request.params, DEPS);
   if (request.method.startsWith('settings.')) return require('./work-preview-app-connection.cjs').settings(found, request, DEPS);
+  if (request.method.startsWith('files.')) return require('./app-files.cjs').handle(found,request,DEPS);
   if (request.method.startsWith('data.')) return require('./jiyong-runtime.cjs').data(found, request, DEPS);
   if (!owner.sender || owner.sender.isDestroyed()) return closedResult();
   const id = request.id;
@@ -326,13 +326,16 @@ function destroyTab(owner, id) {
   const item = owner.views.get(id);
   if (!item) return;
   owner.views.delete(id);
+  item.disposeScheduling?.();
   if (owner.active === id) owner.active = '';
   item.appTabs?.dispose();
   if (item.composer) {
+    if (item.embeddedHost) try { item.embeddedHost.contentView.removeChildView(item.composer.view); } catch (_) {}
     try { item.composer.view.webContents.close({ waitForBeforeUnload: false }); } catch (_) { /* already gone */ }
     item.composer = null;
   }
   if (item.chrome) {
+    if (item.embeddedHost) try { item.embeddedHost.contentView.removeChildView(item.chrome.view); } catch (_) {}
     try { item.chrome.view.webContents.close({ waitForBeforeUnload: false }); } catch (_) { /* already gone */ }
     item.chrome = null;
   }
@@ -385,14 +388,15 @@ function destroyOwner(id) {
 }
 
 function resetEmbedded(owner) {
-  // A conversation/page owns inline previews; the document owns app windows.
+  // A conversation owns inline previews; the document owns application surfaces.
   owner.showOrder++;
   owner.pendingShows.clear();
   owner.active = ''; owner.resumeActive = '';
   for (const item of [...owner.views.values()]) {
-    if (!item.detachedWin) destroyTab(owner, item.id);
+    if (!item.detachedWin && !item.embeddedHost) destroyTab(owner, item.id);
   }
-  if (!owner.detachedOpenings && ![...owner.views.values()].some(item => item.detachedWin)) {
+  syncVisibility(owner);
+  if (!owner.detachedOpenings && ![...owner.views.values()].some(item => item.detachedWin || item.embeddedHost)) {
     destroyOwner(owner.id);
   }
 }
@@ -518,6 +522,11 @@ function syncVisibility(owner) {
   for (const item of owner.views.values()) {
     if (item.detachedWin) continue; // Standalone windows manage visibility independently of workspace overlays.
     if (!liveContents(owner, item)) continue;
+    if (item.embeddedHost) {
+      const b = item.embeddedBounds;
+      item.appTabs?.setVisible(owner.active === item.id && permitted(owner, item.id) && b.width >= 32 && b.height >= 32);
+      continue;
+    }
     const bounds = item.view.getBounds();
     const visible = owner.active === item.id && permitted(owner, item.id) && bounds.width >= 32 && bounds.height >= 32;
     if (item.view.getVisible() !== visible) item.view.setVisible(visible);
@@ -558,6 +567,7 @@ function setSuppressed(event, hidden) {
 
 function setBounds(owner, item, raw) {
   if (!liveContents(owner, item)) return null;
+  if (item.embeddedHost) return embeddedBounds(owner, item, raw);
   if (item.detachedWin) {
     try {
       const size = item.detachedWin.getContentBounds();
@@ -729,6 +739,11 @@ function guardWorkbenchDownload(slot, item) {
 function install(deps) {
   deps.appAI = require('./app-ai-generate.cjs').create(deps);
   DEPS = deps;
+  const appCaches = require('./app-cache-management.cjs').create({ getDeps: () => DEPS, ownerFor });
+  deps.ipcMain.handle('work-preview-app-cache', async (event, payload) => {
+    try { return await appCaches.manage(event, payload); }
+    catch (error) { return { ok: false, reason: error.message }; }
+  });
   require('./jiyong-hosted-connection.cjs').configure(deps);
   SESSION_POOL = require('./work-preview-sessions.cjs').create({
     session: deps.session || require('electron').session,
@@ -776,6 +791,10 @@ function install(deps) {
     try { return await showDetached(event, payload); }
     catch (error) { return { ok: false, reason: String(error && error.message || error) }; }
   });
+  deps.ipcMain.handle('work-preview-show-embedded', async (event, payload) => {
+    try { return await showEmbedded(event, payload); }
+    catch (error) { return { ok: false, reason: String(error && error.message || error) }; }
+  });
   deps.ipcMain.handle('work-preview-window-display', (event) => {
     try { return windowDisplay(event); } catch (_) { return { ok: false }; }
   });
@@ -783,6 +802,7 @@ function install(deps) {
     try { return composerSend(event, payload); }
     catch (error) { return { ok: false, reason: String(error && error.message || error) }; }
   });
+  deps.ipcMain.handle('work-preview-composer-activity', (event, payload) => composerActivity(event, payload));
   deps.ipcMain.handle('work-preview-composer-hello', (event) => {
     try { return composerHello(event); } catch (_) { return { ok: false }; }
   });

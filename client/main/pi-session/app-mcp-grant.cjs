@@ -31,10 +31,16 @@ function context(sender, expectedPluginId, expectedSettings, app, deps) {
   if (!expectedPluginId) return null;
   const preview = require('../work-preview');
   require('../work-preview-app-owner.cjs').assertSender(sender);
-  let current = preview.appContextFor(sender);
+  let current;
+  try { current = preview.appContextFor(sender); }
+  catch (error) { if (!app) throw error; } // Stored MCP authority survives a stale page.
   // A native standalone app has a valid identity without any business connection.
-  if (app && (!current || current.pluginId !== expectedPluginId || (current.requiresMcp && !current.connection)))
-    current = require('../app-conversation-connection.cjs').context(app, expectedPluginId, deps);
+  if (app && (!current || current.pluginId !== expectedPluginId ||
+      (current.requiresMcp && (!current.connection || current.connection.credentialKey)))) {
+    const native = current;
+    const restored = require('../app-conversation-connection.cjs').context(app, expectedPluginId, deps);
+    current = mapResult(restored, value => value || native);
+  }
   return mapResult(current, value => {
     require('../work-preview-app-owner.cjs').assertSender(sender);
     if (!value || value.pluginId !== expectedPluginId) throw Error('应用连接不可用，请重新打开即用同步连接');
@@ -117,7 +123,9 @@ async function extend({ app, ref, connection, base }) {
       ...viewGuide].join('\n');
     return processGrants.attach({ ...base, configFile: file,
       servers: [...new Set([...(base?.servers || []), connection.server])],
-      guide: [base?.guide, guide].filter(Boolean).join('\n\n'),
+      guide: [base?.guide, guide,
+        'MCP 凭据由宿主读取应用已保存的接入参数，与页面登录会话独立，可并发使用；无需打开页面或让用户发消息续租。HTTP 401 表示凭据或授权校验失败，按实际错误报告，不猜测为定时租约过期。',
+      ].filter(Boolean).join('\n\n'),
       cleanup: () => { proxy?.cleanup(); if (base?.cleanup) base.cleanup(); else grants.removeConfig(app, file); },
       redact: value => (base?.redact ? base.redact(value) : String(value || ''))
         .split(connection.token).join('[已隐藏凭据]').split(proxy.token).join('[已隐藏凭据]'),

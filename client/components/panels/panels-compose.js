@@ -231,7 +231,16 @@
     _setupRevision += 1;
     try {
       const picker = typeof api.pickCwd === 'function' ? api.pickCwd : api.pickWorkdir;
-      const result = await picker();
+      /* Re-opening the picker starts from the user's previous choice — the current
+         session folder first, then the last hand-picked workspace — never the root. */
+      let startDir = _workspace.direct ? _workspace.dir : '';
+      if (!startDir) {
+        try {
+          const recent = await Promise.resolve(global.soduWorkAPI?.recentWorkspace?.get?.());
+          if (recent && recent.ok && recent.dir) startDir = recent.dir;
+        } catch (_) { /* root fallback is fine */ }
+      }
+      const result = await picker(startDir ? { defaultPath: startDir } : {});
       if (result && result.ok) {
         _workspace = { ..._workspace, dir: result.dir || '', name: result.name || '所选文件夹', direct: true, workspaceSource: '' };
         /* The main process validates and persists manually selected directories for future cold-start conversations. */

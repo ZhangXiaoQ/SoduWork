@@ -214,7 +214,8 @@ def prepare(state: Path, log: Path) -> tuple[Path, Path]:
     sync_source(ROOT / "skills", runtime / "skills")
     # hub-frontend builds reference client source with relative imports (for example, ConnectorIcon.jsx ->
     # ../../../client/core/connector-brand.js), so the isolated runtime must preserve the same layout.
-    sync_source(ROOT / "client", runtime / "client", preserve=frozenset({'node_modules'}))
+    sync_source(ROOT / "client", runtime / "client",
+                preserve=frozenset({'node_modules', '.runtime', '.runtime-cache'}))
     sync_source(ROOT / "third-party", runtime / "third-party")
     shutil.copyfile(ROOT / "LICENSE", runtime / "LICENSE")
 
@@ -297,4 +298,10 @@ def prepare_desktop(state: Path, log: Path) -> Path:
         if not electron_binary(client).is_file():
             raise StartupError(f"Electron was not downloaded. Check npm install-script policy and {log}; then retry.")
         stamp.write_text(wanted, encoding='utf-8')
+    if sys.platform == 'win32':
+        # Electron's dependency stamp does not cover the Shell payload. The
+        # preparation script verifies its own manifest and probes the tools on
+        # every launch, reusing the verified payload or an interrupted download.
+        run([node, str(client / 'scripts/prepare-shell-runtime.cjs')], cwd=client, log=log,
+            label='[Desktop] 准备命令运行环境 / Preparing the command runtime')
     return client

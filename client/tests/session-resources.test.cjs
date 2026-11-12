@@ -32,7 +32,6 @@ test('SoduWork defaults avoid multiplying one model turn into provider replays',
   });
   assert.deepEqual(applied, [{ retry: {
     maxRetries: 6, delayScheduleMs: [5000, 15000, 30000, 60000, 120000, 240000],
-    maxAgentDelayMs: 240000,
     provider: { maxRetries: 0, maxRetryDelayMs: 0 },
   } }]);
 });
@@ -40,32 +39,12 @@ test('SoduWork defaults avoid multiplying one model turn into provider replays',
 test('explicit retry settings remain authoritative', () => {
   const applied = [];
   configureSoduWorkRetryPolicy({
-    getGlobalSettings: () => ({ retry: { maxRetries: 3, provider: { maxRetries: 2, maxRetryDelayMs: 500 } } }),
+    getGlobalSettings: () => ({ retry: { maxRetries: 3, baseDelayMs: 9000,
+      delayScheduleMs: [9000], provider: { maxRetries: 2, maxRetryDelayMs: 500 } } }),
     getProjectSettings: () => ({}),
     applyOverrides: value => applied.push(value),
   });
   assert.deepEqual(applied, []);
-});
-
-test('long schedules retain explicit project/global caps and bound implicit caps', () => {
-  for (const scope of ['global', 'project']) {
-    const applied = [];
-    const retry = { maxRetries: 6, delayScheduleMs: [240000], maxAgentDelayMs: 12000,
-      provider: { maxRetries: 0 } };
-    configureSoduWorkRetryPolicy({
-      getGlobalSettings: () => scope === 'global' ? { retry } : {},
-      getProjectSettings: () => scope === 'project' ? { retry } : {},
-      applyOverrides: value => applied.push(value),
-    });
-    assert.deepEqual(applied, []);
-  }
-  const applied = [];
-  configureSoduWorkRetryPolicy({
-    getGlobalSettings: () => ({ retry: { maxRetries: 6, delayScheduleMs: [Infinity, NaN, 3600000] } }),
-    getProjectSettings: () => ({}),
-    applyOverrides: value => applied.push(value),
-  });
-  assert.equal(applied[0].retry.maxAgentDelayMs, 300000);
 });
 
 test('an explicit retry count keeps its base-delay strategy when no schedule is supplied', () => {
@@ -82,7 +61,6 @@ test('real session resources expose the bounded SoduWork retry defaults', async 
   const f = fixture(t);
   const resources = await f.load([]);
   assert.equal(resources.settingsManager.getRetrySettings().maxRetries, 6);
-  assert.equal(resources.settingsManager.getRetrySettings().maxAgentDelayMs, 240000);
   assert.deepEqual(resources.settingsManager.getRetrySettings().delayScheduleMs,
     [5000, 15000, 30000, 60000, 120000, 240000]);
   assert.equal(resources.settingsManager.getProviderRetrySettings().maxRetries, 0);

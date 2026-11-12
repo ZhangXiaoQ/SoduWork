@@ -50,6 +50,46 @@ function boot(shared = new Map()) {
 }
 const command = {id: 'work.requirement.create', text: '写一篇400字作文'};
 
+test('stalled card recovery terminates and late replies cannot replace a newer conversation', async () => {
+  const h = boot(); h.ctx.OPEN_TIMEOUT_MS = 20;
+  let release;
+  const read = h.api.workCards;
+  h.api.workCards = id => id === 'stalled' ? new Promise(resolve => { release = resolve; }) : read(id);
+  const result = await h.cards.restore('stalled');
+  assert.equal(result.blocked, true);
+  assert.ok(result.reason);
+  assert.equal(h.ctx._sessionId, '');
+  assert.equal((await h.cards.restore('next')).ok, true);
+  release({ok: true, workOnly: true, cards: [], draftSelection: null, draftSelectionRevision: 0});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.ctx._sessionId, 'next');
+  assert.equal(h.ctx._draftKey, 'next');
+});
+
+test('switching away from pending recovery stays independent of the earlier request', async () => {
+  const h = boot(); h.ctx.OPEN_TIMEOUT_MS = 20;
+  const read = h.api.workCards;
+  h.api.workCards = id => id === 'stalled' ? new Promise(() => {}) : read(id);
+  const pending = h.cards.restore('stalled');
+  h.ctx._viewEpoch++;
+  assert.equal((await h.cards.restore('next')).ok, true);
+  assert.equal((await pending).stale, true);
+  assert.equal(h.ctx._sessionId, 'next');
+});
+
+test('rejected card IPC is a blocked result, while obsolete rejections remain silent', async () => {
+  const h = boot();
+  h.api.workCards = async () => { throw Error('IPC failed'); };
+  assert.equal((await h.cards.restore('unreadable')).blocked, true);
+  let reject;
+  h.api.workCards = () => new Promise((_resolve, fail) => { reject = fail; });
+  const pending = h.cards.restore('previous');
+  await new Promise(resolve => setImmediate(resolve));
+  h.ctx._viewEpoch++;
+  reject(Error('Obsolete IPC failed'));
+  assert.equal((await pending).stale, true);
+});
+
 test('本会话创建回执查询不会把其他账号、会话、未成功或已删除的需求当作新建需求', async () => {
   const h=boot(), seed=await h.cards.prepare(command);
   const id=h.ctx._sessionId;

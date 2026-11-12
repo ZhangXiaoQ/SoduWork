@@ -22,10 +22,13 @@ if (!process.versions.electron) {
   let server, win
   const errors = [], checks = []
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
-  const js = code => win.webContents.executeJavaScript(code, true)
+  const js = async code => {
+    try { return await win.webContents.executeJavaScript(code, true) }
+    catch (error) { throw new Error(`${error.message}\nRenderer check: ${code}`, { cause: error }) }
+  }
   const fixture = `let saved={enabled:false,host:'smtp.126.com',port:465,security:'ssl',username:'',senderAddress:'',senderName:'SoduWork',ready:false,passwordConfigured:false};
     let history=[]; window.mailCalls=[]; export const can=()=>true; export const api={
-      mailSettings:async()=>saved,accountLegal:async()=>({operatorName:'',contactEmail:''}),mailDeliveries:async()=>({items:history}),accountPrivacyRequests:async()=>({items:[]}),
+      mailSettings:async()=>saved,accountLegal:async()=>({operatorName:'',contactEmail:'',canEdit:!location.search.includes('readonly')}),mailDeliveries:async()=>({items:history}),accountPrivacyRequests:async()=>({items:[]}),
       saveMailSettings:async body=>{window.mailCalls.push({action:'save',body});saved={...body,password:'',ready:body.enabled,passwordConfigured:!!body.password||saved.passwordConfigured};return saved},
       testMailSettings:async recipient=>{window.mailCalls.push({action:'test',recipient});history=[{id:'test-1',purpose:'test',recipient:'r***@example.com',state:'sent',createdAt:new Date().toISOString()}];return {queued:true}},
       saveAccountLegal:async body=>{window.mailCalls.push({action:'legal',body});return body}
@@ -44,12 +47,12 @@ if (!process.versions.electron) {
     await sleep(150); fs.writeFileSync(path.join(output, name + '.png'), (await win.webContents.capturePage()).toPNG())
   }
   app.whenReady().then(async () => {
-    await require('esbuild').build({ stdin: { contents: `import React from 'react';import{createRoot}from'react-dom/client';import MailSettings from './src/screens/MailSettings.jsx';import './src/styles.css';import './src/design-system.css';import './src/console-theme.css';import './src/admin-controls.css';import './src/screens/client-access-policy.css';createRoot(document.getElementById('root')).render(<MailSettings/>);`,
+    await require('esbuild').build({ stdin: { contents: `import React from 'react';import{createRoot}from'react-dom/client';import{setLocale}from'./src/i18n.js';import MailSettings from './src/screens/MailSettings.jsx';import './src/styles.css';import './src/design-system.css';import './src/console-theme.css';import './src/admin-controls.css';import './src/screens/client-access-policy.css';setLocale('zh-CN');createRoot(document.getElementById('root')).render(<MailSettings/>);`,
       loader: 'jsx', resolveDir: root }, bundle: true, outfile: path.join(output, 'fixture.js'), loader: { '.svg': 'dataurl' },
       plugins: [{ name: 'isolated-admin-api', setup(build) { build.onResolve({ filter: /(?:^|\/)api\.js$/ }, () => ({ path: 'fixture-api', namespace: 'fixture' })); build.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: fixture, loader: 'js' })) } }] })
     const html = '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><link rel="stylesheet" href="/fixture.css"><style>body{margin:0;background:var(--bg);padding:24px;display:block}#root{max-width:1150px;margin:auto}.mail-settings{margin:0}</style></head><body><div id="root"></div><script src="/fixture.js"></script></body></html>'
     server = http.createServer((req, res) => {
-      if (req.url === '/') { res.setHeader('Content-Type', 'text/html;charset=utf-8'); res.end(html); return }
+      if (req.url.split('?')[0] === '/') { res.setHeader('Content-Type', 'text/html;charset=utf-8'); res.end(html); return }
       const name = req.url.slice(1)
       if (!['fixture.js', 'fixture.css'].includes(name)) { res.writeHead(404); res.end(); return }
       res.setHeader('Content-Type', name.endsWith('.css') ? 'text/css' : 'text/javascript'); res.end(fs.readFileSync(path.join(output, name)))
@@ -98,6 +101,12 @@ if (!process.versions.electron) {
     assert.ok(await js('document.documentElement.scrollWidth <= innerWidth + 1'))
     await shot('mail-settings-mobile')
     checks.push('390px responsive layout has no horizontal overflow')
+    await win.loadURL(origin + '/?readonly=1')
+    await wait('!!document.querySelector(".mail-legal input")', 'read-only legal settings')
+    assert.equal(await js('[...document.querySelectorAll(".mail-legal input")].every(input=>input.disabled)'), true)
+    assert.equal(await js('[...document.querySelectorAll("button")].find(button=>button.textContent.trim()==="保存运营信息").disabled'), true)
+    assert.equal(await js('window.mailCalls.length'), 0)
+    checks.push('Non-super administrators cannot edit or save legacy legal settings')
     assert.deepEqual(errors, [])
     fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ ok: true, checks, errors, boundary: 'Real Chromium with fixture API; no external SMTP or business account' }, null, 2))
     console.log(JSON.stringify({ ok: true, checks, output }))

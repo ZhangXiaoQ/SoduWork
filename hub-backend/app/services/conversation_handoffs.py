@@ -146,6 +146,8 @@ async def _targets(client, clients, orgs, allowed_runners=None, personal_clients
         if not runner_hub.supports_capabilities(runner, ["files", "terminal"]):
             continue
         result.append({**candidate, "agentId": agent["id"], "modelMode": agent["modelMode"],
+                       "skillsKnown": bool(getattr(runner, "skills_known", False)),
+                       "skills": sorted(getattr(runner, "skills", []) or []),
                        "host": candidate.get("host") or runner.host or "",
                        "runnerName": candidate.get("machineLabel") or runner.host or runner.id})
     return result
@@ -545,14 +547,24 @@ async def prepare(session, client, transfer_id, data, raw_options):
                                  ("name", "runnerName", "agentId", "modelMode", "runnerId", "host")}
     tid = str(uuid.uuid5(_NS, row_id + ":task"))
     key = "handoffs/" + row_id + "/" + uuid.uuid4().hex + ".zip"
-    backend = await asyncio.to_thread(storage.put, key, data, "application/zip")
+    from . import conversation_content
+    if conversation_content.supported(picked["runnerId"]):
+        options["sourceGoal"] = source["goal"]
+    options = await conversation_content.save_options(picked["runnerId"], user.id, "handoff:" + row_id, options, session=session)
+    if conversation_content.supported(picked["runnerId"]):
+        options["archiveRef"] = await conversation_content.put(picked["runnerId"], user.id, "archive:" + row_id, data, session=session)
+        key, backend = "", ""
+    else:
+        backend = await asyncio.to_thread(storage.put, key, data, "application/zip")
     source_summary = {k: source[k] for k in ("sessionId", "adapterId", "modelName", "title", "goal")}
+    if options.get("contentRef"):
+        source_summary["goal"] = ""
     row = Handoff(id=row_id, owner_client_id=client.id, owner_user_id=user.id,
         transfer_id=transfer_id, task_id=tid, sha256=options["sha256"], request_hash=digest,
         storage_key=key, backend=backend, options=options, source=source_summary)
     task = Task(id=tid, owner_client_id=client.id, owner_user_id=user.id,
         title=(source["title"] or "云端继续会话")[:200],
-        note=options["instruction"], kind="task", status="todo", origin="conversation-handoff",
+        note=options.get("instruction", ""), kind="task", status="todo", origin="conversation-handoff",
         created_by=user.id, created_by_name=user.display_name or user.username,
         work_routing={"selectedStrategy": "direct", "requiredSkills": options["requiredSkills"],
                       "conversationHandoff": {
@@ -560,14 +572,17 @@ async def prepare(session, client, transfer_id, data, raw_options):
             "sha256": options["sha256"], "attachmentName": ARCHIVE_NAME}})
     attachment = Attachment(id=str(uuid.uuid4()), task_id=tid, filename=ARCHIVE_NAME,
         content_type="application/zip", size=len(data), storage_key=key, backend=backend,
-        uploaded_by=client.id, role="handoff", evidence_meta={"transferId": transfer_id})
+        uploaded_by=client.id, role="handoff", evidence_meta={"transferId": transfer_id,
+            **({"contentRef": options["archiveRef"], "contentRecord": "archive:" + row_id,
+                "contentOwner": user.id} if options.get("archiveRef") else {})})
     session.add_all([row, task, attachment])
     try:
         await session.commit()
     except IntegrityError:
         await session.rollback()
         await session.refresh(client)
-        await asyncio.to_thread(storage.delete, key, backend)
+        if key:
+            await asyncio.to_thread(storage.delete, key, backend)
         # Concurrent abort/prepare wins permanently; never overwrite its fence.
         old = await get(session, client, transfer_id)
         if old.phase != "aborted" and old.request_hash != digest:
@@ -619,7 +634,8 @@ async def dispatch_body(session, client, task, body):
         return None, body
     if row.owner_client_id != client.id or row.owner_user_id != client.user_ref or row.phase != "committing":
         raise HTTPException(409, "请通过会话交接确认开始，不能从任务页重新派发此会话")
-    options = row.options
+    from . import conversation_content
+    options = await conversation_content.load_options(row.owner_user_id, "handoff:" + row.id, row.options, session=session)
     return row, {"assigneeId": options["assigneeId"], "assigneeType": "agent",
                  "model": options["model"], "brief": options["instruction"],
                  "executionContext": {"strategy": "direct"}}
@@ -651,7 +667,10 @@ async def dispatch_inputs(session, row, extra):
     if (row.source or {}).get("entryKind") == "cloud":
         from . import cloud_conversations
         return await cloud_conversations.dispatch_inputs(session, row, extra)
-    data = await asyncio.to_thread(storage.get, row.storage_key, row.backend)
+    from . import conversation_content
+    options = await conversation_content.load_options(row.owner_user_id, "handoff:" + row.id, row.options, session=session)
+    data = (await conversation_content.get(options["archiveRef"], row.owner_user_id, "archive:" + row.id, session=session)
+        if options.get("archiveRef") else await asyncio.to_thread(storage.get, row.storage_key, row.backend))
     await asyncio.to_thread(portable_workspace.validate, data, row.sha256)
     # Do not inherit incidental client-selected desktop skills, local MCP files,
     # Git credentials/paths, plugins or source-session SDK cache.
@@ -659,8 +678,8 @@ async def dispatch_inputs(session, row, extra):
     required = row.options.get("requiredSkills", [])
     if any(name not in selected for name in required):
         raise ValueError("交接所需技能已不可用，请恢复配置后重试")
-    extra = {"dispatchId": dispatch_id(row), "brief": row.options["instruction"],
-        "conversationMode": "adaptive", "conversationUserText": row.options["instruction"],
+    extra = {"dispatchId": dispatch_id(row), "brief": options["instruction"],
+        "conversationMode": "adaptive", "conversationUserText": options["instruction"],
         "agentExecution": extra.get("agentExecution", {}),
         "skills": [selected[name] for name in required], "requiredSkills": required,
         "requiredAgentCapabilities": ["files", "terminal"],

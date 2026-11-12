@@ -39,7 +39,8 @@ function platform() {
 }
 function primaryTarget(pkgs) {
   const os = platform(), info = pkgs?.[os]
-  if (['android', 'ios'].includes(os)) return { info, meta: null, href: '', label: os }
+  if (os === 'android') return { info, meta: info, href: '/api/v1/download/mobile/android', label: 'Android · APK' }
+  if (os === 'ios') return { info, meta: null, href: '', label: 'iOS' }
   if (os === 'mac') {
     const arch = ['arm64', 'x64'].find(key => info?.arches?.[key])
     return { info, meta: info?.arches?.[arch], href: arch ? `/api/v1/download/client/mac/${arch}` : '', label: arch === 'x64' ? 'macOS · Intel' : 'macOS · Apple Silicon' }
@@ -69,9 +70,11 @@ function PlatformDownloads({ pkgs, onRetry }) {
     { key: 'win', label: 'Windows', packages: pkgs?.win?.available ? [['exe', '/api/v1/download/client', pkgs.win]] : [] },
     { key: 'mac', label: 'macOS', packages: pkgs?.mac?.available ? ['arm64', 'x64'].filter(arch => pkgs.mac.arches?.[arch]).map(arch => [arch === 'arm64' ? 'Apple Silicon' : 'Intel', `/api/v1/download/client/mac/${arch}`, pkgs.mac.arches[arch]]) : [] },
     { key: 'lin', label: 'Linux', packages: pkgs?.lin?.available ? ['deb', 'rpm', 'tar.gz'].filter(format => pkgs.lin.formats?.[format]).map(format => [format, `/api/v1/download/client/linux/${format}`, pkgs.lin.formats[format]]) : [] },
+    { key: 'android', label: 'Android', packages: pkgs?.android?.available ? [['APK', '/api/v1/download/mobile/android', pkgs.android]] : [] },
+    { key: 'ios', label: 'iPhone / iPad', packages: [] },
   ]
   return <div className="public-download-grid">{targets.map(target => <article className="public-download-platform" key={target.key}>
-    <div className="public-platform-head"><span className={'public-platform-icon is-' + target.key}>{target.key === 'win' ? <Glyph name="grid" size={21} /> : target.key === 'mac' ? '⌘' : '>_'}</span><h3>{target.label}</h3></div>
+    <div className="public-platform-head"><span className={'public-platform-icon is-' + target.key}>{target.key === 'win' ? <Glyph name="grid" size={21} /> : target.key === 'mac' ? '⌘' : ['android', 'ios'].includes(target.key) ? <Glyph name="grid" size={21} /> : '>_'}</span><h3>{target.label}</h3></div>
     <div className="public-platform-packages">{target.packages.length ? target.packages.map(([label, href, info]) => <a href={href} key={href}><span>{label}<small>{info.version ? `v${info.version}` : ''}{info.sizeText ? ` · ${info.sizeText}` : ''}</small></span><Glyph name="download" size={17} /></a>) : <p>{pkgs === null ? tx('正在确认安装包…') : pkgs?.[target.key]?.error ? <>{tx('暂时取不到安装包信息')} <button className="public-text-button" type="button" onClick={onRetry}>{tx('重试')}</button></> : tx('尚未发布')}</p>}</div>
   </article>)}</div>
 }
@@ -88,8 +91,8 @@ export default function Landing({ onLogin }) {
     setPkgs(null)
     const timer = setTimeout(() => controller.abort(), 12000)
     const fetchInfo = url => fetch(url, { signal: controller.signal }).then(r => r.ok ? r.json() : { available: false, error: r.status !== 404 }).catch(() => ({ available: false, error: true }))
-    Promise.all([fetchInfo('/api/v1/download/client/info'), fetchInfo('/api/v1/download/client/mac/info'), fetchInfo('/api/v1/download/client/linux/info')])
-      .then(([win, mac, lin]) => { if (request.current === controller) setPkgs({ win, mac, lin }) })
+    Promise.all([fetchInfo('/api/v1/download/client/info'), fetchInfo('/api/v1/download/client/mac/info'), fetchInfo('/api/v1/download/client/linux/info'), fetchInfo('/api/v1/download/mobile/info')])
+      .then(([win, mac, lin, android]) => { if (request.current === controller) setPkgs({ win, mac, lin, android }) })
       .finally(() => clearTimeout(timer))
   }, [])
   useEffect(() => {
@@ -116,7 +119,7 @@ export default function Landing({ onLogin }) {
           <p>{tx('对话、需求协作、自动化与知识沉淀，在同一个工作空间自然衔接。SoduWork 陪团队从一个想法，走到一份可以交付的成果。')}</p>
           <div className="public-hero-actions"><Download pkgs={pkgs} /><a className="w-cta w-cta-ghost" href="#platform">{tx('看看如何工作')}<Glyph name="arrow" size={17} /></a></div>
           <DownloadMeta pkgs={pkgs} onRetry={loadPkg} />
-          <a className="public-all-platforms" href="#downloads">{tx('查看 Windows、macOS 与 Linux 下载')}<span>↗</span></a>
+          <a className="public-all-platforms" href="#downloads">{tx('查看桌面端与移动端下载')}<span>↗</span></a>
         </div>
         <LandingOrbit />
       </section>
@@ -136,7 +139,7 @@ export default function Landing({ onLogin }) {
         <div className="public-enterprise-copy"><span className="public-eyebrow">{tx('团队的工作空间，企业的管理视角')}</span><h2>{tx('让能力向前，')}<br />{tx('也让边界清楚。')}</h2><p>{tx('员工在客户端完成工作，管理员在后台配置组织、模型与能力，查看运行状态和用量。协作有共同规则，关键操作有据可查。')}</p><button className="w-cta w-cta-dark" type="button" onClick={onLogin}>{tx('进入管理后台')}<Glyph name="arrow" size={18} /></button></div>
         <div className="public-governance"><header><Brand /><span>{tx('管理端能力')}</span></header>{governance.map(([icon, title, text]) => <div className="public-governance-row" key={title}><span><Glyph name={icon} /></span><div><h3>{title}</h3><p>{text}</p></div><Glyph name="check" size={16} /></div>)}<footer><Glyph name="shield" size={16} />{tx('权限按角色配置，能力按企业策略开放')}</footer></div>
       </section>
-      <section className="public-downloads" id="downloads"><div className="public-wrap"><div className="public-section-head"><div><span className="public-eyebrow">{tx('从一项真实工作开始')}</span><h2>{tx('把 SoduWork，带到你的桌面。')}</h2></div><p>{tx('选择适合你电脑的客户端。安装后连接团队，用同一个工作空间继续手上的事。')}</p></div><PlatformDownloads pkgs={pkgs} onRetry={loadPkg} /><div className="public-download-help"><span>{tx('安装包版本与大小以当前发布信息为准。')}</span><button type="button" className="public-text-button" onClick={onLogin}>{tx('管理员？进入管理后台')}<Glyph name="arrow" size={16} /></button></div></div></section>
+      <section className="public-downloads" id="downloads"><div className="public-wrap"><div className="public-section-head"><div><span className="public-eyebrow">{tx('从一项真实工作开始')}</span><h2>{tx('把 SoduWork，带在身边。')}</h2></div><p>{tx('选择适合你设备的客户端。在电脑与手机上，继续同一个工作空间里的事。')}</p></div><PlatformDownloads pkgs={pkgs} onRetry={loadPkg} /><div className="public-download-help"><span>{tx('安装包版本与大小以当前发布信息为准。')}</span><button type="button" className="public-text-button" onClick={onLogin}>{tx('管理员？进入管理后台')}<Glyph name="arrow" size={16} /></button></div></div></section>
     </main>
     <footer className="public-footer public-wrap"><div><a href="#top"><Brand /></a><p>{tx('好想法，值得一个好结果。')}</p></div><nav aria-label={tx('页脚导航')}><a href="#platform">{tx('工作方式')}</a><a href="#downloads">{tx('下载客户端')}</a><button type="button" onClick={onLogin}>{tx('进入管理后台')}</button></nav><small>{commit ? `build ${commit}` : 'SoduWork'}</small></footer>
   </div>

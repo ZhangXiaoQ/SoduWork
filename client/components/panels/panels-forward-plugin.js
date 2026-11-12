@@ -76,16 +76,43 @@ function _fwpOption(value, label, selected) {
     esc(label) + '</option>';
 }
 
+function _fwpModelLabel(options, name) {
+  const rows = (options?.modelOptions || []).filter(item => item?.name === name);
+  if (!rows.length || rows.some(item => !String(item.providerName || '').trim())) return name;
+  // Repeated model names can refer to different providers. Never guess which
+  // provider an inherited or explicitly selected name will resolve to.
+  if (rows.length > 1 && rows.some(item => !item.providerId)) return name;
+  const ids = new Set(rows.map(item => item.providerId || item.providerName));
+  const names = new Set(rows.map(item => String(item.providerName).trim()));
+  return ids.size === 1 && names.size === 1 ? name + ' · ' + [...names][0] : name;
+}
+
 function _fwpModelState(options, selected) {
-  const models = Array.from(new Set((options?.models || []).filter(Boolean)));
+  // The API's legacy list deliberately omits its default. Keep every usable
+  // catalog entry selectable, including a catalog containing just one model.
+  const models = Array.from(new Set([options?.defaultModel, ...(options?.models || []),
+    ...(options?.modelOptions || []).map(item => item.name)].filter(Boolean)));
   const value = String(selected || '');
-  return {models, value, stale: Boolean(value && !models.includes(value))};
+  return {models, labels: Object.fromEntries(models.map(name => [name, _fwpModelLabel(options, name)])),
+    value, stale: Boolean(value && !models.includes(value))};
+}
+
+function _fwpDefaultModelLabel(options, agent) {
+  const cli = String(agent?.cli || agent?.key || '').replace(/^local:/, '');
+  // Defer remote or mixed-seat resolution without claiming which device owns
+  // the preference; dispatch may use the requesting credential owner's model.
+  if (agent?.remote || agent?.locationMode === 'remote' || agent?.locationMode === 'mixed')
+    return '跟随默认模型（派发时解析）';
+  if (options?.defaultModelErrors?.[cli]) return '底座默认不可用，请明确选择模型';
+  const resolved = options?.defaultModels?.[cli];
+  if (resolved) return '跟随底座默认 · ' + _fwpModelLabel(options, resolved);
+  return options?.defaultModel ? '跟随底座默认（目录默认：' + _fwpModelLabel(options, options.defaultModel) + '）' : '跟随底座默认';
 }
 
 function _fwpModelOptions(state, defaultLabel) {
   return (state.stale ? '<option value="__unselected__" disabled selected>原模型已不可用，请重新选择</option>' : '') +
     _fwpOption('', defaultLabel, state.stale ? null : state.value) +
-    state.models.map(item => _fwpOption(item, item, state.stale ? null : state.value)).join('');
+    state.models.map(item => _fwpOption(item, state.labels?.[item] || item, state.stale ? null : state.value)).join('');
 }
 
 function _fwpRouteLabel(node) {

@@ -108,7 +108,7 @@ def discover_skills(zf: zipfile.ZipFile, names: dict[str, zipfile.ZipInfo],
 
 
 def _workflow(zf, names, root: str) -> dict | None:
-    for suffix in ("soduwork/workflow.json",):
+    for suffix in ("soduwork/workflow.json", "soduwork/workflow.json"):
         path = root + suffix
         if path in names:
             return _json(zf, names[path], "工作流清单")

@@ -8,7 +8,9 @@ const profile = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'soduwork
 app.setPath('userData', profile);
 const report = { ok: false, checks: [], screenshots: [] }, wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 let win;
-const js = source => win.webContents.executeJavaScript(source, true);
+const js = source => win.webContents.executeJavaScript(source, true).catch(error => {
+  throw new Error(String(error.message || error) + '\nFixture script: ' + source);
+});
 async function until(source) {
   for (let i = 0; i < 100; i++) { if (await js(source)) return; await wait(30); }
   throw Error('Timeout: ' + source);
@@ -24,9 +26,12 @@ function fixture(file) {
     .replace(/<script src="([^"]+)"><\/script>/g, (_, name) => '<script>' + fs.readFileSync(path.resolve(root, name), 'utf8').replace(/<\/script/gi, '<\\/script') + '</script>');
 }
 async function click(selector) {
-  const point = await js(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});e.scrollIntoView({block:'nearest'});
+  const point = await js(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)return{error:'Missing control'};
+    e.scrollIntoView({block:'center',behavior:'instant'});
     const r=e.getBoundingClientRect(),x=Math.round(r.x+r.width/2),y=Math.round(r.y+r.height/2);
-    if(!e.contains(document.elementFromPoint(x,y)))throw Error('Click obscured: '+${JSON.stringify(selector)});return{x,y};})()`);
+    const hit=document.elementFromPoint(x,y);
+    if(!e.contains(hit))return{error:'Click obscured',x,y,hit:hit?.className,width:r.width,height:r.height};return{x,y};})()`);
+  assert.ok(!point.error, selector + ': ' + JSON.stringify(point));
   for (const type of ['mouseMove', 'mouseDown', 'mouseUp']) win.webContents.sendInputEvent({ type, ...point, button: 'left', clickCount: 1 });
   await wait(80);
 }
@@ -38,7 +43,10 @@ async function edit(id) {
   await until('document.querySelector("#schRunAt") && document.querySelector("#schEditorLayer.show")');
 }
 async function shot(name) {
-  await wait(240);
+  if (/^(monthly-editor|weekly-editor|custom-rule-editor)/.test(name)) {
+    await js('schEvery.closest(".sch-when-row").previousElementSibling.scrollIntoView({block:"start",behavior:"instant"})');
+  }
+  await wait(350);
   const file = path.join(output, name + '.png'); fs.writeFileSync(file, (await win.webContents.capturePage()).toPNG()); report.screenshots.push(file);
 }
 app.whenReady().then(async () => {
@@ -128,9 +136,21 @@ app.whenReady().then(async () => {
     await js('document.getElementById('+JSON.stringify(id)+').focus()');
     for (const type of ['keyDown','keyUp']) win.webContents.sendInputEvent({type,keyCode:'End'});
     await wait(70);
+    assert.ok(await js('document.querySelector(".fwd-select-compact-time").getBoundingClientRect().height<=220'));
+    for (const type of ['keyDown','keyUp']) win.webContents.sendInputEvent({type,keyCode:'Enter'});
+    await wait(70);
   }
   assert.deepEqual(await js('[schH.value,schM.value]'),['23','59']);
   assert.match(await js('schPv.textContent'),/23:59/);
+  // Capture committed values after the invalid-input regression has completed.
+  for (const id of ['schH','schM']) {
+    await js('document.getElementById('+JSON.stringify(id)+').focus()');
+    for (const type of ['keyDown','keyUp']) win.webContents.sendInputEvent({type,keyCode:'End'});
+    await wait(70);
+    await shot('compact-time-' + id);
+    for (const type of ['keyDown','keyUp']) win.webContents.sendInputEvent({type,keyCode:'Escape'});
+    await wait(70);
+  }
   await shot('recurring-time-select-wide');
   win.setSize(390,900); await wait(120);
   assert.equal(await js('schEditorContent.scrollWidth<=schEditorContent.clientWidth'),true);
@@ -138,10 +158,57 @@ app.whenReady().then(async () => {
   await click('#schSave'); await until('calls.updated.length==='+String(savedCount+1));
   assert.deepEqual(await js('[calls.updated.at(-1).body.atHour,calls.updated.at(-1).body.atMinute]'),[23,59]);
   await edit('pending'); await field('schEvery','hourly');
-  assert.equal(await js('schH.hidden && getComputedStyle(schHWrap).display!=="none" && schM.checkVisibility()'),true);
+  assert.equal(await js('schH.hidden && getComputedStyle(schHWrap).display!=="none" && document.querySelector("[data-select-id=schM]").checkVisibility()'),true);
   await field('schM','30'); await click('#schSave'); await until('calls.updated.length==='+String(savedCount+2));
   assert.equal(await js('calls.updated.at(-1).body.atMinute'),30);
-  report.checks.push('Native bounded time selects update the preview immediately, reject 888 without saving, preserve 23:59 and hourly minutes, and fit 390px');
+  report.checks.push('Compact time menus stay within 220px, update the preview, reject 888, preserve 23:59 and hourly minutes, and fit 390px');
+  await edit('pending'); await field('schEvery','custom');
+  await field('schCustomRule',''); await click('#schSave');
+  assert.equal(await js('calls.updated.length'),savedCount+2);
+  assert.equal(await js('document.activeElement.id'),'schCustomRule');
+  const customRule = 'DTSTART;TZID=Asia/Shanghai:20990101T105100\nRRULE:FREQ=MONTHLY;BYMONTHDAY=30,31;COUNT=10';
+  await field('schCustomRule',customRule);
+  await shot('custom-rule-editor');
+  win.setSize(390,900); await wait(120);
+  assert.equal(await js('schEditorContent.scrollWidth<=schEditorContent.clientWidth'),true);
+  await shot('custom-rule-editor-390'); win.setSize(1280,950);
+  await click('#schSave'); await until('calls.updated.length==='+String(savedCount+3));
+  assert.equal(await js('calls.updated.at(-1).body.customRule'),customRule);
+  await edit('pending'); assert.equal(await js('schCustomRule.value'),customRule);
+  await click('#schCancel');
+  await edit('pending'); await field('schEvery','monthly');
+  const calendarSaved = await js('calls.updated.length');
+  await click('#schMonthDays label:has(input[value="30"])');
+  await click('#schMonthDays label:has(input[value="31"])');
+  await click('#schMonthLastDay');
+  await field('schStartDate','2099-01-01'); await field('schEndDate','2098-12-31');
+  await click('#schSave'); assert.equal(await js('calls.updated.length'),calendarSaved);
+  await field('schEndDate','2099-12-31'); await shot('monthly-editor');
+  await click('#schSave'); await until('calls.updated.length==='+String(calendarSaved+1));
+  assert.deepEqual(await js('(()=>{const v=calls.updated.at(-1).body;return [v.every,v.monthDays,v.monthDayPolicy,v.startDate,v.endDate]})()'),
+    ['monthly',[30,31],'last_day','2099-01-01','2099-12-31']);
+  await edit('pending');
+  assert.deepEqual(await js('[...document.querySelectorAll(".sch-month-grid input:checked")].map(e=>Number(e.value))'),[30,31]);
+  assert.equal(await js('schMonthLastDay.checked'),true);
+  await field('schEvery','weekly');
+  for(const day of [1,2,3,4,5,6,7]) {
+    const selected = await js('document.querySelector("#schWeekdays input[value=\\"'+day+'\\"]").checked');
+    if(selected!==[1,3,5].includes(day)) await click('#schWeekdays label:has(input[value="'+day+'"])');
+  }
+  await shot('weekly-editor');
+  await click('#schSave'); await until('calls.updated.length==='+String(calendarSaved+2));
+  assert.deepEqual(await js('calls.updated.at(-1).body.weekdays'),[1,3,5]);
+  report.checks.push('Monthly 30/31 and weekly Mon/Wed/Fri persist through real controls; invalid ranges cannot save and reopening preserves month selections');
+  const menuPressure = await js(`(async()=>{const start=performance.now();
+    for(let i=0;i<50;i++) { document.querySelector('.sch-item[data-sid=pending] [data-act=edit]').click();
+      await new Promise(resolve=>setTimeout(resolve,0));schEvery.value='daily';schEvery.dispatchEvent(new Event('change',{bubbles:true}));
+      document.querySelector('[data-select-id=schM]').click();schCancel.click();}
+    await new Promise(resolve=>setTimeout(resolve,0));
+    return{ms:performance.now()-start,popups:document.querySelectorAll('.fwd-select-popup').length,
+      controls:document.querySelectorAll('#schEditorContent .fwd-select').length};})()`);
+  assert.equal(menuPressure.popups,0); assert.equal(menuPressure.controls,0);
+  report.menuPressure=menuPressure;
+  report.checks.push('Custom rules validate, save and reopen unchanged; 50 editor/menu open-close cycles leave no menus or detached controls');
   await js('SoduWorkAPI.deleteSchedule=async()=>{throw Error("fixture offline")}; void 0');
   await click('.sch-item[data-sid="pending"] [data-act="del"]');
   await click('.sch-item[data-sid="pending"] [data-c="yes"]');

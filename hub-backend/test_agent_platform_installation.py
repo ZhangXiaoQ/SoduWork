@@ -17,7 +17,7 @@ class AgentPlatformInstallationTests(unittest.TestCase):
 
     def test_all_platforms_install_in_owned_directory_with_matching_layout(self):
         for platform in ("win32", "darwin", "linux"):
-            with self.subTest(platform=platform), patch.object(npm, "sys", SimpleNamespace(platform=platform)), \
+            with self.subTest(platform=platform), patch.object(npm.sys, "platform", platform), \
                     patch.object(local_base, "_data_root", return_value=str(self.root)):
                 prefix = self.root / "agent-runtimes/npm"
                 directory = prefix if platform == "win32" else prefix / "bin"
@@ -37,11 +37,8 @@ class AgentPlatformInstallationTests(unittest.TestCase):
 
     def test_windows_uses_cmd_launcher_instead_of_posix_shell_shim(self):
         for suffix in ("", ".cmd", ".ps1"):
-            launcher = self.root / ("codex-acp" + suffix)
-            launcher.write_text("fixture", encoding="utf-8")
-            # The fixture must be executable on the actual POSIX test host too.
-            launcher.chmod(0o700)
-        with patch.object(npm, "sys", SimpleNamespace(platform="win32")), patch.object(npm, "private_prefix", return_value=str(self.root)):
+            (self.root / ("codex-acp" + suffix)).write_text("fixture", encoding="utf-8")
+        with patch.object(npm.sys, "platform", "win32"), patch.object(npm, "private_prefix", return_value=str(self.root)):
             self.assertEqual(npm.private_bin(["codex-acp"]), str(self.root / "codex-acp.cmd"))
 
     def test_windows_codex_account_uses_owned_native_binary_for_each_architecture(self):
@@ -64,7 +61,7 @@ class AgentPlatformInstallationTests(unittest.TestCase):
         from app.services import agent_setup_runtime
         for python_arch, node_arch in (("x86_64", "arm64"), ("arm64", "x64")):
             pair = {"platform": "darwin", "arch": node_arch}
-            with self.subTest(node_arch=node_arch), patch.object(npm, "sys", SimpleNamespace(platform="darwin")), \
+            with self.subTest(node_arch=node_arch), patch.object(npm.sys, "platform", "darwin"), \
                     patch("platform.machine", return_value=python_arch), \
                     patch.object(npm, "resolve", return_value=pair):
                 self.assertEqual(npm.runtime_target(), ("darwin", node_arch))
@@ -86,7 +83,7 @@ class AgentPlatformInstallationTests(unittest.TestCase):
 
     def test_linux_install_overrides_foreign_libc_without_guessing_unknown_hosts(self):
         for libc in ("glibc", "musl", ""):
-            with self.subTest(libc=libc), patch.object(npm, "sys", SimpleNamespace(platform="linux")), \
+            with self.subTest(libc=libc), patch.object(npm.sys, "platform", "linux"), \
                     patch.object(npm, "private_prefix", return_value=str(self.root)), \
                     patch.dict(os.environ, {"npm_config_libc": "foreign-libc"}):
                 env = npm.environment({"platform": "linux", "arch": "x64", "libc": libc}, install=True)

@@ -12,8 +12,12 @@
     if (!api?.createSchedule || !sheet?.draft) throw Error('自动化模块未就绪，请更新 SoduWork 后重试');
     const text = String(params.text || '').trim(), context = params.context || {};
     if (!text || (!context.pluginId && !context.spaceId)) throw Error('请填写任务要求并选择当前空间或即用');
-    if (/每(?:隔)?\s*(?:[2-9]|\d{2,}|两|二|三|四|五|六|七|八|九|十)\s*(?:小时|分钟|天|周)|每分钟|工作日|周一[至到-]周五/.test(text)) throw Error('当前支持每天、每周指定一天、每小时或指定日期执行一次，请将执行时间写为支持的方式');
-    if (global.ScheduleTiming.clock?.(text)?.invalid) throw Error('执行时间无效，请填写0至23点、0至59分');
+    const tx = value => global.SoduWorkI18n?.translateText?.(value) || value;
+    const explicitRule = /(?:^|\n)\s*(?:DTSTART(?:;TZID=[^:;]+)?:|RRULE:)/i.test(text);
+    if (!explicitRule && /每(?:隔)?\s*(?:[2-9]|\d{2,}|两|二|三|四|五|六|七|八|九|十)\s*(?:小时|分钟|天|周)|每分钟|工作日|周一[至到-]周五/.test(text)) {
+      throw Error(tx('当前支持每天、每周、每月、每小时或指定日期执行一次，请将执行时间写为支持的方式'));
+    }
+    if (!explicitRule && global.ScheduleTiming.clock?.(text)?.invalid) throw Error(tx('执行时间无效，请填写0至23点、0至59分'));
     const version = epoch, scope = api.taskStorageKey?.('ops');
     const current = () => { if (version !== epoch || scope !== api.taskStorageKey?.('ops')) throw Error('SoduWork 账号已变化，请重新提交'); };
     const execution = await global.WorkAutomationCardState.loadOptions({ text }); current();
@@ -60,7 +64,11 @@
     if (version !== epoch || scope !== api.taskStorageKey?.('ops')) return { ok: false, uncertain: true, reason: '账号已变化，请切回原 SoduWork 账号核对创建结果' };
     return { ok: true, state: 'created', schedule: { ...body, id: saved.id, title: saved.title || body.title,
       every: saved.every || body.every, atHour: saved.atHour ?? body.atHour, atMinute: saved.atMinute ?? body.atMinute,
-      weekday: saved.weekday ?? body.weekday, runAt: saved.runAt || body.runAt,
+      weekday: saved.weekday ?? body.weekday, weekdays: saved.weekdays ?? body.weekdays,
+      monthDays: saved.monthDays ?? body.monthDays, monthDayPolicy: saved.monthDayPolicy ?? body.monthDayPolicy,
+      startDate: saved.startDate ?? body.startDate, endDate: saved.endDate ?? body.endDate,
+      customRule: saved.customRule ?? body.customRule,
+      runAt: saved.runAt || body.runAt,
       timeZone: saved.timeZone || body.timeZone, nextRunAt: saved.nextRunAt || '', spaceId: context.spaceId },
       executionState: preflight?.state || 'waiting', message: preflight?.message || '' };
   }

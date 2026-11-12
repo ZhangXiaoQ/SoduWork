@@ -77,7 +77,7 @@ async def seed_published():
         session.add(am.Plugin(
             id=PLUGIN, org_id=ORG, key="force-delete-target",
             name="已发布插件", description="验证强制删除",
-            enabled=True, source_kind="personal"))
+            enabled=True, source_kind="soduwork"))
         session.add(am.PluginVersion(
             id=VERSION, plugin_id=PLUGIN, version="1.0.0",
             checksum="force-delete-v1",

@@ -375,6 +375,8 @@ async def build(
     legacy_models = ai_exec.model_choices(ctx)
     model_choices = await model_catalog.choices(
         session, client, str(legacy_models.get("default") or ""))
+    from .model_defaults import public_defaults
+    defaults = public_defaults(model_choices.get("items") or [], client)
     required = list(routing.get("requiredAgentCapabilities") or [])
     substrates = substrate_options(merged_agents, required, client.id)
 
@@ -436,6 +438,8 @@ async def build(
         "models": list(model_choices.get("list") or []),
         "modelOptions": list(model_choices.get("items") or []),
         "defaultModel": str(model_choices.get("default") or ""),
+        "defaultModels": defaults["defaultModels"],
+        "defaultModelErrors": defaults["defaultModelErrors"],
         "recommendation": {
             "strategy": strategy,
             "workflowRequired": workflow_required,

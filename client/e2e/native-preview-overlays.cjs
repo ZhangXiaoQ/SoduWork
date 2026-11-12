@@ -40,7 +40,7 @@ if (typeof electron === 'string') {
     const scripts = ['components/panels/chat-output-links.js','components/panels/chat-dom-patch.js', 'components/panels/panels-chat-tools.js',
       'components/panels/chat-workspace-info.js','components/panels/chat-workspace-split.js',
       'components/workspace/native-preview-overlays.js','components/panels/chat-workspace-controls.js', 'components/panels/panels-chat-workspace.js',
-      'components/panels/plugin-catalog-format.js','components/panels/panels-plugin-maker-utils.js',
+      'components/panels/panels-chat-chrome.js','components/panels/plugin-catalog-format.js','components/panels/panels-plugin-maker-utils.js',
       'components/panels/panels-capability-plugins.js','components/panels/panels-capabilities.js'];
     const host = path.join(root, 'host.html');
     fs.writeFileSync(host, '<!doctype html><meta charset="utf-8">' + css.map(file => '<link rel="stylesheet" href="' + href(file) + '">').join('') +
@@ -51,10 +51,41 @@ if (typeof electron === 'string') {
     win = new BrowserWindow({ show: false, width: 1200, height: 800, webPreferences: {
       preload: path.join(client, 'preload.js'), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } });
     await win.loadFile(host);
-    await js('ChatWorkbench.bind(chat,()=>({ref:"fixture"}));ChatWorkbench.openLink(' + JSON.stringify(url) + ');void 0;');
+    await js('chat.querySelector(".nchat-main").insertAdjacentHTML("afterbegin",ChatChrome.header());ChatChrome.bind(chat,()=>({ref:"fixture"}));ChatWorkbench.bind(chat,()=>({ref:"fixture"}));ChatWorkbench.openLink(' + JSON.stringify(url) + ');void 0;');
     await until(() => visible().length === 1 && visible()[0].webContents.getTitle() === 'Live preview', 'native page');
     const browser = visible()[0];
     await browser.webContents.executeJavaScript('editor.value="unsaved input"');
+    const click = async selector => {
+      const point = await js(`(()=>{const e=document.querySelector(${JSON.stringify(selector)}),r=e.getBoundingClientRect();return{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`);
+      for (const type of ['mouseDown', 'mouseUp']) win.webContents.sendInputEvent({ type, button: 'left', clickCount: 1, ...point });
+      await sleep(250);
+    };
+    const boundsMatch = async () => {
+      const expected = await js(`(()=>{const r=document.querySelector('[data-wb-native]').getBoundingClientRect();return{x:Math.round(r.x),y:Math.round(r.y),width:Math.round(r.width),height:Math.round(r.height)}})()`);
+      return JSON.stringify(browser.getBounds()) === JSON.stringify(expected);
+    };
+    const settleSplit = () => js(`Promise.all([...document.querySelectorAll('.nchat-main,.ncw')]
+      .flatMap(element=>element.getAnimations()).map(animation=>animation.finished.catch(()=>{})))`);
+    await settleSplit();
+    await until(boundsMatch, 'initial native preview bounds after split animation');
+    const originalWidth = browser.getBounds().width;
+    await click('[data-chat-summary]');
+    await until(boundsMatch, 'summary keeps native preview bounds aligned');
+    assert.equal(browser.getBounds().width, originalWidth, 'summary must not reserve a blank column');
+    report.summaryGeometry = await js(`Array.from(document.querySelectorAll('.nchat,.nchat-stage,.nchat-summary,[data-wb-native]'),e=>({name:e.className,rect:e.getBoundingClientRect().toJSON(),position:getComputedStyle(e).position}))`);
+    await until(() => browser.getVisible(), 'summary under chat controls leaves adjacent native preview visible');
+    assert.equal(await js('document.querySelector(".nchat-summary").hidden'), false);
+    win.setSize(920, 800);
+    await until(() => !browser.getVisible(), 'narrow summary overlay hides intersecting native preview');
+    await click('[data-chat-summary-close]');
+    await until(() => browser.getVisible(), 'closing overlay restores native preview');
+    win.setSize(1200, 800);
+    await settleSplit();
+    await until(boundsMatch, 'native preview retains its full width after summary closes');
+    assert.equal(browser.getBounds().width, originalWidth);
+    assert.equal(await browser.webContents.executeJavaScript('editor.value'), 'unsaved input');
+    assert.equal(views.length, 1, 'summary toggles preserve the mounted native page');
+    report.cases.push('Summary reserves no preview width; narrow overlay hides only the intersecting native page and closing it restores bounds and unsaved input.');
     await js('openConversationPluginDraft("fixture","plugin.json")');
     await until(() => visible().length === 0, 'production plugin install modal');
     assert.equal(await js('capModalLayer.hidden'), false);

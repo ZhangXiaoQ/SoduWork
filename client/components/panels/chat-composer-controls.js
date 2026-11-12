@@ -100,6 +100,7 @@
     function render() {
       sessionControls?.render(); runtimePicker?.render();
       const state = options.state(), selection = state.selection || {};
+      global.SoduWorkQuotaNotice?.modelChanged?.(selection.model || state.model, state.adapterId || 'pi', el);
       const identity = state.ref || (state.draftOnly ? 'draft:' + state.draftId : '');
       if (lastIdentity !== identity || lastAdapter !== state.adapterId || state.runtimeSwitching) {
         close(false); rows = []; nativeModels = []; nativeView = 'effort'; effortEpoch++; pendingEffort = null; effortPreview = null; effortRequest = null; modelRequest = null; selecting = false;

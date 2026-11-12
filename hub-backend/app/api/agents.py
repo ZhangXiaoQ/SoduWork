@@ -66,6 +66,7 @@ async def get_agent_setup(
 
     data["models"] = [{"name": m["name"], "label": m.get("label") or m["name"],
                        "provider": m.get("providerName") or m.get("providerId", ""),
+                       "providerKind": m.get("providerKind", ""),
                        "keyFrom": m.get("keyFrom", "")} for m in usable]
     default_model = usable[0]["name"] if usable else ""
     for m in machines:

@@ -141,10 +141,26 @@ async def download_attachment(
     a = await session.get(Attachment, aid)
     if a is None:
         raise HTTPException(status_code=404, detail="附件不存在")
-    try:
-        stream = await asyncio.to_thread(storage.open_stream, a.storage_key, a.backend)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="附件文件已丢失")
+    evidence = a.evidence_meta or {}
+    if a.role == "handoff" and evidence.get("contentRef"):
+        from ..services import conversation_content
+        content = conversation_content.stream(evidence["contentRef"], evidence["contentOwner"], evidence["contentRecord"])
+        # Validate endpoint availability before sending successful response headers.
+        first = await anext(content)
+        async def endpoint_stream():
+            try:
+                yield first
+                async for part in content:
+                    yield part
+            finally:
+                await content.aclose()
+        response_stream = endpoint_stream()
+    else:
+        try:
+            stream = await asyncio.to_thread(storage.open_stream, a.storage_key, a.backend)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="附件文件已丢失")
+        response_stream = storage.iter_stream(stream)
     # Inline only passive bitmap images; force SVG and HTML downloads even when labeled image/*.
     # Sandbox all attachment responses to prevent same-origin script execution when opened directly.
     inline = resource_access.is_inline_image(a.content_type) or (
@@ -152,7 +168,7 @@ async def download_attachment(
     disp = "inline" if inline else "attachment"
     from urllib.parse import quote
     return StreamingResponse(
-        storage.iter_stream(stream), media_type=a.content_type or "application/octet-stream",
+        response_stream, media_type=a.content_type or "application/octet-stream",
         headers={
             "Content-Disposition": f"{disp}; filename*=UTF-8''{quote(a.filename)}",
             "Content-Length": str(max(0, int(a.size or 0))),

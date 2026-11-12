@@ -63,5 +63,21 @@
     }
     return result.sort((a,b) => Number(b.current)-Number(a.current) || Number(b.at || 0)-Number(a.at || 0));
   }
-  return { scope, folder, relation, compatibility, candidates };
+  function executionRuntime(task, sessionId, executions) {
+    // Finished requirements use the selected conversation runtime for ordinary
+    // follow-ups, matching task-input's TASK_FINISHED fallback in the main process.
+    if (task?.status === 'done' || task?.status === 'cancel') return '';
+    const receipt = task?.workRouting?.conversationTurn;
+    // Only the requirement bound to this conversation can describe its next
+    // controlled turn. Never relabel the local archive or another task's host.
+    if (!task?.id || !sessionId || receipt?.conversationId !== sessionId || receipt.executor !== 'dispatch') return '';
+    const active = (executions || []).find(row => row.taskId === task.id && row.executor === 'dispatch');
+    const context = task.executionContext || task.workRouting?.executionContext || {};
+    const actual = active?.run?.activeExecutionSelection?.agentId || active?.run?.engine || active?.run?.cli;
+    const assigned = context.agent?.id || context.agent?.key || context.agentId || task.agentId || context.agent?.cli;
+    const value = text(actual || assigned);
+    const id = value.startsWith('runner:') ? value.split(':').pop() : value.replace(/^local:/, '');
+    return /^[a-z][a-z0-9-]{0,39}$/.test(id) ? id : '';
+  }
+  return { scope, folder, relation, compatibility, candidates, executionRuntime };
 });

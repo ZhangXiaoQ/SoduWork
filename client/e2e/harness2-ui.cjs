@@ -36,7 +36,7 @@ if (typeof electron === 'string') {
     window.SoduWorkAPI={agentInstall:async(...args)=>{calls.push(args);return{jobId:'fixture-job'}},
       agentProbe:async(...args)=>{probeCalls.push(args);return{jobId:'fixture-probe',model:'fixture-model',keyFrom:'mine'}},
       agentJob:async id=>id==='fixture-probe'
-        ? {state:'running',lines:['仅验证 OpenCode 执行组件；不运行 Harness² 推演，会使用所选模型额度，最多 3 分钟。']}
+        ? {state:'running',lines:['验证 Harness² 独立执行器；不运行推演，会使用所选模型额度，最多 3 分钟。']}
         : {state:'done',ok:false,detail:'隔离验收没有执行真实安装',lines:[]},
       localAgentSetup:async()=>({machines:[machine],models:[{name:'fixture-model',label:'验收模型'}],modelCount:1})};
     </script><script src="components/panels/agent-brand.js"></script>
@@ -86,7 +86,7 @@ if (typeof electron === 'string') {
       await js('Promise.all(document.querySelector(".ag-drawer").getAnimations().map(animation=>animation.finished))');
       const bounds = await js('(()=>{const r=document.querySelector(".ag-drawer").getBoundingClientRect();return{left:r.left,right:r.right,bottom:r.bottom,width:innerWidth,height:innerHeight}})()');
       assert.ok(bounds.left >= 0 && bounds.right <= bounds.width && bounds.bottom <= bounds.height, JSON.stringify(bounds));
-      assert.match(await js('document.querySelector(".ag-drawer").textContent'), /首次.*执行组件/);
+      assert.match(await js('document.querySelector(".ag-drawer").textContent'), /独立执行器.*无需安装其他底座/);
       assert.equal(await js('Boolean(document.querySelector(".ag-drawer [data-aunin]"))'), false);
       fs.writeFileSync(path.join(output, 'details-' + width + '.png'), (await win.webContents.capturePage()).toPNG());
       await click('.ag-drawer-x');
@@ -113,7 +113,7 @@ if (typeof electron === 'string') {
     assert.deepEqual(await js('calls[2]'), ['harness2', 'install', 'fixture-device']);
     await js("clearInterval(_agTimer);_agTimer=null;_agJobs={};_agRender();void 0");
     await click('.ag-drawer [data-aunin]');
-    assert.match(await js('document.querySelector(".sch-confirm").textContent'), /保留.*OpenCode/);
+    assert.match(await js('document.querySelector(".sch-confirm").textContent'), /保留内置文件和任务记录/);
     assert.equal(await js('calls.length'), 3, 'uninstall must wait for inline confirmation');
     fs.writeFileSync(path.join(output, 'uninstall-confirm-390.png'), (await win.webContents.capturePage()).toPNG());
     await click('.ag-drawer [data-acancel]');
@@ -124,8 +124,8 @@ if (typeof electron === 'string') {
     await js("clearInterval(_agTimer);_agTimer=null;_agJobs={};_agOpen='';_agRender();void 0");
     await click(card + ' [data-aprobe]');
     assert.deepEqual(await js('probeCalls[0]'), ['harness2', '', 'fixture-device']);
-    await until('document.querySelector(".ag-log").textContent.includes("执行组件")');
-    assert.match(await js('document.querySelector(".ag-job-h").textContent'), /仅验证 OpenCode 执行组件.*不运行 Harness² 推演.*模型额度.*最多 3 分钟/);
+    await until('document.querySelector(".ag-log").textContent.includes("独立执行器")');
+    assert.match(await js('document.querySelector(".ag-job-h").textContent'), /验证 Harness² 独立执行器.*不运行推演.*模型额度.*最多 3 分钟/);
     assert.doesNotMatch(await js('document.querySelector(".ag-job-h").textContent'), /7 轮推演|10 分钟/);
     assert.match(await js('document.querySelector(".ag-log").textContent'), /用的模型：fixture-model/);
     fs.writeFileSync(path.join(output, 'execution-probe-running-390.png'), (await win.webContents.capturePage()).toPNG());

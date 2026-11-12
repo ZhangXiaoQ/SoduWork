@@ -145,7 +145,7 @@ function createTurnQueue(now, onCompleted) {
     };
     let result;
     try {
-      if (typeof item.options.beforeTurn === 'function') await item.options.beforeTurn();
+      if (typeof item.options.beforeTurn === 'function') await item.options.beforeTurn({ modelName: item.options.modelName });
       record('running');
       try {
         result = await send();

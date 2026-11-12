@@ -600,6 +600,22 @@ async def upload_manual_client_release(
         await client_release_files.disk_call(client_release_files.remove_incoming, incoming)
 
 
+@admin_router.get("/client-releases/{release_id}/download")
+async def download_admin_client_release(
+    release_id: str,
+    _user: User = Depends(require_perm("client.update")),
+    session: AsyncSession = Depends(get_session),
+):
+    """Administrators can inspect even disabled packages; public access stays gated."""
+    release = await session.get(ClientRelease, release_id)
+    if release is None:
+        raise HTTPException(status_code=404, detail="客户端版本不存在")
+    path = await _verified_artifact_path(release)
+    from .download import _release_media_type
+    return FileResponse(path, filename=release.artifact_name,
+                        media_type=_release_media_type(release.artifact_name))
+
+
 @admin_router.patch("/client-releases/{release_id}")
 async def set_client_release_enabled(
     release_id: str,

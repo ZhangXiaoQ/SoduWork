@@ -6,7 +6,53 @@
   // These exact prefixes/stems were shipped by this application. Recovery only
   // inspects the current profile; it never opens another product's data directory.
   const previousPrefixes = ['soduwork_work_sidebar_projects_v1:', 'soduwork_sidebar_projects_v1:'];
-  const previousTaskStems = new Set(['soduwork_work_tasks_v5']);
+  const previousTaskStems = new Set(['soduwork_work_tasks_v5', 'soduwork_tasks_v5']);
+  const accountPrefix = 'soduwork_sidebar_v1:';
+  const localPrefix = 'soduwork_sidebar_device_v1:';
+  let localHistory = null;
+  function setLocalHistory(catalog, rows = []) {
+    if (!catalog || typeof catalog.workspace !== 'string' || !catalog.workspace ||
+        !Number.isSafeInteger(catalog.revision) || catalog.revision < 0) return false;
+    if (localHistory?.workspace === catalog.workspace && catalog.revision < localHistory.revision) return false;
+    if (Array.isArray(catalog.items)) {
+      const records = new Map(), aliases = new Map(), origins = new Map();
+      for (const item of catalog.items) {
+        if (!item || typeof item.id !== 'string' || !item.id || item.id.length >= 512) continue;
+        records.set(item.id, { id: item.id, archived: item.archived === true, deleted: item.deleted === true,
+          historyAliasIds: unique(item.historyAliasIds), originIds: unique(item.originIds) });
+      }
+      const claims = new Map();
+      for (const id of records.keys()) aliases.set(id, id);
+      for (const item of records.values()) for (const alias of item.historyAliasIds) {
+        if (!claims.has(alias)) claims.set(alias, []);
+        claims.get(alias).push(item);
+      }
+      for (const [alias, owners] of claims) {
+        if (records.has(alias) && !records.get(alias).deleted) continue;
+        // Native joins retain retired child tombstones. Their IDs belong to
+        // the active parent's explicit alias set, not to the retired row.
+        const active = owners.filter(owner => !owner.deleted), candidates = active.length ? active : owners;
+        aliases.set(alias, candidates.length === 1 ? candidates[0].id : null);
+      }
+      for (const item of records.values()) for (const origin of item.originIds) {
+        if (aliases.has(origin) || item.deleted) continue;
+        origins.set(origin, origins.has(origin) && origins.get(origin) !== item.id ? null : item.id);
+      }
+      localHistory = { workspace: catalog.workspace, revision: catalog.revision, records, aliases, origins,
+        rows: localHistory?.workspace === catalog.workspace ? localHistory.rows : new Map() };
+    } else if (!localHistory || localHistory.workspace !== catalog.workspace || localHistory.revision !== catalog.revision) return false;
+    for (const row of rows) {
+      const id = localHistory.aliases.get(row?.id);
+      if (id) localHistory.rows.set(id, localSnapshot({ ...row, id }));
+    }
+    return true;
+  }
+  function localSnapshot(row) {
+    const result = snapshot(row);
+    // Account task bindings are resolved by main when opening the saved record.
+    delete result.taskId; delete result.taskIds; delete result.mode;
+    return result;
+  }
   function hubIdentity(value) {
     try {
       const url = new URL(String(value || ''));
@@ -31,11 +77,11 @@
     const user = String(auth ? auth.user?.id || '' : fallback?.user || '');
     const hub = hubIdentity(api?.hubBase?.() || fallback?.hub);
     const device = String(auth?.clientId || fallback?.device || '');
-    const key = 'soduwork_sidebar_v1:' + encodeURIComponent(JSON.stringify([hub, user]));
+    const key = accountPrefix + encodeURIComponent(JSON.stringify([hub, user]));
     if (!hub || !user || user === 'unbound') return {
-      key, writable: false, storage: { getItem: () => null },
+      key, writable: false, storage: { getItem: () => null }, deviceStorage: storage,
     };
-    return { storage, key, migrate() {
+    return { storage, key, deviceStorage: storage, migrate() {
       const candidates = [];
       for (let index = 0; index < storage.length; index++) {
         const oldKey = storage.key(index);
@@ -135,8 +181,246 @@
     if (Array.isArray(row.usedHarnesses)) out.usedHarnesses = unique(row.usedHarnesses);
     return out;
   }
-  function create({ storage, key, legacyPins = [], writable = true, migrate, onChange }) {
+  function sourceOwner(key) {
+    if (key.startsWith(accountPrefix)) {
+      try {
+        const owner = JSON.parse(decodeURIComponent(key.slice(accountPrefix.length)));
+        return Array.isArray(owner) && owner.length === 2 && hubIdentity(owner[0]) &&
+          typeof owner[1] === 'string' && owner[1] && owner[1] !== 'unbound' ? key : '';
+      } catch (_) { return ''; }
+    }
+    const prefix = previousPrefixes.find(value => key.startsWith(value));
+    if (!prefix) return '';
+    try {
+      const owner = previousIdentity(decodeURIComponent(key.slice(prefix.length)));
+      return owner ? accountPrefix + encodeURIComponent(JSON.stringify([hubIdentity(owner.hub), owner.user])) : '';
+    } catch (_) { return ''; }
+  }
+  function localProject(project, chatIds) {
+    // A shared folder group conveys local organization, never account authorization.
+    return { id: project.id, name: project.name, folders: project.folders, chatIds,
+      collapsed: project.collapsed, createdAt: project.createdAt,
+      ...(project.archivedAt ? { archivedAt: project.archivedAt } : {}) };
+  }
+  function createDevicePartition(storage, key) {
+    let shared = null, sharedKey = '', sharedRaw = null;
+    const enabled = () => !!storage && key.startsWith(accountPrefix) && !!localHistory;
+    const canonical = id => localHistory?.aliases.get(String(id || '')) || '';
+    // A downloaded copy can inherit legacy organization from its origin, but
+    // the origin remains an independent account conversation and lifecycle.
+    const migrationId = id => canonical(id) || localHistory?.origins.get(String(id || '')) || '';
+    const localIds = ids => unique((ids || []).map(canonical).filter(Boolean));
+    const remoteIds = ids => unique(ids).filter(id => !canonical(id));
+    function orderedIds(deviceIds, accountIds) {
+      const local = localIds(deviceIds), positions = new Map(local.map((id, index) => [id, index]));
+      const account = unique((accountIds || []).map(id => canonical(id) || id));
+      const boundaries = new Array(account.length);
+      let boundary = local.length;
+      for (let index = account.length - 1; index >= 0; index--) {
+        if (positions.has(account[index])) boundary = positions.get(account[index]);
+        boundaries[index] = boundary;
+      }
+      // Account lists retain local IDs only as placement anchors. Membership
+      // and local relative order always come from the current device state.
+      const buckets = new Map();
+      let minimum = 0;
+      account.forEach((id, index) => {
+        if (canonical(id)) return;
+        const at = Math.max(minimum, boundaries[index]); minimum = at;
+        if (!buckets.has(at)) buckets.set(at, []);
+        buckets.get(at).push(id);
+      });
+      const result = [];
+      local.forEach((id, index) => { result.push(...(buckets.get(index) || []), id); });
+      return result.concat(buckets.get(local.length) || []);
+    }
+    const owns = id => (shared.projectOwners[id] || []).includes(key);
+    function read(account) {
+      if (!enabled()) return account;
+      sharedKey = localPrefix + encodeURIComponent(localHistory.workspace);
+      const raw = storage.getItem(sharedKey);
+      if (!shared || raw !== sharedRaw) {
+        const parsed = raw === null ? {} : JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) ||
+            (parsed.version !== undefined && parsed.version !== 1)) throw Error('Invalid local sidebar state');
+        shared = { ...normalized(parsed), migratedIds: unique(parsed.migratedIds),
+          projectOwners: Object.fromEntries(Object.entries(parsed.projectOwners || {}).filter(([id]) => /^project-[\w-]+$/.test(id))
+            .map(([id, owners]) => [id, unique(owners).filter(owner => sourceOwner(owner) === owner)])) };
+        sharedRaw = raw;
+      }
+      const remap = ids => unique((ids || []).map(id => canonical(id) || id));
+      const canonicalRows = new Map();
+      for (const row of shared.rows) {
+        const id = canonical(row.id) || row.id;
+        if (!canonicalRows.has(id) || row.id === id) canonicalRows.set(id, localSnapshot({ ...row, id }));
+      }
+      const canonicalState = { ...normalized({ ...shared, pins: remap(shared.pins), recent: remap(shared.recent),
+        projects: shared.projects.map(project => ({ ...project, chatIds: remap(project.chatIds) })),
+        archivedProjects: shared.archivedProjects.map(project => ({ ...project, chatIds: remap(project.chatIds) })),
+        rows: [...canonicalRows.values()] }),
+        migratedIds: unique([...shared.migratedIds, ...remap(shared.migratedIds)]), projectOwners: shared.projectOwners };
+      const canonicalValue = JSON.stringify(canonicalState);
+      const referencesChanged = canonicalValue !== JSON.stringify(shared);
+      shared = canonicalState;
+      const migrated = new Set(shared.migratedIds);
+      const fresh = new Set([...localHistory.records.keys()].filter(id => !migrated.has(id)));
+      if (fresh.size) {
+        const next = copy(shared), sources = [];
+        for (let index = 0; index < storage.length; index++) {
+          const sourceKey = storage.key(index), owner = sourceOwner(sourceKey || '');
+          if (owner) sources.push({ sourceKey, owner });
+        }
+        sources.sort((a, b) => Number(b.sourceKey === key) - Number(a.sourceKey === key) || a.sourceKey.localeCompare(b.sourceKey));
+        const freshIds = ids => unique((ids || []).map(migrationId))
+          .filter(id => fresh.has(id) && !localHistory.records.get(id).deleted);
+        for (const source of sources) {
+          let value;
+          try {
+            value = JSON.parse(storage.getItem(source.sourceKey));
+            if (!value || typeof value !== 'object' || Array.isArray(value) ||
+                (value.version !== undefined && value.version !== 1)) continue;
+          } catch (_) { continue; }
+          const previous = normalized(value);
+          next.pins = unique([...next.pins, ...freshIds(previous.pins)]);
+          next.recent = unique([...next.recent, ...freshIds(previous.recent)]);
+          if (freshIds(previous.recent).length && previous.manualOrder.recent) next.manualOrder.recent = true;
+          for (const section of ['projects', 'archivedProjects']) for (const project of previous[section]) {
+            const chatIds = freshIds(project.chatIds);
+            if (!chatIds.length) continue;
+            const old = [...next.projects, ...next.archivedProjects].find(row => row.id === project.id);
+            if (old) old.chatIds = unique([...old.chatIds, ...chatIds]);
+            else next[section].push(localProject(project, chatIds));
+            next.projectOwners[project.id] = unique([...(next.projectOwners[project.id] || []), source.owner]);
+            if (previous.manualOrder.projects[project.id]) next.manualOrder.projects[project.id] = true;
+          }
+          const known = new Set(next.rows.map(row => row.id));
+          for (const row of previous.rows) {
+            const id = migrationId(row.id);
+            if (fresh.has(id) && !known.has(id) && !localHistory.records.get(id).deleted) {
+              next.rows.push(localSnapshot({ ...row, id })); known.add(id);
+            }
+          }
+        }
+        // Record even ungrouped IDs so later unpin/remove operations cannot be
+        // undone by an obsolete account snapshot during another account's login.
+        next.migratedIds = unique([...next.migratedIds, ...fresh]);
+        const value = JSON.stringify({ ...normalized(next), migratedIds: next.migratedIds, projectOwners: next.projectOwners });
+        storage.setItem(sharedKey, value);
+        shared = JSON.parse(value); sharedRaw = value;
+      } else if (referencesChanged) {
+        storage.setItem(sharedKey, canonicalValue); sharedRaw = canonicalValue;
+      }
+      const rows = new Map(shared.rows.map(row => [row.id, row]));
+      for (const [id, row] of localHistory.rows) if (rows.has(id)) rows.set(id, row);
+      const visibleRows = [...rows.values()].filter(row => {
+        const record = localHistory.records.get(row.id);
+        return record && !record.archived && !record.deleted;
+      });
+      const merged = { ...account, rows: [...visibleRows, ...account.rows.filter(row => !canonical(row.id))],
+        pins: orderedIds(shared.pins, account.pins), recent: orderedIds(shared.recent, account.recent),
+        manualOrder: { recent: shared.manualOrder.recent || account.manualOrder.recent,
+          projects: { ...account.manualOrder.projects, ...shared.manualOrder.projects } }, collapsed: shared.collapsed };
+      for (const section of ['projects', 'archivedProjects']) {
+        const locals = new Map(shared[section].map(project => [project.id, project]));
+        const allShared = new Set([...shared.projects, ...shared.archivedProjects].map(project => project.id));
+        merged[section] = [...locals.values()].map(project => {
+          const privateProject = [...account.projects, ...account.archivedProjects].find(row => row.id === project.id);
+          return { ...project, businessProjectId: privateProject?.businessProjectId || '',
+            ...applicationFields(privateProject), chatIds: orderedIds(project.chatIds, privateProject?.chatIds) };
+        });
+        for (const project of account[section]) if (!allShared.has(project.id) && !shared.projectOwners[project.id])
+          merged[section].push({ ...project, chatIds: remoteIds(project.chatIds) });
+      }
+      return normalized(merged);
+    }
+    function accountState(account) {
+      if (!enabled() || !shared) return account;
+      const projects = account.projects.filter(project => !shared.projectOwners[project.id] || !owns(project.id));
+      for (const project of shared.projects) if (owns(project.id)) {
+        const previous = [...account.projects, ...account.archivedProjects].find(row => row.id === project.id);
+        projects.push({ ...previous, ...project, businessProjectId: previous?.businessProjectId || '',
+          ...applicationFields(previous), chatIds: orderedIds(project.chatIds, previous?.chatIds) });
+      }
+      return normalized({ ...account, projects });
+    }
+    function write(next, account, { localProjectId = '', remoteProjectId = '' } = {}) {
+      const sharedIds = new Set([...shared.projects, ...shared.archivedProjects].map(project => project.id));
+      if (localProjectId) sharedIds.add(localProjectId);
+      const local = { ...next, pins: localIds(next.pins), recent: localIds(next.recent),
+        rows: next.rows.filter(row => canonical(row.id)).map(row => localSnapshot({ ...row, id: canonical(row.id) })),
+        migratedIds: shared.migratedIds, projectOwners: copy(shared.projectOwners) };
+      const privateState = { ...next, pins: unique(next.pins), recent: unique(next.recent),
+        rows: next.rows.filter(row => !canonical(row.id)) };
+      for (const section of ['projects', 'archivedProjects']) {
+        local[section] = []; privateState[section] = [];
+        for (const project of next[section]) {
+          const ids = localIds(project.chatIds);
+          const useLocal = sharedIds.has(project.id) || ids.length > 0;
+          if (useLocal) {
+            local[section].push(localProject(project, ids));
+            if (!local.projectOwners[project.id]) local.projectOwners[project.id] = sourceOwner(key) ? [key] : [];
+            if (remoteProjectId === project.id && sourceOwner(key)) local.projectOwners[project.id] = unique([...local.projectOwners[project.id], key]);
+            const prior = [...account.projects, ...account.archivedProjects].find(row => row.id === project.id);
+            if (prior || local.projectOwners[project.id].includes(key) || localProjectId === project.id && project.businessProjectId)
+              privateState[section].push(prior && !local.projectOwners[project.id].includes(key) && localProjectId !== project.id
+                ? prior : { ...project, chatIds: unique(project.chatIds) });
+          } else privateState[section].push(project);
+        }
+      }
+      const projectIds = new Set([...local.projects, ...local.archivedProjects].map(project => project.id));
+      local.manualOrder = { ...local.manualOrder,
+        projects: Object.fromEntries(Object.entries(local.manualOrder.projects).filter(([id]) => projectIds.has(id))) };
+      const localValue = JSON.stringify({ ...normalized(local), migratedIds: local.migratedIds, projectOwners: local.projectOwners });
+      const accountValue = JSON.stringify(normalized(privateState));
+      const priorAccount = storage.getItem(key);
+      const accountChanged = !!sourceOwner(key) && accountValue !== priorAccount;
+      if (accountChanged) storage.setItem(key, accountValue);
+      try { if (localValue !== sharedRaw) storage.setItem(sharedKey, localValue); }
+      catch (error) {
+        // A failed second write must not leave a half-applied account layout.
+        if (accountChanged) {
+          if (priorAccount === null) storage.removeItem(key); else storage.setItem(key, priorAccount);
+        }
+        throw error;
+      }
+      shared = JSON.parse(localValue); sharedRaw = localValue;
+      return { account: normalized(privateState), raw: accountChanged ? accountValue : priorAccount };
+    }
+    function applyRemote(project, account) {
+      const nextAccount = copy(account), previous = nextAccount.projects.find(row => row.id === project.id);
+      nextAccount.projects = nextAccount.projects.filter(row => row.id !== project.id);
+      if (!project.deleted) nextAccount.projects.push({ ...previous, ...project });
+      if (shared.projectOwners[project.id] && !owns(project.id)) {
+        // Matching IDs in another account's directory do not grant ownership
+        // of this device's group or its native conversation membership.
+        const raw = JSON.stringify(normalized(nextAccount));
+        storage.setItem(key, raw);
+        return { account: normalized(nextAccount), raw };
+      }
+      const next = read(nextAccount), old = next.projects.find(row => row.id === project.id);
+      next.projects = next.projects.filter(row => row.id !== project.id);
+      if (!project.deleted) next.projects.push({ ...old, ...project });
+      return write(next, nextAccount, { remoteProjectId: project.id });
+    }
+    return { enabled, read, write, accountState, applyRemote };
+  }
+  function create({ storage, key, deviceStorage, legacyPins = [], writable = true, migrate, onChange }) {
     let raw = null, state = normalized({ pins: legacyPins }), initialized = false, readError = null;
+    let accountState = state;
+    const device = createDevicePartition(deviceStorage, key);
+    const observedTimes = new Map();
+    function stableNewestFirst(rows) {
+      const time = row => {
+        const key = row._uiKey || row.id || row.localId;
+        const value = createdAt(row);
+        if (!observedTimes.has(key) && value > 0) observedTimes.set(key, value);
+        return observedTimes.get(key) || 0;
+      };
+      // Capture before sorting: comparator invocation order must not determine
+      // where aliases or equal-time rows appear. Metadata refresh is not creation.
+      rows.forEach(time);
+      return rows.slice().sort((a, b) => time(b) - time(a));
+    }
     function refresh() {
       try {
         let latest = storage.getItem(key);
@@ -155,16 +439,17 @@
           const parsed = latest !== null ? JSON.parse(latest) : initialized ? {} : { pins: legacyPins };
           if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) ||
             (parsed.version !== undefined && parsed.version !== 1)) throw Error('Invalid sidebar state');
-          state = normalized(parsed); raw = latest; initialized = true;
+          accountState = normalized(parsed); raw = latest; initialized = true;
         }
+        state = device.read(accountState);
         readError = null;
       } catch (_) {
         readError = Error('项目分组数据暂时无法读取，原数据已保留。请重新打开客户端后重试');
       }
     }
     refresh();
-    function commit(change) {
-      if (!writable) throw Error('登录后即可整理会话');
+    function commit(change, options) {
+      if (!writable && !device.enabled()) throw Error('登录后即可整理会话');
       refresh();
       if (readError) throw readError;
       const next = copy(state);
@@ -173,9 +458,15 @@
       const held = new Set([...normalizedNext.pins, ...normalizedNext.recent,
         ...normalizedNext.projects.flatMap(p => p.chatIds), ...normalizedNext.archivedProjects.flatMap(p => p.chatIds)]);
       normalizedNext.rows = normalizedNext.rows.filter(row => held.has(row.id));
-      const value = JSON.stringify(normalizedNext);
-      if (value !== raw) storage.setItem(key, value); // Failure leaves the previous state intact.
-      state = normalizedNext; raw = value;
+      if (device.enabled()) {
+        const result = device.write(normalizedNext, accountState, options);
+        accountState = result.account; raw = result.raw;
+        state = device.read(accountState);
+      } else {
+        const value = JSON.stringify(normalizedNext);
+        if (value !== raw) storage.setItem(key, value); // Failure leaves the previous state intact.
+        state = accountState = normalizedNext; raw = value;
+      }
       onChange?.();
     }
     function remember(next, items) {
@@ -185,6 +476,19 @@
       for (const row of items || []) if (row?.id && held.has(String(row.id))) rows.set(String(row.id),
         snapshot({ ...rows.get(String(row.id)), ...row }));
       next.rows = [...rows.values()];
+    }
+    function forgetMany(ids, { preserveArchivedProjects = false, preserveProjectIds = [] } = {}) {
+      const removed = new Set(unique(ids));
+      if (!removed.size) return;
+      const preserved = new Set(unique(preserveProjectIds));
+      commit(next => {
+        next.pins = next.pins.filter(id => !removed.has(id));
+        next.recent = next.recent.filter(id => !removed.has(id));
+        for (const project of [...next.projects.filter(project => !preserved.has(project.id)),
+          ...(preserveArchivedProjects ? [] : next.archivedProjects)]) {
+          project.chatIds = project.chatIds.filter(id => !removed.has(id));
+        }
+      });
     }
     function view(items) {
       refresh();
@@ -198,11 +502,11 @@
       const recentFresh = recent.filter(row => !ordered.has(String(row.id)));
       const recentKnown = state.recent.map(id => byId.get(id)).filter(row => row && !allocated.has(String(row.id)));
       const recentItems = state.manualOrder.recent
-        ? [...newestFirst(recentFresh), ...recentKnown]
-        : newestFirst(recent);
+        ? [...stableNewestFirst(recentFresh), ...recentKnown]
+        : stableNewestFirst(recent);
       return { projects: state.projects.map(p => {
         const items = p.chatIds.map(id => byId.get(id)).filter(Boolean);
-        return { ...copy(p), items: state.manualOrder.projects[p.id] ? items : newestFirst(items) };
+        return { ...copy(p), items: state.manualOrder.projects[p.id] ? items : stableNewestFirst(items) };
       }),
         pinned: state.pins.map(id => byId.get(id)).filter(Boolean),
         recent: recentItems, collapsed: state.collapsed };
@@ -210,14 +514,22 @@
     return {
       applyRemoteProject(project) {
         const callback = onChange; onChange = null;
-        try { commit(next => {
+        try {
+          refresh(); if (readError) throw readError;
+          if (device.enabled()) {
+            const result = device.applyRemote(project, accountState);
+            accountState = result.account; raw = result.raw; state = device.read(accountState);
+            return;
+          }
+          commit(next => {
           const old = next.projects.find(p => p.id === project.id);
           next.projects = next.projects.filter(p => p.id !== project.id);
           if (!project.deleted) next.projects.push({...old, ...project});
         }); } finally { onChange = callback; }
       },
       view, get: () => { refresh(); return copy(state); },
-      remember: items => { if (writable) commit(next => remember(next, items)); },
+      getAccount: () => { refresh(); return copy(device.accountState(accountState)); },
+      remember: items => { if (writable || device.enabled()) commit(next => remember(next, items)); },
       recordAppChat(appId, name, row, appIcon) {
         appId = String(appId || '').trim();
         const id = String(row?.id || '').trim();
@@ -256,7 +568,7 @@
           if (p) Object.assign(p, { name, folders: unique(folders), businessProjectId: association });
           else next.projects.push({ id, name, folders: unique(folders), businessProjectId: association, collapsed: false, chatIds: [], createdAt: Date.now() });
           next.collapsed = false;
-        });
+        }, { localProjectId: id });
         return id;
       },
       archiveProject(id) { commit(next => {
@@ -356,12 +668,8 @@
           remember(next, [item]);
         });
       },
-      forget(id) { commit(next => {
-        next.pins = next.pins.filter(v => v !== id);
-        next.recent = next.recent.filter(v => v !== id);
-        next.projects.forEach(p => { p.chatIds = p.chatIds.filter(v => v !== id); });
-        next.archivedProjects.forEach(p => { p.chatIds = p.chatIds.filter(v => v !== id); });
-      }); },
+      forget(id) { forgetMany([id]); },
+      forgetMany,
     };
   }
 
@@ -381,10 +689,13 @@
         const reply = await api.conversationProjects();
         if (!current()) return;
         const remote = new Map(reply.items.map(row => [row.id, row]));
-        const local = new Map(store.get().projects.filter(row => !row.appId).map(row => [row.id, row]));
+        const getAccount = () => store.getAccount ? store.getAccount() : store.get();
+        const local = new Map(getAccount().projects.filter(row => !row.appId).map(row => [row.id, row]));
         for (const id of new Set([...local.keys(), ...remote.keys(), ...Object.keys(checkpoints)])) {
           if (!current()) return;
-          const here = local.get(id), there = remote.get(id), saved = checkpoints[id];
+          // A previous project's save may have awaited while this project was edited.
+          const here = getAccount().projects.find(row => row.id === id && !row.appId);
+          const there = remote.get(id), saved = checkpoints[id];
           const hash = digest(here);
           const dirty = saved ? hash !== saved.hash : !!here && !there;
           if (dirty) {
@@ -411,5 +722,7 @@
     }
     return {run};
   }
-  global.WorkspaceSidebarState = { create, normalized, storageKey, accountOptions, projectSync };
+  const localHistoryId = id => localHistory?.aliases.get(String(id || '')) || '';
+  const localHistoryRevision = workspace => localHistory?.workspace === workspace ? localHistory.revision : -1;
+  global.WorkspaceSidebarState = { create, normalized, storageKey, accountOptions, projectSync, setLocalHistory, localHistoryId, localHistoryRevision };
 })(window);

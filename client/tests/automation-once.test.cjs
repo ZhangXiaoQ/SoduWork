@@ -94,3 +94,93 @@ test('editing an unchanged past reservation is allowed but a new past date is re
   assert.equal(timing.validate(value,{...value,id:'existing'}),'');
   assert.ok(timing.validate(value,{...value,id:'existing',runAt:'2026-10-13T04:00:00Z'}));
 });
+
+test('recurring inference keeps multi-select weekdays, month days, and date bounds', () => {
+  const { timing } = runtime();
+  const weekly = timing.infer('每周一、三、五上午9点');
+  assert.equal(weekly.every, 'weekly');
+  assert.deepEqual([...weekly.weekdays], [1, 3, 5]);
+  assert.equal(weekly.atHour, 9);
+  const monthly = timing.infer('每月30、31号早上9点');
+  assert.equal(monthly.every, 'monthly');
+  assert.deepEqual([...monthly.monthDays], [30, 31]);
+  for (const phrase of ['每月30,31号早上9点', '每月30号，31号早上9点', '每月30,31号汇总报告']) {
+    assert.deepEqual([...timing.infer(phrase).monthDays], [30, 31], phrase);
+  }
+  assert.deepEqual([...timing.infer('每周一、周三、周五上午9点').weekdays], [1, 3, 5]);
+  assert.deepEqual([...timing.infer('每周一，周三，周五汇总报告').weekdays], [1, 3, 5]);
+  assert.equal(timing.infer('每月5号汇总报告').every, 'monthly');
+  const lastDay = timing.infer('每月最后一天早上9点');
+  assert.deepEqual([...lastDay.monthDays], [31]);
+  assert.equal(lastDay.monthDayPolicy, 'last_day');
+  assert.equal(timing.validate({ ...monthly, startDate: '2026-11-01', endDate: '2026-12-31' }), '');
+  assert.match(timing.validate({ ...monthly, startDate: '2026-12-31', endDate: '2026-11-01' }), /开始日期/);
+  assert.match(timing.validate({ every: 'weekly', weekdays: [], weekday: null, atHour: 9, atMinute: 0 }), /至少一个星期/);
+});
+
+test('custom recurrence rules preserve text and use the shared create contract', () => {
+  const { proposalOf, bodyOf, validate, timing } = runtime();
+  const rule = 'DTSTART;TZID=Asia/Shanghai:20990101T105100\nRRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE,FR;COUNT=8';
+  const draft = proposalOf({}, 'Task: Generate a report\n' + rule, {timeZone:'Asia/Shanghai'});
+  assert.equal(draft.every, 'custom');
+  assert.equal(draft.customRule, rule);
+  assert.equal(validate(draft), '');
+  const body = bodyOf({...draft, startDate:'2000-01-01', endDate:'2000-01-02'});
+  assert.equal(body.customRule, rule);
+  assert.equal(body.startDate, null);
+  assert.equal(body.endDate, null);
+  const refined = proposalOf({}, 'Keep the report concise', draft);
+  assert.equal(refined.every, 'custom');
+  assert.equal(refined.customRule, rule);
+  assert.equal(timing.summary(draft), '自定义规则');
+});
+
+test('custom inference retains unsupported calendar properties for validation', () => {
+  const { proposalOf, validate } = runtime();
+  assert.equal(proposalOf({}, 'BEGIN: task notes\n每天9点生成报告', {}).every, 'daily');
+  const rule = 'DTSTART;TZID=Asia/Shanghai:20990101T105100\nRRULE:FREQ=DAILY';
+  const folded = proposalOf({}, rule + ';COUNT=1\n 0', {timeZone:'Asia/Shanghai'});
+  assert.equal(folded.customRule, rule + ';COUNT=1\n0');
+  assert.ok(validate(folded), 'Unsupported folding must not turn COUNT=10 into COUNT=1');
+  for (const property of ['EXDATE:20990102T105100', 'exdate:20990102T105100',
+    'RDATE:20990102T105100', 'DTEND:20990102T105100', 'X-HOLIDAY:skip', 'UNSUPPORTED:date']) {
+    for (const text of [rule + '\n' + property, property + '\n' + rule]) {
+      const draft = proposalOf({}, 'Task: Generate a report\n' + text, {timeZone:'Asia/Shanghai'});
+      assert.equal(draft.every, 'custom');
+      assert.ok(draft.customRule.includes(property), property);
+      assert.ok(validate(draft), property);
+    }
+  }
+});
+
+test('custom validation rejects malformed dates, unknown rules and duplicates', () => {
+  const { timing } = runtime();
+  const rule = 'DTSTART;TZID=Asia/Shanghai:20990101T105100\nRRULE:FREQ=DAILY';
+  for (const invalid of ['', rule.replace('20990101', '20990230'), rule.replace('105100', '246100'),
+    rule.replace('Asia/Shanghai', 'Invalid/Zone'), rule + ';FREQ=WEEKLY', rule + ';BYHOUR=9',
+    rule + ';INTERVAL=0', rule + ';COUNT=1000001', rule + ';BYDAY=MO',
+    rule + ';BYMONTHDAY=1', rule + ';UNTIL=20990230T120000', rule + '\nRRULE:FREQ=MONTHLY',
+    rule + ';COUNT=5;UNTIL=20991231T000000Z', rule + ';UNTIL=20900101T000000',
+    rule.replace('105100', '105101'), rule.replace('105100', '105100+08:00'), rule.replace('105100', '105100Z'),
+    rule + '\nEXDATE:20990101T105100', rule + ';' + 'X'.repeat(4096)]) {
+    assert.ok(timing.validate({every:'custom',customRule:invalid}), invalid);
+  }
+  for (const valid of [rule, rule.replace('105100', '1051'), rule.replace(';TZID=Asia/Shanghai', '').replace('105100', '105100Z'),
+    rule + ';UNTIL=20991231T120000Z',
+    rule.replace('FREQ=DAILY', 'FREQ=MONTHLY;BYMONTHDAY=30,31'),
+    rule.replace('FREQ=DAILY', 'FREQ=HOURLY;INTERVAL=100000')]) {
+    assert.equal(timing.validate({every:'custom',customRule:valid}), '', valid);
+  }
+  assert.ok(timing.validateCustomRule('DTSTART:00990101T090000Z\nRRULE:FREQ=DAILY'));
+  assert.equal(timing.validateCustomRule('DTSTART:20990101T090000Z\nRRULE:FREQ=DAILY;UNTIL=20990101T100000', 'Asia/Shanghai'), '');
+});
+
+test('custom example is future minute precision and preview uses server occurrence', () => {
+  const { timing } = runtime();
+  assert.equal(timing.customExample('Asia/Shanghai', now),
+    'DTSTART;TZID=Asia/Shanghai:20261015T100000\nRRULE:FREQ=DAILY;COUNT=1');
+  assert.equal(timing.customPreview({nextRunAt:'2099-01-01T02:51:00Z',timeZone:'Asia/Shanghai'}),
+    '下一次：2099-01-01 10:51');
+  assert.equal(timing.customPreview({nextRunAt:null}), '自定义规则已无后续执行时间');
+  assert.equal(timing.customPreview({}), '保存后由服务端计算下一次执行时间');
+});

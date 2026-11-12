@@ -72,7 +72,9 @@ chk("新 runner（hello 带 bin1）启用二进制", new.bin is True)
 
 # Capability names are protocol identifiers, not display labels. Truncating
 # executionSelection1 prevents durable continuation from reaching the Runner.
-advertised = ["bin1", "handoff1", "executionSelection1", "sessionAck1", "admit1"]
+advertised = ["bin1", "handoff1", "executionSelection1", "sessionAck1", "turnFiles1",
+              "turnSkills1", "desktopCapabilities1", "desktopPluginTurn1",
+              "desktopPluginStart1", "desktopLibrary1", "admit1"]
 current = runner_hub._Runner(_WS(), {"runnerId": "r-current", "caps": advertised})
 chk("完整保留续聊与执行切换能力", current.caps == advertised, current.caps)
 
@@ -88,8 +90,11 @@ chk("能力列表不接受字符串冒充数组", malformed.caps == [] and not m
 bounded = runner_hub._Runner(_WS(), {"runnerId": "r-bounded", "caps": [
     "bin1" + "x" * 64, None, {}, "", "admit1", "admit1"]})
 chk("无效或超长能力不截断成其他标识", bounded.caps == ["admit1"], bounded.caps)
-limited = runner_hub._Runner(_WS(), {"runnerId": "r-limit", "caps": [f"cap{i}" for i in range(20)]})
-chk("能力数量仍限制为八项", limited.caps == [f"cap{i}" for i in range(8)])
+# The protocol grew to 32 slots in 777874b3 so desktop admission is not truncated.
+# Exercise both the complete current hello and a payload beyond that hard bound.
+limited = runner_hub._Runner(_WS(), {"runnerId": "r-limit", "caps": [f"cap{i}" for i in range(40)]})
+chk("Protocol capabilities retain the 32-entry bound",
+    limited.caps == [f"cap{i}" for i in range(32)])
 
 # Hub must accept both legacy and binary output chunks.
 from app.services import ai_remote  # noqa: E402

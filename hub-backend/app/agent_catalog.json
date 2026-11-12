@@ -346,7 +346,7 @@
       "goalMode": "native",
       "group": "more",
       "order": 80,
-      "summary": "Harness² 文本推演后由 OpenCode 执行，增加耗时与模型用量",
+      "summary": "Harness² 文本推演后独立执行工具，增加耗时与模型用量",
       "runner": {
         "adapter": "native"
       },
@@ -354,11 +354,11 @@
         "installer": "bundled",
         "pkg": "",
         "source": "https://github.com/google-research/harness2",
-        "blurb": "每轮先运行 Google Research Harness² 的七阶段文本推演，再由 OpenCode 执行工具；推演会增加耗时与模型用量，失败时不会切换底座。",
+        "blurb": "每轮先运行 Google Research Harness² 的七阶段文本推演，再由 SoduWork 的 Harness² 独立执行器调用工具；无需其他底座，推演会增加耗时与模型用量。",
         "warn": "",
         "config_how": "直接使用「我的模型」中选定的企业模型；模型凭据仅注入本次进程，不写入文件。",
         "config_path": "",
-        "install_how": "Harness² 核心随 SoduWork 内置；首次使用时点「装上」准备执行组件。"
+        "install_how": "Harness² 核心与独立执行器随 SoduWork 内置，无需安装 OpenCode；停用后点「启用」恢复。"
       }
     }
   ]

@@ -316,5 +316,105 @@
       "version": "2.9.0",
       "notice": "dnspython"
     }
+  ],
+  "lockLicenseReviews": [
+    {
+      "lock": "hub-frontend/package-lock.json",
+      "package": "node_modules/dompurify",
+      "version": "3.4.17",
+      "declaredLicense": "(MPL-2.0 OR Apache-2.0)",
+      "resolved": "https://registry.npmjs.org/dompurify/-/dompurify-3.4.17.tgz",
+      "integrity": "sha512-B/pSlYVHQ58kqISD/yDjuJ1yfzI34m1gF4lAod2bwSRhiN4K5Cl3H8Af7hqB2PmTL911tdEudnnXn5FnhRoz0w==",
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "reviewBasis": "The exact npm package declares (MPL-2.0 OR Apache-2.0). Its Apache LICENSE matches the retained original DOMPurify license; this record uses that option only for this locked package.",
+      "metadata": {
+        "path": "third-party/licenses/dompurify-3.4.17-package.json",
+        "sha256": "e6235e2a233d3f5550e2be3bf826a39f4ff5180a710779c1e16dcdf4b9eb20b9"
+      },
+      "notices": [
+        {
+          "license": "Apache-2.0",
+          "path": "client/vendor/markdown/LICENSE.dompurify",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        }
+      ]
+    },
+    {
+      "lock": "hub-frontend/package-lock.json",
+      "package": "node_modules/duck",
+      "version": "0.1.12",
+      "declaredLicense": "BSD",
+      "resolved": "https://registry.npmjs.org/duck/-/duck-0.1.12.tgz",
+      "integrity": "sha512-wkctla1O6VfP89gQ+J/yDesM0S7B7XLXjKGzXxMDVFg7uEn706niAtyYovKbyq1oT9YwDcly721/iUWoc8MVRg==",
+      "licenses": [
+        "BSD-2-Clause"
+      ],
+      "reviewBasis": "The exact npm package declares BSD; its original LICENSE contains the two redistribution conditions and disclaimer retained here.",
+      "metadata": {
+        "path": "third-party/licenses/duck-0.1.12-package.json",
+        "sha256": "e0f9cf20de14c69ac18db77a34c2c485f6a677e15b2076b997249e70e0b39eae"
+      },
+      "notices": [
+        {
+          "license": "BSD-2-Clause",
+          "path": "third-party/licenses/duck-0.1.12-LICENSE.txt",
+          "sha256": "6663bbd049205d38a496ccacb412a151980b444627d38de218b3b809aef330f1"
+        }
+      ]
+    },
+    {
+      "lock": "hub-frontend/package-lock.json",
+      "package": "node_modules/jszip",
+      "version": "3.10.1",
+      "declaredLicense": "(MIT OR GPL-3.0-or-later)",
+      "resolved": "https://registry.npmjs.org/jszip/-/jszip-3.10.1.tgz",
+      "integrity": "sha512-xXDvecyTpGLrqFrvkrUSoxxfJI5AH7U8zxxtVclpsUtMCq4JQ290LY8AW5c7Ggnr/Y/oK+bQMbqK2qmtk3pN4g==",
+      "licenses": [
+        "MIT"
+      ],
+      "reviewBasis": "The exact npm LICENSE.markdown expressly offers MIT or GPLv3 at the recipient's choice; this record uses MIT and retains the complete original dual-license text.",
+      "metadata": {
+        "path": "third-party/licenses/jszip-3.10.1-package.json",
+        "sha256": "83569b5b130b5ec27ae281ed80420ad364baf1bf64cb82e6ac8fb891e1b4ec4c"
+      },
+      "notices": [
+        {
+          "license": "MIT",
+          "path": "third-party/licenses/jszip-3.10.1-LICENSE.txt",
+          "sha256": "566c953c6090b1218ca6217dd7359d45dde46581968586dc607d59a78af6a9c4"
+        }
+      ]
+    },
+    {
+      "lock": "hub-frontend/package-lock.json",
+      "package": "node_modules/pako",
+      "version": "1.0.11",
+      "declaredLicense": "(MIT AND Zlib)",
+      "resolved": "https://registry.npmjs.org/pako/-/pako-1.0.11.tgz",
+      "integrity": "sha512-4hLB8Py4zZce5s4yd9XzopqwVv/yGNhV1Bl8NTmCq1763HeK2+EwVTv+leGeL13Dnh2wfbqowVPXCIO0z4taYw==",
+      "licenses": [
+        "MIT",
+        "Zlib"
+      ],
+      "reviewBasis": "The exact npm package declares MIT AND Zlib. Retain the root MIT license and the complete original Zlib notice shared by all eleven lib/zlib source files; neither obligation is discarded.",
+      "metadata": {
+        "path": "third-party/licenses/pako-1.0.11-package.json",
+        "sha256": "0014f350a6834ed6a2d1211e0a2e3aa471cb426edf63379c785f9647ea2b4e01"
+      },
+      "notices": [
+        {
+          "license": "MIT",
+          "path": "third-party/licenses/pako-1.0.11-MIT-LICENSE.txt",
+          "sha256": "a04665b3b2de56c66730c1f720f528175739e4104f79073614aa611da1e85539"
+        },
+        {
+          "license": "Zlib",
+          "path": "third-party/licenses/pako-1.0.11-Zlib-NOTICE.txt",
+          "sha256": "170d7d544d380b38d5f76ab5eda29475b44ef537f4564163d6d9bece85c51c13"
+        }
+      ]
+    }
   ]
 }

@@ -154,11 +154,15 @@
     if (scope === 'actionable') return actionable(task, context);
     return true;
   }
+  function isRequirement(task) {
+    // Conversation execution records share the Task store, but are not work items.
+    return !['cloud-conversation', 'conversation-handoff'].includes(task.origin);
+  }
   function select(rows, filter, context) {
     const f = filter || {}, q = String(f.q || '').trim().toLowerCase();
     const priority = { critical: 0, high: 1, normal: 2, low: 3 };
     const stamp = row => new Date(row.updatedAt || row.createdAt || row.created || 0).getTime() || 0;
-    return rows.filter(task => (!f.archive || (stage(task) === 'closed') === (f.archive === 'archived')) &&
+    return rows.filter(task => isRequirement(task) && (!f.archive || (stage(task) === 'closed') === (f.archive === 'archived')) &&
       inScope(task, f.scope, context) && (!f.kind || (task.kind || 'requirement') === f.kind) &&
       (!f.priority || (task.priority || 'normal') === f.priority) && (!f.phase || column(task) === f.phase) &&
       (!f.project || String(task.projectId || '__none') === f.project) &&
@@ -208,7 +212,7 @@
     if (task.ai?.state === 'done') return { text: '成果已返回，待确认', action: '查看交付', icon: 'confirm' };
     if (phase === 'intake') return { text: canEdit(task) ? '补充目标与完成标准' : '等待相关人梳理需求', action: canEdit(task) ? '完善需求' : '查看详情', icon: 'edit' };
     if (phase === 'clarifying') return { text: canEdit(task) ? '补齐背景与相关材料' : '等待相关人补充材料', action: canEdit(task) ? '完善需求' : '查看详情', icon: 'edit' };
-    if (phase === 'ready') return { text: canArrange ? '安排自己、同事或 AI 执行' : '等待负责人安排执行', action: canArrange ? (task.readOnly ? '接手并安排执行' : '安排执行') : '查看进展', icon: 'assign' };
+    if (phase === 'ready') return { text: canArrange ? '安排自己、同事或 AI 执行' : '等待负责人安排执行', action: canArrange ? '安排执行' : '查看进展', icon: 'assign' };
     return { text: actionable(task, context) ? '更新进展，完成后提交成果' : '跟进进展与交付结果', action: '查看进展', icon: 'progress' };
   }
   function canEdit(task) {
@@ -319,7 +323,7 @@
     return { action, patch };
   }
   return { lanes, columns, priorities, sorts, defaults, viewSettings, kinds, scopes, scopeOptions, normalizeScope, content, displayNote, stage, column,
-    day, timeInfo, dateTimestamp, overdue, blocked, roles, approval, canReview, approvalActionable, waitingOn, actionable, inScope, select, owner, nextStep,
+    day, timeInfo, dateTimestamp, overdue, blocked, roles, approval, canReview, approvalActionable, waitingOn, actionable, inScope, isRequirement, select, owner, nextStep,
     canEdit, canManageMaterials, canSubmitReview, canManageAutomation, canTriage, executing, maintenance,
     canArchive, canDelete, canOpenConversation, editPatch, stagePatch, resolveStageMove };
 });

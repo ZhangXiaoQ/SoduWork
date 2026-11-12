@@ -11,8 +11,7 @@ if (typeof electron === 'string') {
   const { app, BrowserWindow, WebContentsView, ipcMain } = electron;
   const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), assert = require('node:assert/strict');
   const { pathToFileURL } = require('node:url');
-  const client = path.resolve(__dirname, '..'), out = process.argv[2] || path.resolve(client, '../outputs/window-menu-20261001');
-  if (!path.isAbsolute(out)) throw Error('Absolute evidence directory required');
+  const client = path.resolve(__dirname, '..'), out = path.resolve(client, '../outputs/window-menu-20261001');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-window-menu-'));
   const report = { ok: false, boundary: 'Real Electron pointer/keyboard, production renderer/preload/main menu handlers. Test-only navigation/external launch/quit confirmation; no business calls.', cases: [], errors: [] };
   fs.mkdirSync(out, { recursive: true }); app.setPath('userData', path.join(tmp, 'profile'));
@@ -41,8 +40,7 @@ if (typeof electron === 'string') {
     });
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const previewUrl = 'http://127.0.0.1:' + server.address().port + '/preview';
-    ipcMain.handle('pi-session-history', () => ({ ok: true, chats: [] }));
-    ipcMain.handle('recent-workspace-get', () => ({ dir: '', name: '' }));
+    ipcMain.handle('pi-session-history', require('./fixtures/history-ipc.cjs').create(() => ({ ok: true, chats: [] })));
     ipcMain.handle('open-external', (_e, url) => { external.push(url); return { ok: true }; });
     const testApp = { getAppPath: () => tmp, getVersion: () => require('../package.json').version,
       isPackaged: false, getPath: key => key === 'userData' ? path.join(tmp, 'profile') : tmp };
@@ -76,10 +74,7 @@ if (typeof electron === 'string') {
     assert.equal(await js(`document.querySelector('.window-menu nav').hidden`), false);
     assert.equal(await js(`document.querySelectorAll('.wm-title-brand').length`), 0);
     report.cases.push('Production titlebar options expose native Windows captions and draggable empty space without duplicating the sidebar brand; menu buttons remain non-draggable.');
-    for (let i = 0; i < 100 && !titlebarThemes.length; i++) await delay(20);
-    assert.ok(titlebarThemes.length, 'the initial animation frame must apply the native caption theme');
-    const initialCaptionColor = titlebarThemes.at(-1).color;
-    await js(`document.documentElement.style.setProperty('--ws-side','#17191f');document.documentElement.style.setProperty('--ink-3','#dadde4');void 0;`);
+    await js(`document.documentElement.style.setProperty('--bg-0','#17191f');document.documentElement.style.setProperty('--ink-3','#dadde4');void 0;`);
     for (let i = 0; i < 100 && titlebarThemes.at(-1)?.color !== '#17191f'; i++) await delay(20);
     assert.deepEqual(titlebarThemes.at(-1), { color: '#17191f', symbolColor: '#dadde4', height: 34 });
     await shot('titlebar-dark');

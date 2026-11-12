@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app import automation_models as am, models
 from app.db import Base
 from app.services import conversation_turns, delivery_manifest
+from tests.sqlite_schema import create_fresh_sqlite_schema
 
 
 class _Base(unittest.IsolatedAsyncioTestCase):
@@ -20,7 +21,7 @@ class _Base(unittest.IsolatedAsyncioTestCase):
         engine = create_async_engine("sqlite+aiosqlite:///:memory:")
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         async with engine.begin() as connection:
-            await connection.run_sync(lambda conn: Base.metadata.create_all(conn))
+            await create_fresh_sqlite_schema(connection, Base.metadata)
         session = sessions()
         await session.__aenter__()
         session.add(models.Client(id="device-owner", name="本机", user_ref="u-exec"))

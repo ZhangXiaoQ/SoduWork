@@ -2,6 +2,7 @@
 (function (global) {
   'use strict';
   const ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17H6a4 4 0 0 1-.5-8 6.5 6.5 0 0 1 12.4-1A4.5 4.5 0 0 1 18 17h-1M12 20V10m-3 3 3-3 3 3"/></svg>';
+  const PC_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/></svg>';
   const esc = value => String(value ?? '').replace(/[&<>"']/g, x => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[x]));
   const size = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.ceil(n / 1024) + ' KB';
   const labels = { preparing: '正在准备交接', uploading: '正在上传工作文件', prepared: '已准备好交接',
@@ -17,15 +18,21 @@
     if (context !== undefined) root.dataset.executionSessionReady = context?.ref ? 'true' : 'false';
     const ready = root.dataset.executionSessionReady === 'true';
     const transitioning = !!value && value.phase !== 'committed';
-    const cloud = value?.phase === 'committed';
+    const personal = value?.target?.runnerKind === 'work-computer';
+    const committed = value?.phase === 'committed';
+    const cloud = committed && !personal;
     global.WorkComposer?.syncExecutionMenu?.(root, cloud ? 'cloud' : 'local', !ready || Boolean(snapshot?.runtimeSwitching),
       context === undefined ? undefined : ownerScope() + ':' + (context?.ref || ''));
+    if (personal) root.querySelectorAll('[data-execution-menu]').forEach(button => {
+      button.setAttribute('aria-label', '执行位置：我的电脑');
+      button.title = '我的电脑执行，点击查看执行位置';
+    });
     root.querySelectorAll('[data-chat-execution]').forEach(control => {
       const selected = control.dataset.chatExecution === (cloud ? 'cloud' : 'local');
       control.classList.toggle('on', selected);
       control.setAttribute('aria-checked', String(selected)); control.setAttribute('aria-pressed', String(selected));
       control.disabled = !ready || Boolean(snapshot?.runtimeSwitching) || (cloud && control.dataset.chatExecution === 'local' && ['streaming', 'running', 'queued'].includes(snapshot?.status));
-      control.title = control.dataset.chatExecution === 'cloud'
+      control.title = personal ? '当前会话在我的电脑执行，点击查看状态' : control.dataset.chatExecution === 'cloud'
         ? (cloud ? '当前会话在云端执行，点击查看状态' : value ? labels[value.phase] || '查看云端交接' : '转到云端继续')
         : cloud ? '将已完成的成果带到新的本机会话' : transitioning ? '查看并撤销云端交接' : '本机执行';
     });
@@ -35,19 +42,20 @@
       const ready = button.dataset.sessionReady === 'true';
       button.hidden = !value && !ready;
       button.disabled = !ready || Boolean(snapshot?.runtimeSwitching);
-      const name = value ? (value.entryKind === 'cloud' ? '云端会话' : '查看云端交接') : '转到云端';
-      button.querySelector('span').textContent = value?.pendingApprovals ? '云端待审批' : value?.outputError ? '云端成果待同步' : value?.historyGap ? '云端记录待核对' : value ? labels[value.phase] || name : name;
+      const name = personal ? '我的电脑会话' : value ? (value.entryKind === 'cloud' ? '云端会话' : '查看云端交接') : '转到云端';
+      const place = personal ? '电脑' : '云端';
+      button.querySelector('span').textContent = value?.pendingApprovals ? place + '待审批' : value?.outputError ? place + '成果待同步' : value?.historyGap ? place + '记录待核对' : personal && committed ? name : value ? labels[value.phase] || name : name;
       button.title = value
-        ? (value.target?.name ? `当前会话在云端执行，执行机：${value.target.name}` : '当前会话在云端执行，执行机由系统自动选择')
+        ? (personal ? `当前会话在我的电脑执行：${value.target.runnerName || value.target.name || value.target.host || '我的电脑'}` : value.target?.name ? `当前会话在云端执行，执行机：${value.target.name}` : '当前会话在云端执行，执行机由系统自动选择')
         : '将当前任务、工作记录与文件交给云端继续执行';
       button.setAttribute('aria-label', name);
-      button.classList.toggle('is-cloud', Boolean(value));
+      button.classList.toggle('is-cloud', Boolean(value) && !personal);
     }
     const menu = root.querySelector('[data-chat-cloud]');
     if (menu) {
       menu.hidden = !value && !ready;
       menu.disabled = !ready || Boolean(snapshot?.runtimeSwitching);
-      menu.querySelector('span').textContent = value ? (value.entryKind === 'cloud' ? '云端会话' : '查看云端交接') : '转到云端';
+      menu.querySelector('span').textContent = personal ? '我的电脑会话' : value ? (value.entryKind === 'cloud' ? '云端会话' : '查看云端交接') : '转到云端';
     }
   }
   // Both confirmations use locally defined markup; server values are rendered
@@ -131,16 +139,18 @@
         : '工作记录与文件一起交接，由 SoduWork 自动安排云端服务器。';
       if (value.handoff) {
         const record = value.handoff; phase = record.phase;
+        const personal = record.target?.runnerKind === 'work-computer';
         form.querySelector('footer [data-cloud-close]').textContent = '关闭';
         if (record.entryKind === 'cloud' || phase === 'committed') {
-          dialog.querySelector('#ncloudTitle').textContent = '云端会话';
-          dialog.querySelector('[data-cloud-intro]').textContent = value.service?.local
+          dialog.querySelector('#ncloudTitle').textContent = personal ? '我的电脑会话' : '云端会话';
+          dialog.querySelector('[data-cloud-intro]').textContent = personal
+            ? '会话在所选的本人电脑执行，请保持该电脑的 SoduWork 客户端在线。' : value.service?.local
             ? '会话由远程服务器执行。当前后台在本机，请保持本机后台在线。' : 'SoduWork 已自动安排远程服务器执行。';
         }
-        body.innerHTML = '<section class="ncloud-receipt-card"><div class="ncloud-receipt">' + ICON + '<strong>' + esc(labels[phase] || phase) + '</strong></div>' +
-          '<p class="ncloud-target" translate="no">' + esc(record.target?.name || '远程执行机') + '</p>' +
+        body.innerHTML = '<section class="ncloud-receipt-card"><div class="ncloud-receipt">' + (personal ? PC_ICON : ICON) + '<strong>' + esc(personal && phase === 'committed' ? '我的电脑会话' : labels[phase] || phase) + '</strong></div>' +
+          '<p class="ncloud-target" translate="no">' + esc(record.target?.runnerName || record.target?.name || record.target?.host || '远程执行机') + '</p>' +
           '<p class="ncloud-muted">' + (phase === 'committed'
-            ? '继续在当前对话中发送消息和查看成果。执行位置保持在云端，权限由云端环境管理。'
+            ? (personal ? '继续在当前对话中发送消息和查看成果。执行位置保持在所选的本人电脑，权限由该电脑的执行环境管理。' : '继续在当前对话中发送消息和查看成果。执行位置保持在云端，权限由云端环境管理。')
             : phase === 'aborted' ? '交接已撤销，可以继续本地对话。'
               : record.accepted ? '云端已受理，会自动继续处理。可关闭客户端，之后重新打开查看进度。'
                 : '本地执行已暂停。若网络中断，可核对原交接回执；未确认前不会在两台机器上同时执行。') + '</p>' +

@@ -21,10 +21,10 @@
   };
   function models(mcp) {
     const native=entries().filter(x=>x.added);
-    const nativeFeishu=native.some(x=>x.key==='feishu');
+    const nativeFeishu=native.find(x=>x.key==='feishu');
     return [
       ...native.map(item=>({kind:'native',key:'native:'+item.key,item,name:item.label,description:item.description,source:'本机'})),
-      ...(mcp.personal||[]).filter(x=>!(nativeFeishu&&String(x.id).startsWith('soduwork-feishu-'))).map(item=>({kind:'personal',key:'personal:'+item.id,item,name:item.name,description:item.description,source:item.builtIn?'系统提供 · 本机':'本机'})),
+      ...(mcp.personal||[]).filter(x=>!(nativeFeishu&&(platform()?.ownsRegistration?.(nativeFeishu,x) ?? String(x.id).startsWith('soduwork-feishu-')))).map(item=>({kind:'personal',key:'personal:'+item.id,item,name:item.name,description:item.description,source:item.builtIn?'系统提供 · 本机':'本机'})),
       ...(mcp.company||[]).filter(x=>(mcp.enabledCompany||[]).includes(x.name)).map(item=>({kind:'company',key:'company:'+item.id,item,name:item.name,description:item.description,source:'企业提供'+(item.type==='http'?'':' · 本机')})),
     ];
   }
@@ -53,7 +53,15 @@
     el.addEventListener('keydown',e=>{if(e.key==='Escape'&&el.open){e.stopPropagation();el.open=false;summary.focus();}});
     return{el,body};
   }
-  function nativeContext(ctx){return{openModal:ctx.openModal,closeModal:ctx.closeModal,onChanged:ctx.onPlatformChanged,onConnectionChanged:ctx.onPlatformConnectionChanged,isCurrent:ctx.isCurrent};}
+  function nativeContext(ctx){return{openModal:ctx.openModal,closeModal:ctx.closeModal,onChanged:ctx.onPlatformChanged,onConnectionChanged:ctx.onPlatformConnectionChanged,isCurrent:ctx.isCurrent,
+    async manageConflict(id,active) {
+      if (!active()) return;
+      await ctx.onPlatformConnectionChanged?.();
+      if (!active()) return;
+      const row = ctx.getMcp().personal?.find(item => item.id === id && String(item.name).toLowerCase() === 'feishu');
+      if (!row || row.builtIn || row.canEdit === false) throw Error('连接列表已变化，请刷新后再管理同名连接');
+      return ctx.openMcpEditor(row,null,{editName:true});
+    }};}
   function makeRow(model,ctx,actions) {
     const row=text('article','cap-template cap-mcp-card connector-connection-row');row.dataset.connectionKey=model.key;
     const latest=()=>ctx.isCurrent?.()===false?null:findModel(ctx,model.key);

@@ -77,7 +77,7 @@ test('scoped nested packages are inventoried separately', t => {
 });
 test('changed license text fails source gate; CRLF conversion alone is accepted', t => {
   const root = temp(t), original = JSON.parse(fs.readFileSync(path.join(ROOT, 'third-party/manifest.json')));
-  for (const name of [...original.notices.map(x => x.path), ...original.vendored.map(x => x.path), ...(original.binaryVendored || []).map(x => x.path), ...original.locks, 'client/package.json', 'third-party/manifest.json', ...original.skillNotices.flatMap(x => ['skills/'+x+'/LICENSE', 'skills/'+x+'/UPSTREAM.md'])]) write(root, name, fs.readFileSync(path.join(ROOT, name)));
+  for (const name of [...original.notices.map(x => x.path), ...original.vendored.map(x => x.path), ...(original.binaryVendored || []).map(x => x.path), ...(original.lockLicenseReviews || []).flatMap(row => [row.metadata.path, ...row.notices.map(entry => entry.path)]), ...original.locks, 'client/package.json', 'third-party/manifest.json', ...original.skillNotices.flatMap(x => ['skills/'+x+'/LICENSE', 'skills/'+x+'/UPSTREAM.md'])]) write(root, name, fs.readFileSync(path.join(ROOT, name)));
   const sourceInventory = JSON.parse(fs.readFileSync(path.join(ROOT, 'third-party/source-files.json')));
   for (const name of new Set(['third-party/source-files.json', ...sourceInventory.components.flatMap(row => [...row.files, ...row.notices].map(entry => entry.path))])) {
     write(root, name, fs.readFileSync(path.join(ROOT, name)));

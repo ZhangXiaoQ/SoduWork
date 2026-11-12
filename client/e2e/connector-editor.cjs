@@ -1,6 +1,6 @@
 'use strict';
 const {app,BrowserWindow}=require('electron'),fs=require('fs'),path=require('path'),assert=require('node:assert/strict');
-const out=path.resolve(__dirname,'../../outputs/connector-foundation-20261017/browser');fs.mkdirSync(out,{recursive:true});app.setPath('userData',path.join(out,'profile'));app.disableHardwareAcceleration();
+const out=path.resolve(process.argv[2] || path.join(__dirname,'../../outputs/connector-foundation-20261017/browser'));fs.mkdirSync(out,{recursive:true});app.setPath('userData',path.join(out,'profile'));app.disableHardwareAcceleration();
 let win;const results=[];const sleep=ms=>new Promise(r=>setTimeout(r,ms));const js=x=>win.webContents.executeJavaScript(x,true);
 const wait=async x=>{for(let i=0;i<100;i++){if(await js(x))return;await sleep(30)}throw Error('Timeout '+x)};
 const click=async selector=>{if(selector.startsWith('[data-template=')&&!await js('!!document.querySelector('+JSON.stringify(selector)+')')){await js('document.querySelector("#capAddButton").click()');await wait('!!document.querySelector("[data-connector-library]")');}return js('document.querySelector('+JSON.stringify(selector)+').click()');};
@@ -44,5 +44,37 @@ app.whenReady().then(async()=>{try{
  assert.equal(await js('apiOAuthSent.provider'),'api');assert.equal(await js('apiOAuthSent.server.apiDefinition.id'),oauthDef.id);assert.equal(await js('saved[3].oauth.provider'),'api');assert.equal(await js('saved[3].env.AUTH_AUTH_ACCESS_TOKEN'),'');results.push('generic OAuth uses document and binding without renderer token');
  await open();
  for(const [w,h]of [[390,740],[900,640]]){win.setContentSize(w,h);await sleep(80);const g=await js('(()=>{const r=document.querySelector(".cap-connector-editor").getBoundingClientRect();return{left:r.left,right:r.right,top:r.top,bottom:r.bottom,w:innerWidth,h:innerHeight,scroll:document.documentElement.scrollWidth}})()');assert.ok(g.left>=0&&g.right<=g.w+1&&g.top>=0&&g.bottom<=g.h+1&&g.scroll<=g.w+1,JSON.stringify(g));await shot('client-'+w);results.push('layout '+w)}
+ await click('#capModalCancel');
+ const definition=require('../../skills/mcp-tools/connectors/providers/redis.json');
+ const redis={key:'connector-redis',name:'Redis',configurable:true,template:{command:'soduwork-connector'},connectionFields:definition.fields};
+ await js('originalEditorOpen(apiEditorContext,null,'+JSON.stringify(redis)+')');
+ const field=key=>'[data-connector-field="'+key+'"]';
+ assert.equal(await js('document.querySelector('+JSON.stringify(field('REDIS_PORT'))+').value'),'6379');
+ await fill(field('REDIS_HOST'),'127.0.0.1');await fill(field('REDIS_PORT'),'16379');
+ const tls=field('REDIS_TLS');assert.equal(await js('document.querySelector('+JSON.stringify(tls)+').checked'),true);
+ const point=await js('(()=>{const n=document.querySelector('+JSON.stringify(tls)+');n.scrollIntoView({block:"center"});const r=n.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()');
+ win.webContents.sendInputEvent({type:'mouseDown',button:'left',clickCount:1,...point});
+ win.webContents.sendInputEvent({type:'mouseUp',button:'left',clickCount:1,...point});
+ await wait('!document.querySelector('+JSON.stringify(tls)+').checked');
+ await shot('redis-local');
+ await click('#capMcpSave');await wait('saved.length===5');
+ assert.equal(await js('saved[4].env.REDIS_TLS'),'false');assert.equal(await js('saved[4].env.REDIS_PORT'),'16379');
+ results.push('visible catalog port and native Redis TLS input persist through probe and save');
+ for(const name of ['platform-plugin-connect.js','platform-connection-directory.js']){
+  await js(fs.readFileSync(path.join(__dirname,'../components/panels',name),'utf8'));
+ }
+ await js(`window.conflictingRow={id:'other-personal',name:'feishu',type:'http',url:'https://fixture.invalid/mcp',enabled:true,canEdit:true};
+ SoduWorkAPI.myMcpServers=async()=>({personal:[conflictingRow],company:[],enabledCompany:[]});
+ const platformState=async key=>({ok:true,provider:key,state:key==='feishu'?'error':'needs_setup',
+   installed:true,added:key==='feishu',conflictId:key==='feishu'?conflictingRow.id:''});
+ soduWorkAPI.platformConnections={status:platformState,refresh:platformState};
+ SoduWorkPlatformDirectory.reset();openConnector();void 0`);
+ await wait('!!document.querySelector(\'[data-connection-manage="native:feishu"]\')');
+ await click('[data-connection-manage="native:feishu"]');
+ await wait('document.querySelector("#capPlatformNote + button")?.hidden===false');
+ await click('#capPlatformNote + button');
+ await wait('document.activeElement.id==="capMcpName"');assert.equal(await js('document.activeElement.value'),'feishu');
+ assert.equal(await js('saved.length'),5);
+ results.push('foreign Feishu registration opens its existing editor with the name focused and no implicit write');
  fs.writeFileSync(path.join(out,'results.json'),JSON.stringify({ok:true,results},null,2));console.log(JSON.stringify({ok:true,results}));app.exit(0);
 }catch(e){console.error(e.stack);if(win)console.error(await js('({errors:window.errors,body:document.body.innerText.slice(0,700)})'));if(win)await shot('failure');app.exit(1)}});

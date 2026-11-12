@@ -77,11 +77,13 @@
     const width = viewport?.width || window.innerWidth, height = viewport?.height || window.innerHeight;
     const bottomEdge = topEdge + height, rightEdge = leftEdge + width;
     if (rect.bottom < topEdge || rect.top > bottomEdge || rect.right < leftEdge || rect.left > rightEdge) { close(false); return; }
-    const menuWidth = Math.min(Math.max(rect.width, 240), width - margin * 2);
+    const compactTime = record.select.dataset.forwardSelect === 'compact-time';
+    const menuWidth = Math.min(Math.max(rect.width, compactTime ? 96 : 240), width - margin * 2);
     popup.style.width = menuWidth + 'px';
     const below = bottomEdge - rect.bottom - gap - margin, above = rect.top - topEdge - gap - margin;
-    const upward = below < Math.min(260, popup.scrollHeight) && above > below;
-    popup.style.maxHeight = Math.max(96, Math.min(340, upward ? above : below)) + 'px';
+    const popupLimit = compactTime ? 220 : 340;
+    const upward = below < Math.min(popupLimit, popup.scrollHeight) && above > below;
+    popup.style.maxHeight = Math.max(96, Math.min(popupLimit, upward ? above : below)) + 'px';
     popup.style.left = Math.max(leftEdge + margin, Math.min(rect.left, rightEdge - menuWidth - margin)) + 'px';
     const actualHeight = popup.getBoundingClientRect().height;
     popup.style.top = Math.max(topEdge + margin, upward ? rect.top - gap - actualHeight : Math.min(rect.bottom + gap, bottomEdge - actualHeight - margin)) + 'px';
@@ -93,11 +95,11 @@
       const current = row.index === index;
       row.node.classList.toggle('is-active', current);
       if (current) {
-        setAttr(opened.search, 'aria-activedescendant', row.node.id);
+        setAttr(opened.compactTime ? opened.list : opened.search, 'aria-activedescendant', row.node.id);
         if (reveal) row.node.scrollIntoView({block: 'nearest'});
       }
     }
-    if (index < 0) setAttr(opened.search, 'aria-activedescendant', null);
+    if (index < 0) setAttr(opened.compactTime ? opened.list : opened.search, 'aria-activedescendant', null);
   }
   function renderOptions() {
     if (!opened) return;
@@ -158,7 +160,7 @@
     else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(true); }
     else if (event.key === 'Tab') {
       event.preventDefault(); event.stopPropagation();
-      const trigger = opened.record.trigger, scope = trigger.closest('[role="dialog"],.fwd-pop') || opened.record.root;
+      const trigger = opened.record.trigger, scope = trigger.closest('[role="dialog"],.fwd-pop,form,.sch-form') || opened.record.root;
       const nodes = Array.from(scope.querySelectorAll('button,input,textarea,select,summary,a[href],[tabindex]'))
         .filter(node => !node.disabled && node.tabIndex >= 0 && node.getClientRects().length);
       const index = nodes.indexOf(trigger), next = nodes[(index + (event.shiftKey ? -1 : 1) + nodes.length) % nodes.length];
@@ -170,7 +172,8 @@
     close(false);
     const popup = document.createElement('div'), search = document.createElement('input'), list = document.createElement('div');
     const id = 'fwd-select-menu-' + (++nextId);
-    popup.className = 'fwd-select-popup'; popup.id = id;
+    const compactTime = record.select.dataset.forwardSelect === 'compact-time';
+    popup.className = 'fwd-select-popup' + (compactTime ? ' fwd-select-compact-time' : ''); popup.id = id;
     const style = getComputedStyle(record.trigger);
     for (const key of themeKeys) popup.style.setProperty(key, style.getPropertyValue(key));
     popup.style.fontSize = style.fontSize; popup.style.fontFamily = style.fontFamily;
@@ -182,12 +185,17 @@
     popup.append(search, list); document.body.appendChild(popup);
     const dialog = record.trigger.closest('[role="dialog"]'), owns = dialog?.getAttribute('aria-owns');
     if (dialog) setAttr(dialog, 'aria-owns', [owns, id].filter(Boolean).join(' '));
-    opened = {record, popup, search, list, id, rows: [], active: record.select.selectedIndex, dialog, owns};
+    opened = {record, popup, search, list, id, rows: [], active: record.select.selectedIndex, dialog, owns, compactTime};
     setAttr(record.trigger, 'aria-expanded', 'true'); setAttr(record.trigger, 'aria-controls', list.id);
-    search.value = initial;
+    search.value = compactTime ? '' : initial;
     search.addEventListener('input', () => { renderOptions(); position(); });
     popup.addEventListener('keydown', keydown);
-    renderOptions(); position(); search.focus({preventScroll: true});
+    renderOptions(); position();
+    if (compactTime) {
+      list.tabIndex = -1;
+      list.focus({preventScroll: true});
+      activate(opened.active);
+    } else search.focus({preventScroll: true});
     window.addEventListener('resize', position); window.addEventListener('scroll', onScroll, true);
     document.addEventListener('pointerdown', outside, true); document.addEventListener('focusin', focusOutside, true);
     global.visualViewport?.addEventListener('resize', position);

@@ -5,7 +5,7 @@ import logging
 import re
 from types import SimpleNamespace
 
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
@@ -1416,11 +1416,14 @@ async def ai_session_task(
     ref: str = "",
     client: Client = Depends(current_client),
     session: AsyncSession = Depends(get_session),
+    limit: int = Query(default=400, ge=1, le=1000),
 ):
     """Behavior and constraints for this operation."""
     import asyncio as _aio
 
     from ..services import ai_exec, execution_sessions
+    if not isinstance(limit, int):
+        limit = 400
     t = await _view_task(session, client, tid)
     from ..services import task_access
 
@@ -1462,9 +1465,9 @@ async def ai_session_task(
         # New Runners push events; older Runners and backend-local execution use read-through persistence during upgrades.
         await execution_sessions.ingest_live_snapshot(session, t, ref, live, d)
         await session.commit()
-        cached = await execution_sessions.read_task(session, tid, ref, int(since or 0))
+        cached = await execution_sessions.read_task(session, tid, ref, int(since or 0), limit=limit)
         return with_conversation_access(cached or live)
-    cached = await execution_sessions.read_task(session, tid, ref, int(since or 0))
+    cached = await execution_sessions.read_task(session, tid, ref, int(since or 0), limit=limit)
     if cached is not None:
         cached["liveError"] = live.get("error") or "执行机当前不在线"
         cached["canStop"] = False
@@ -1529,6 +1532,20 @@ async def ai_say_task(
             raise HTTPException(409, str(exc)) from exc
     from ..services import conversation_turn_files
     turn_files, file_manifest = conversation_turn_files.decode(body.get("files", []))
+    from ..services import conversation_turn_plugins
+    from ..services import conversation_turn_skills
+    turn_skills = conversation_turn_skills.normalize(body.get("skills"))
+    if turn_skills:
+        if body.get("messageId") is None:
+            raise HTTPException(422, "技能续聊需要消息回执编号")
+        await conversation_turn_skills.validate(session, client, handoff, ref, turn_skills)
+        ctx = {**ctx, "_turnSkills": turn_skills}
+    turn_plugins = conversation_turn_plugins.normalize(body.get("plugins"))
+    if turn_plugins:
+        if body.get("messageId") is None:
+            raise HTTPException(422, "插件续聊需要消息回执编号")
+        await conversation_turn_plugins.validate(session, client, handoff, ref, turn_plugins)
+        ctx = {**ctx, "_turnPlugins": turn_plugins}
     if turn_files:
         if (not handoff and not controlled_turn) or body.get("messageId") is None:
             raise HTTPException(409, "追加文件需要支持回执的远程会话；需求材料请从需求入口提交")

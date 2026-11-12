@@ -47,7 +47,8 @@ test('only explicit Hub claim capability makes a read-only assigned requirement 
       {...task,status:'doing'},{...task,triageStage:'intake'},{...task,archivedAt:1},
       {...task,workRouting:{conversationTurn:{state:'running'}}}]) assert.equal(f.api.eligible(item),false);
   assert.equal(f.window.ChatTaskController.isPickableTask(task),false,'generic execution stays owner-only');
-  assert.match(f.window.RequirementsView.actions(task,{}),/接手并安排执行/);
+  assert.match(f.window.RequirementsView.actions(task,{}),/安排执行/);
+  assert.doesNotMatch(f.window.RequirementsView.actions(task,{}),/接手并安排执行/);
   const projected = TaskSync.applyOperations([task], [{id:task.id,kind:'patch',data:{title:'New title'}}])[0];
   assert.equal(projected.canClaimExecution,true);
   assert.equal(Object.hasOwn(TaskSync.taskPayload(task),'canClaimExecution'),false);

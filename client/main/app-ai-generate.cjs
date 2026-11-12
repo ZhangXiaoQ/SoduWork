@@ -108,7 +108,9 @@ function create({ app, authenticatedIdentityOf, authorizeAI, fetchImpl = global.
         if (!selection?.ok || !selection.model || selection.model.modality === 'image')
           return failure(selection?.code === 'TOKEN_QUOTA_EXCEEDED' ? selection.code : 'APP_AI_MODEL_UNAVAILABLE', '所选文字模型当前不可用，请检查模型或额度');
         const model = selection.model;
-        await authorizeAI(identity, owner, { model: model.id, provider: model.quotaProvider || '' });
+        // Inline app calls lack Pi's signed per-call receipt path, so retain
+        // strict account admission rather than borrowing Pi's funding scope.
+        await authorizeAI(identity, owner);
         await current();
         if (controller.signal.aborted) return;
         const body = payload(model, params);

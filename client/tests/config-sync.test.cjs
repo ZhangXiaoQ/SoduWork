@@ -36,7 +36,10 @@ test('store：启动读入 localStorage 即剥离存量污染', () => {
 test('store：hydrate 回灌合并前剥离后台下行值', () => {
   const store = lifecycle();
   const hydrate = store.slice(store.indexOf('_loadConfig(revision)'), store.indexOf('hydrate(force'));
-  assert.match(hydrate, /stripServerOwned\(apiCfg\);\s*\r?\n\s*Object\.assign\(this\._cfg, apiCfg\);/);
+  assert.match(hydrate, /const incoming = stripServerOwned\(\{ \.\.\.apiCfg \}\);/,
+    'hydrate must sanitize a copied server configuration');
+  assert.match(hydrate, /Object\.assign\(this\._cfg, incoming\);/,
+    'hydrate must merge only the sanitized configuration copy');
   // Strip server-owned fields from persisted snapshots to clean legacy contamination.
   assert.match(hydrate, /localStorage\.setItem\(LS_CFG, JSON\.stringify\(stripServerOwned\(this\._cfg\)\)\)/);
 });
@@ -55,7 +58,10 @@ test('store：WS config.patch 下发合并前剥离', () => {
   const store = read('core', 'store.js');
   assert.match(store, /this\._applyConfigPatch\(ev\.patch\)/);
   const patch = lifecycle().slice(lifecycle().indexOf('_applyConfigPatch(patch)'), lifecycle().indexOf('initLocal()'));
-  assert.match(patch, /stripServerOwned\(patch\); Object\.assign\(this\._cfg, patch\);/, 'config.patch 合并前剥离');
+  assert.match(patch, /const incoming = stripServerOwned\(\{ \.\.\.patch \}\);/,
+    'config.patch must sanitize a copied server patch');
+  assert.match(patch, /Object\.assign\(this\._cfg, incoming\);/,
+    'config.patch must merge only the sanitized server patch');
 });
 
 test('store：pending 标记读取异常时保守视为「有待同步」', () => {

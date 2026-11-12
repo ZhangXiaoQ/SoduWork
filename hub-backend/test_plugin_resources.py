@@ -55,6 +55,57 @@ class PluginResourcesTests(unittest.TestCase):
         self.assertEqual(restored['resources'],resources.normalize(body['resources']))
         self.assertEqual(parsed['capabilities']['resources'],parsed['manifest']['resources'])
 
+    def test_parsed_public_package_survives_node_grants_and_personal_roundtrip(self):
+        body = draft()
+        parsed = plugin_packages.parse(plugin_drafts.build(body))
+        package = {"manifest": parsed["manifest"], "bundle": parsed["resourceBundle"],
+                   "draft": plugin_packages.personal_draft(parsed)}
+        script = r"""
+const assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path');
+const resources = require('./client/main/plugin-resources');
+const personal = require('./client/main/personal-plugins');
+const grants = require('./client/main/pi-session/plugin-grant');
+let input = ''; process.stdin.setEncoding('utf8'); process.stdin.on('data', value => input += value);
+process.stdin.on('end', async () => {
+  try {
+    const {pack, root} = JSON.parse(input), app = {getPath: () => path.join(root, 'account')};
+    const normalized = resources.normalize(pack.bundle.resources);
+    assert.equal(resources.digest(normalized), pack.bundle.digest);
+    const result = await grants.resolve({app, cwd: root, pluginIds: ['shared-fixture'], ref: 'offline',
+      identityOf: async () => ({hub: 'https://example.invalid', clientId: 'fixture', session: 'fixture'}),
+      fetchImpl: async (_url, options) => {
+        assert.equal(JSON.parse(options.body).resourceProtocol, 1);
+        return {ok: true, json: async () => ({ok: true, items: [{pluginId: 'shared-fixture',
+          key: pack.manifest.key, name: pack.manifest.name, version: pack.manifest.version,
+          context: pack.manifest.instructions, capabilities: pack.manifest.capabilities,
+          resourceBundle: pack.bundle}]})};
+      }});
+    assert.equal(result.grant, null);
+    assert.equal(result.items[0].resourceBundle, undefined);
+    const materialized = resources.materialize(normalized, root, pack.manifest.key);
+    assert.ok(result.items[0].context.includes(materialized.directory));
+    for (const item of normalized) {
+      const bytes = fs.readFileSync(path.join(materialized.directory, ...item.path.split('/')));
+      assert.equal(require('node:crypto').createHash('sha256').update(bytes).digest('hex'), item.sha256);
+      assert.equal(bytes.length, item.size);
+    }
+    const installed = personal.create(app, pack.draft).plugin;
+    const exported = personal.exportDraft(app, installed.pluginId);
+    assert.deepEqual(resources.summary(exported.resources), resources.summary(pack.draft.resources));
+    const imported = personal.create({getPath: () => path.join(root, 'second-account')}, exported).plugin;
+    assert.equal(imported.checksum, installed.checksum);
+    console.log('public parser/grant/materialization/personal roundtrip verified');
+  } catch (error) { console.error(error.stack); process.exitCode = 1; }
+});
+"""
+        with tempfile.TemporaryDirectory(prefix="soduwork-public-plugin-roundtrip-") as root:
+            result = subprocess.run(["node", "-e", script],
+                                    input=json.dumps({"pack": package, "root": root}),
+                                    text=True, encoding="utf8", capture_output=True, timeout=30,
+                                    cwd=Path(__file__).resolve().parent.parent)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("roundtrip verified", result.stdout)
+
     def test_mutated_or_missing_resource_cannot_pass_package_validation(self):
         original=plugin_drafts.build(draft())
         for mode in ('mutate','missing'):

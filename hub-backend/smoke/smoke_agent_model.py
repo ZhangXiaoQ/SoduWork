@@ -37,7 +37,7 @@ async def main():
         p = models.ModelProvider(id="gw", name="共享模型服务", base_url="http://gw.local/v1",
                                  api_key="org-key", enabled=True, kind="openai-compat")
         s.add(p)
-        for nm in ("fast-small", "big-strong", "mid", "fixture-coding-model"):
+        for nm in ("fast-small", "big-strong", "mid", "dev-coding-large-agent-soduwork"):
             s.add(models.ModelDef(id="gw:" + nm, provider_id="gw", name=nm, label=nm, enabled=True))
         box = models.Client(id="c-am", name="指定模型冒烟")
         s.add(box)
@@ -61,10 +61,21 @@ async def main():
         # An explicit per-turn model overrides the runtime preference.
         over = await model_catalog.resolve_for_agent(s, box, "pi", override="mid")
         chk("★里程碑这一环指定的仍然最大", over.get("model") == "mid", over.get("model"))
-        custom = await model_catalog.resolve_for_agent(
-            s, box, "pi", override="fixture-coding-model")
-        chk("自定义模型名称原样传递到执行配置",
-            custom.get("model") == "fixture-coding-model", custom)
+        renamed = await model_catalog.resolve_for_agent(
+            s, box, "pi", override="dev-coding-large-agent-hugengyong")
+        chk("旧模型名仍兼容执行但实际使用 SoduWork 新名",
+            renamed.get("model") == "dev-coding-large-agent-soduwork", renamed)
+
+        # Persisted preferences need the same compatibility path as explicit overrides.
+        box.agent_models = {"pi": "dev-coding-large-agent-hugengyong"}
+        await s.commit()
+        preferred = await model_catalog.resolve_for_agent(s, box, "pi")
+        chk("Stored legacy preference executes the current model without fallback",
+            preferred.get("model") == "dev-coding-large-agent-soduwork"
+            and "fellBackFrom" not in preferred, preferred)
+        await s.refresh(box)
+        chk("Resolving an alias does not rewrite the stored preference",
+            box.agent_models == {"pi": "dev-coding-large-agent-hugengyong"})
 
         # Runtime preferences remain independent of machine identity.
         chk("★同一个底座在别的机器上也认这份指定",

@@ -8,9 +8,11 @@ import json
 import os
 import tempfile
 import zipfile
+from pathlib import Path
 
 # Keep imports and every generated file away from the live database.
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///.smoke-capabilities.db"
+_fixture = tempfile.TemporaryDirectory(prefix="soduwork-smoke-capabilities-")
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///" + (Path(_fixture.name) / ".smoke.db").as_posix()
 
 from fastapi import HTTPException
 

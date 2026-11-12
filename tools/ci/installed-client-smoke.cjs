@@ -8,6 +8,7 @@ const { spawn, spawnSync } = require('node:child_process');
 const { waitForRenderer } = require('./installed-client-inspection.cjs');
 const { acceptanceTiming } = require('./installed-client-timing.cjs');
 const { connect } = require('./installed-client-cdp.cjs');
+const { secureStorageProbe } = require('./installed-client-secure-storage.cjs');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function main() {
@@ -47,9 +48,11 @@ async function main() {
   // Containers do not provide a desktop login's Chromium sandbox namespace.
   if (process.env.SODUWORK_ACCEPTANCE_CONTAINER === '1') args.push('--no-sandbox');
   // Isolated test profiles contain no user credentials. Electron's test keychain
-  // avoids interactive prompts from ad-hoc app copies; production keeps Keychain.
+  // avoids interactive prompts from ad-hoc app copies; production release checks
+  // opt into the real login Keychain through SODUWORK_MAC_REAL_KEYCHAIN.
   // https://releases.electronjs.org/pr/53790
-  if (process.platform === 'darwin') args.push('--use-mock-keychain');
+  const realKeychain = process.platform === 'darwin' && process.env.SODUWORK_MAC_REAL_KEYCHAIN === '1';
+  if (process.platform === 'darwin' && !realKeychain) args.push('--use-mock-keychain');
   const child = spawn(entry, args, { env, stdio: ['ignore', log, log],
     detached: process.platform !== 'win32', windowsHide: false });
   let launchError;
@@ -60,7 +63,7 @@ async function main() {
   const phase = name => { report.currentPhase = name; report.phases.push({ phase: name, elapsedMs: Date.now() - started }); };
   child.on('exit', (code, signal) => { report.processExit = { code, signal, elapsedMs: Date.now() - started, phase: report.currentPhase }; });
   const trace = scope => value => report.phases.push({ phase: report.currentPhase, scope, ...value });
-  if (process.platform === 'darwin') report.limitations.push(
+  if (process.platform === 'darwin' && !realKeychain) report.limitations.push(
     'Isolated macOS test uses mock Keychain; system Keychain authorization and credential migration are not certified.');
   const sockets = [];
   const timeout = setTimeout(() => child.kill(), timing.totalMs);
@@ -96,6 +99,10 @@ async function main() {
     assert.equal(report.runtimeStart.version, expectedVersion, 'Running application version differs');
     assert.equal(path.resolve(report.runtimeStart.profile).toLowerCase(), path.resolve(profile).toLowerCase(), 'Application ignored profile isolation');
     assert.equal(report.runtimeStart.packaged, true, 'Expected the actual installed application');
+    phase('secure-storage');
+    report.secureStorage = await evaluateMain('(' + secureStorageProbe.toString() + ')(' +
+      JSON.stringify(profile) + ',' + JSON.stringify(markerMode) + ')');
+    assert.equal(report.secureStorage.roundTrip, true, 'Electron safeStorage round-trip failed');
     for (const page of pages) {
       phase('renderer-connect-' + report.pages.length);
       const socket = await connect(page.webSocketDebuggerUrl, { timeoutMs: timing.commandMs, trace: trace('renderer-' + report.pages.length) }); sockets.push(socket);

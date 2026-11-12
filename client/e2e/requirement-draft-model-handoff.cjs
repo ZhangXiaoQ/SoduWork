@@ -9,7 +9,7 @@ if (typeof electron === 'string') {
     'CHROME_CRASHPAD_PIPE_NAME', 'CHROME_CRASHPAD_PIPE_HANDLE']) delete env[key];
   const child = require('node:child_process').spawnSync(electron,
     [__filename, ...process.argv.slice(2), '--disable-gpu'],
-    { env, windowsHide: true, stdio: 'inherit', timeout: 90000 });
+    { env, windowsHide: true, stdio: 'inherit', timeout: 180000 });
   if (child.error) console.error(child.error.message);
   process.exit(child.status ?? 1);
 }
@@ -28,7 +28,7 @@ fs.mkdirSync(out, { recursive: true });
 app.setPath('userData', path.join(temp, 'profile')); app.disableHardwareAcceleration();
 app.on('window-all-closed', () => {});
 let win, page;
-const report = { ok: false, cases: [], phases: [], network: [],
+const report = { ok: false, cases: [], phases: [], network: [], navigationTimings: [],
   onlyCase, workCardsSource, workStoreSource, composerControlsSource,
   boundary: 'Actual Electron and production Compose, ModelPicker, Runtime, work card and NativeChat modules; controlled public APIs, no model calls or real user data.' };
 const js = code => win.webContents.executeJavaScript(code, true)
@@ -93,6 +93,7 @@ function fixture() {
   window.delayWorkCards = false; window.pendingWorkCards = null;
   window.workCardsOverride = null;
   window.failWorkCards = false;
+  window.rejectWorkCards = false;
   window.delaySelectionSave = false; window.pendingSelectionSave = null;
   const stored = JSON.parse(localStorage.getItem('fixtureWorkArchives') || '{}');
   window.fixtureArchives = stored;
@@ -110,6 +111,7 @@ function fixture() {
   const catalogResolvers = [];
   let sessionSequence = 0;
   window.fixtureTranscript = [];
+  window.fixtureSessions = {};
   window.fixtureListeners = new Set();
   const snap = () => ({ status: 'idle', messages: structuredClone(fixtureTranscript), tools: [], usage: null });
   const model = name => ({ id: name || 'fixture-default', label: models.find(row => row.name === name)?.label || '默认模型' });
@@ -159,6 +161,7 @@ function fixture() {
         return { ok: true, card: saved };
       },
       workCards: async sessionId => {
+        if (rejectWorkCards) throw Error('Fixture IPC transport rejected');
         if (failWorkCards) return { ok: false, reason: '模拟档案读取失败' };
         if (workCardsOverride?.sessionId === sessionId) return structuredClone(workCardsOverride.result);
         calls.reads.push({ owner: fixtureOwner, sessionId }); const result = response(stored[archiveKey(sessionId)]);
@@ -188,7 +191,11 @@ function fixture() {
       },
       open: async options => {
         calls.opens.push(structuredClone(options)); const historic = options.chatId === 'history-session';
-        const started = stored[archiveKey(options.chatId)]?.started;
+        if (fixtureSessions[options.chatId]) return structuredClone(fixtureSessions[options.chatId]);
+        if (historic && !stored[archiveKey(options.chatId)]) {
+          stored[archiveKey(options.chatId)] = { cards: [], started: true }; persist();
+        }
+        const started = !historic && stored[archiveKey(options.chatId)]?.started;
         const selected = started ? 'fixture-default' : historic ? 'fixture-history' : options.modelName;
         const adapterId = started || historic ? 'pi' : options.adapterId || 'pi';
         const task = tasks.find(row => row.id === options.taskRef);
@@ -208,6 +215,9 @@ function fixture() {
 }
 function buildPage() {
   const desk = fs.readFileSync(path.join(client, 'desk.html'), 'utf8');
+  // Load the production HTML escape helper without starting the task store.
+  const escapeSource = fs.readFileSync(path.join(client, 'core/store.js'), 'utf8').match(/^const esc=.*$/m)?.[0];
+  assert.ok(escapeSource, 'production task-stream HTML escaping is available');
   const original = fs.readFileSync(path.join(__dirname, 'fixtures/workbench-annotations.html'), 'utf8');
   const required = new Set([...original.matchAll(/<script\b[^>]*src=["']([^"']+)["']/g)]
     .map(match => path.relative(client, path.resolve(__dirname, 'fixtures', match[1])).replace(/\\/g, '/')));
@@ -225,7 +235,8 @@ function buildPage() {
     'components/panels/panels-compose-draft.js', 'components/panels/work-entry-sheet.js',
     'components/panels/panels-chat-work-actions.js', 'components/panels/panels-compose-work-actions.js',
     'components/panels/chat-work-cards.js', 'components/panels/compose-surface.js',
-    'components/panels/panels-compose.js', 'components/panels/panels-compose-skills.js', 'components/panels/chat-runtime-picker.js']) required.add(file);
+    'components/panels/panels-compose.js', 'components/panels/panels-compose-skills.js', 'components/panels/chat-runtime-picker.js',
+    'components/workspace/workspace-chat-list.js', 'components/panels/task-execution-stream.js']) required.add(file);
   const scripts = [...desk.matchAll(/<script\b[^>]*src=["']([^"']+)["']/g)].map(match => match[1]).filter(file => required.has(file));
   assert.equal(scripts.length, required.size);
   const styles = [...desk.matchAll(/<link\b[^>]*href=["']([^"']+\.css)["']/g)].map(match => match[1]);
@@ -236,7 +247,7 @@ function buildPage() {
   fs.writeFileSync(page, '<!doctype html><html data-theme="azure"><head><meta charset="utf-8"><base href="' +
     pathToFileURL(client + path.sep).href + '">' + styles.map(file => '<link rel="stylesheet" href="' + url(file) + '">').join('') +
     '<style>body{margin:0;height:100vh}.compose-panel{inset:0!important;height:100vh!important;width:100vw!important}.cp-body{height:100%}#cpChat{height:100%}.nchat{height:100%}</style></head><body>' +
-    '<script>(' + fixture.toString() + ')();</script>' + scripts.map(file => '<script src="' + url(file) + '"></script>').join('') + '</body></html>');
+    '<script>' + escapeSource + '\n(' + fixture.toString() + ')();</script>' + scripts.map(file => '<script src="' + url(file) + '"></script>').join('') + '</body></html>');
 }
 async function selectRequirement() {
   await type('#cpInput', '/');
@@ -269,6 +280,9 @@ async function createWorkDraft(options) {
   return js('NativeChat.sessionInfo().sessionId');
 }
 async function reloadPage() {
+  if (!win.webContents.getURL() || win.webContents.getURL() === 'about:blank') {
+    await win.loadFile(page); return;
+  }
   const loaded = new Promise(resolve => win.webContents.once('did-finish-load', resolve));
   win.reload(); await loaded;
 }
@@ -845,6 +859,22 @@ app.whenReady().then(async () => {
     assert.equal(state.calls.opens.length, 0); assert.equal(state.calls.sends.length, 0);
     assert.equal(await js('document.querySelector("#nchatInput").value'), '档案读取失败时保留这段话');
     assert.match(await js('document.body.innerText'), /模拟档案读取失败/);
+    await js('failWorkCards=false;void 0;'); await click('[data-session-retry]');
+    await until("Boolean(document.querySelector('#wesTaskDraft #cpTitle'))", 'retry restores the original work archive');
+    assertSelection(await phase('work-only-read-retried'), 'archive retry');
+    assert.equal(await js('calls.opens.length'), 0, 'retrying an unreadable draft does not start an Agent');
+    assert.equal(await js('calls.sends.length'), 0);
+    assert.equal(await js('document.querySelector("#nchatInput").value'), '档案读取失败时保留这段话');
+  });
+  await runCase('a rejected card IPC leaves opening state and restores the same draft on retry', async () => {
+    const sessionId = await createWorkDraft(); await reloadPage();
+    await js('rejectWorkCards=true;openComposePanel({chatId:' + JSON.stringify(sessionId) + '}).catch(()=>false)');
+    assert.match(await js('document.body.innerText'), /工作卡片暂时无法读取/);
+    assert.equal(await js('calls.opens.length'), 0);
+    await js('rejectWorkCards=false;void 0;'); await click('[data-session-retry]');
+    await until("Boolean(document.querySelector('#wesTaskDraft #cpTitle'))", 'rejected IPC retry restores the form');
+    assertSelection(await phase('work-only-ipc-retried'), 'rejected IPC retry');
+    assert.equal(await js('calls.opens.length'), 0); assert.equal(await js('calls.sends.length'), 0);
   });
   await runCase('selection storage failure preserves the draft choice and blocks sending until saved', async () => {
     await createWorkDraft(); await js('failSelectionSave=true;void 0;');
@@ -905,6 +935,8 @@ app.whenReady().then(async () => {
     assert.equal(state.session.ref, 'history-ref');
     assert.deepEqual(await js('notices'), [], 'an old account save failure is not shown in the new account');
   });
+  await require('./requirement-session-navigation-cases.cjs')({ runCase, js, click, until, phase, reloadPage,
+    recordNavigation: sample => report.navigationTimings.push(sample) });
   report.ok = report.cases.length > 0 && report.cases.every(item => item.ok) && report.network.length === 0;
 }).catch(error => { report.error = error.stack; }).finally(() => {
   win?.destroy(); fs.writeFileSync(path.join(out, 'report.json'), JSON.stringify(report, null, 2));

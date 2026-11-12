@@ -79,6 +79,9 @@ async def purge():
             client = await s.get(models.Client, cid)
             if client is not None:
                 await s.delete(client)
+        runner = await s.get(am.RunnerNode, "runner-smoke-session")
+        if runner is not None:
+            await s.delete(runner)
         await s.commit()
 
 
@@ -97,6 +100,10 @@ async def main():
                                owner_client_id=CID)])
         await s.commit()
         task = await s.get(models.Task, TID)
+        # Live reads resolve executor identity from the durable registry.
+        s.add(am.RunnerNode(id="runner-smoke-session", client_id=CID,
+                           auth_state="active"))
+        await s.commit()
         await execution_sessions.record_dispatch(
             s, task, {"issueId": REF, "runnerId": "runner-smoke-session", "host": "会话测试机",
                       "agentCli": "pi", "agentCliName": "Pi", "agentCliVersion": "0.49.0",
@@ -158,6 +165,13 @@ async def main():
         chk("排队位置随实时查询持续更新到公共执行组件",
             moved and moved.get("status") == "queued"
             and moved.get("queuePosition") == 2, moved)
+        unknown = await execution_sessions.ingest_live_snapshot(
+            s, queued_task, REF_QUEUE, {
+                "ok": True, "runnerId": "unregistered-runner", "status": "queued",
+                "queuePosition": 1, "items": [], "seq": 0,
+            })
+        chk("Unregistered runners cannot overwrite queue identity or position",
+            unknown is None and execution_sessions.session_api(queued_row).get("queuePosition") == 2)
         same_process = Runner()
         same_process.boot_id = "boot-original"
         same_boot = await execution_sessions.reconcile_runner_restart(s, same_process)

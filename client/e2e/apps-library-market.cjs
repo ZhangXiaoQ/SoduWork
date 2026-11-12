@@ -61,6 +61,27 @@ if (typeof electron === 'string') {
     const sections = () => js('[...document.querySelectorAll(".appsx-section")].filter(s=>s.dataset.appsSection!=="recommended").map(s=>({key:s.dataset.appsSection,title:s.querySelector("h2").textContent,names:[...s.querySelectorAll(".appsx-card-txt b")].map(b=>b.textContent)}))');
     assert.equal(await js('document.querySelectorAll(".appsx-tools [role=tab],.appsx-tabs").length'), 0);
     assert.deepEqual(await js('[...document.querySelector(".appsx-tools").children].map(node=>node.className)'), ['appsx-search', 'appsx-icon-btn', 'appsx-pill', 'appsx-icon-btn']);
+    // Include the actual workspace focus stylesheet: the catalog-only fixture
+    // otherwise misses the second outline applied by the desktop shell.
+    await js('new Promise(resolve=>{const link=document.createElement("link");link.id="searchWorkspaceStyle";link.rel="stylesheet";link.href='+JSON.stringify(asset('theme/workspace-experience.css'))+';link.onload=resolve;document.head.appendChild(link)})');
+    win.show(); win.focus(); await delay(100);
+    await js('appsSearch.focus()');
+    await until(()=>js('document.activeElement===appsSearch && appsSearch.matches(":focus-visible")'),'search receives visible keyboard focus');
+    await delay(180); // Wait for the wrapper's real focus transition before measuring.
+    const searchFocus = await js('(()=>{const input=appsSearch,s=getComputedStyle(input),outer=getComputedStyle(input.closest(".appsx-search"));return{outline:s.outlineStyle,border:s.borderTopWidth,shadow:s.boxShadow,outerBorder:outer.borderTopWidth,outerShadow:outer.boxShadow}})()');
+    report.searchFocus = searchFocus;
+    assert.equal(searchFocus.outline, 'none', 'only the outer search field owns the focus outline');
+    assert.equal(searchFocus.border, '0px'); assert.equal(searchFocus.shadow, 'none');
+    assert.ok(parseFloat(searchFocus.outerBorder)>0 && parseFloat(searchFocus.outerBorder)<=1, 'thin outer border survives Windows DPI quantization'); assert.notEqual(searchFocus.outerShadow, 'none');
+    assert.doesNotMatch(searchFocus.outerShadow, /^rgba\(0, 0, 0, 0\)/, 'outer focus marker remains visible');
+    await delay(180); await win.webContents.capturePage();
+    fs.writeFileSync(path.join(out,'search-single-focus.png'),(await win.webContents.capturePage()).toPNG());
+    win.webContents.sendInputEvent({type:'keyDown',keyCode:'Tab'});win.webContents.sendInputEvent({type:'keyUp',keyCode:'Tab'});
+    await until(()=>js('document.activeElement.matches(".appsx-icon-btn")'),'keyboard leaves search for next action');
+    assert.notEqual(await js('getComputedStyle(document.activeElement).outlineStyle'), 'none', 'other controls retain keyboard focus');
+    await js('document.activeElement.blur();searchWorkspaceStyle.remove();SoduWorkApps.open();SoduWorkApps.render(true)');
+    await until(()=>js('document.querySelectorAll("[data-apps-section=mine] .appsx-version-tag,[data-apps-section=favorites] .appsx-version-tag").length===3'),'catalog after focus interaction');
+    report.cases.push('Workspace search has one outer focus ring and no inner input frame; Tab still exposes the next action focus.');
     assert.equal(await js('document.querySelector(".appsx-banner")'), null);
     assert.deepEqual(await js(`[...document.querySelectorAll('[data-apps-section=mine] .appsx-version-tag,[data-apps-section=favorites] .appsx-version-tag')].map(n=>n.textContent).sort()`), ['v0.4.31', 'v1.2.0', 'v1.9.0']);
     assert.equal(await js(`appVersionTagHtml({item:{version:'<img src=x onerror=alert(1)>'}}).includes('<img')`), false);
@@ -116,7 +137,8 @@ if (typeof electron === 'string') {
     assert.equal((await versionStyle()).visibility, 'visible', 'keyboard focus reveals version');
     await js('document.activeElement.blur()');
     report.cases.push('Versions are plain text without border or fill, hidden at rest, shown on hover or keyboard focus; card background and geometry remain unchanged on hover.');
-    await js(`window.savedSettings=[];window.soduWorkAPI={appSettings:{
+    await js(`window.cacheCalls=[];window.cacheFailure=false;window.cacheGate=null;
+      window.savedSettings=[];window.soduWorkAPI={workPreview:{appCache:async input=>{cacheCalls.push(input);if(cacheGate)await cacheGate;if(cacheFailure)return {ok:false,reason:'缓存操作失败，请重试'};return {ok:true,bytes:input.action==='clear'?0:2097152,shared:false}}},appSettings:{
       get:async()=>({ok:true,revision:2,values:{theme:'dark'},secretKeys:['ukey'],secretMasks:{ukey:'ak-26****'},configuredKeys:['ukey','theme']}),
       update:async(id,value)=>{savedSettings.push({id,...value});return {ok:true,revision:3,values:{theme:'dark',model:'legacy-model'},secretKeys:['ukey'],secretMasks:{ukey:'ak-26****'},configuredKeys:['ukey','theme','model']}}}};
       localStorage.setItem('soduwork-app-settings:local:library-fixture',JSON.stringify({model:'legacy-model',ukey:'obsolete-legacy-key'}));
@@ -132,13 +154,23 @@ if (typeof electron === 'string') {
     assert.equal(await js('savedSettings[0].values.model'),'legacy-model','legacy model still migrates');
     assert.equal(await js('JSON.stringify(savedSettings).includes("obsolete-legacy-key")'),false);
     assert.equal(await js('localStorage.getItem("soduwork-app-settings:local:library-fixture")'),null);
-    await js(`window.publishCalls=[];window.signCalls=[];window.failAudience=false;window.deferDetail=false;
+    await until(()=>js('!appsCacheClear.disabled'),'cache size loaded');
+    assert.equal(await js('appsCacheSize.textContent'), '当前缓存：2.00 MB');
+    await js('appsCacheClear.click()'); await until(()=>js('!appsCacheClear.disabled'),'cache clear finished');
+    assert.equal(await js('appsCacheSize.textContent'), '已清理，当前缓存：0.00 MB');
+    assert.deepEqual(await js('cacheCalls.at(-1)'), {pluginId:'local:library-fixture',action:'clear'});
+    await js('cacheFailure=true;appsCacheClear.click()'); await until(()=>js('!appsCacheClear.disabled'),'cache failure allows retry');
+    assert.equal(await js('appsCacheSize.textContent'),'缓存操作失败，请重试');
+    await js('cacheFailure=false;appsCacheClear.click()'); await until(()=>js('!appsCacheClear.disabled'),'cache retry');
+    assert.equal(await js('document.querySelector("[data-setup-preference=pageSize]")?.value || document.querySelector("input[type=number]")?.value'), '20', 'cache actions preserve unsaved installation fields');
+    fs.writeFileSync(path.join(out,'app-cache-settings-zh.png'),(await win.webContents.capturePage()).toPNG());
+    await js(`window.publishCalls=[];window.signCalls=[];window.failAudience=false;window.deferDetail=false;window.notices=[];window.petSay=text=>notices.push(text);
       SoduWorkAPI.personalPlugin=async id=>{if(deferDetail)await new Promise(r=>window.releaseDetail=r);return {plugin:{localDraft:{template:'app',author:'即用实验室',appCategory:'other',name:'示例云端资料库',version:'1.2.0',ui:{contributions:[{id:'main',slot:'workspace.navigation'}]}}}}};
       soduWorkAPI.personalPlugins={updateMetadata:async(id,options)=>{const plugin=fixtureItems.find(p=>p.pluginId===id);Object.assign(plugin,{authorName:options.author,appCategory:options.appCategory,version:'1.2.1',checksum:'library-category'});plugin.localDraft={template:'app',key:plugin.key,name:plugin.name,version:plugin.version,author:options.author,appCategory:options.appCategory,ui:plugin.ui};return {ok:true,plugin:{...plugin}}}};
       SoduWorkAPI.pluginAudienceCandidates=async()=>{if(failAudience)throw Error('fixture audience unavailable');return {items:[{id:'person-1',name:'成员',username:'member'}],orgUnits:[]}};
       SoduWorkAPI.personalPluginPublisherIdentity=async()=>({identity:{keyId:'fixture-key',fingerprint:'fixture-fingerprint'}});
       SoduWorkAPI.signPersonalPluginDraft=async draft=>{signCalls.push(draft);return {signature:'fixture-signature',identity:{keyId:'fixture-key'}}};
-      SoduWorkAPI.publishPersonalPlugin=async(...args)=>{publishCalls.push(args);fixtureSubmissions=[{key:'library-fixture',version:args[0].version,trustState:'quarantined',enabled:false}];return {message:'应用已提交审核'}};
+      SoduWorkAPI.publishPersonalPlugin=async(...args)=>{publishCalls.push(args);fixtureSubmissions=[{key:'library-fixture',version:args[0].version,trustState:'quarantined',enabled:false}];return {message:'插件已上传企业隔离区，管理员审核发布后按所选范围可用'}};
       document.querySelector('[data-setup-key="modelId"]').value='unsaved-model';appsSetPublish.click()`);
     await until(()=>js('!!document.querySelector("#capPublishDo")'),'shared app publication dialog');
     assert.equal(await js('capModalTitle.textContent'),'申请上架');
@@ -166,6 +198,8 @@ if (typeof electron === 'string') {
     assert.equal(await js('publishCalls.length'),0,'empty audience blocks upload');
     await js('document.querySelector("#capAudienceList input").click();capPublishAppCategory.value="game";capPublishDo.click()');
     await until(()=>js('publishCalls.length===1 && capModalLayer.hidden'),'signed publication');
+    assert.match(await js('notices.at(-1)'), /应用已提交审核/);
+    assert.doesNotMatch(await js('notices.at(-1)'), /插件/);
     assert.deepEqual(await js('publishCalls[0].slice(1,5)'),['users',['person-1'],[],'fixture-signature']);
     assert.equal(await js('publishCalls[0][0].author'),'即用实验室');
     assert.equal(await js('publishCalls[0][0].appCategory'),'game');
@@ -538,13 +572,49 @@ if (typeof electron === 'string') {
     assert.equal(await js('(()=>{const m=document.querySelector(".appsx-create").getBoundingClientRect();return [...document.querySelectorAll(".appsx-create-foot button")].every(b=>{const r=b.getBoundingClientRect();return r.left>=m.left&&r.right<=m.right})})()'),true,'English footer buttons fit the narrow dialog');
     win.webContents.invalidate(); await delay(180);
     fs.writeFileSync(path.join(out,'create-dialog-en.png'),(await win.webContents.capturePage()).toPNG());
+    await js('closeAppsCreateDialog();window.localeItems=fixtureItems;fixtureItems=[];void SoduWorkApps.render(true)');
+    await until(()=>js('document.querySelector("[data-apps-section=mine] .appsx-empty b")?.textContent === "No apps yet"'),'English personal empty state');
+    assert.equal(await js('document.querySelector("[data-apps-section=market] .appsx-empty b").textContent'),'No apps in the marketplace yet');
+    report.emptyPageText=await js('appsPanel.innerText');
+    assert.equal(/[\u3400-\u9fff]/.test(report.emptyPageText),false,'English empty app page has no Chinese UI');
+    fs.writeFileSync(path.join(out,'empty-apps-en.png'),(await win.webContents.capturePage()).toPNG());
     await js('SoduWorkI18n.setLocale("zh-CN")');
+    await until(()=>js('document.querySelector("[data-apps-section=mine] .appsx-empty b")?.textContent === "还没有我的即用"'),'Chinese empty state restored');
+    await js('SoduWorkI18n.setLocale("en-US")');
+    await until(()=>js('document.querySelector("[data-apps-section=mine] .appsx-empty b")?.textContent === "No apps yet"'),'English empty state restored');
+    report.cases.push('Mine/market empty states use English without Chinese UI, and switch back and forth without stale text.');
+    await js('fixtureItems=[makeApp("local:locale-default","Default description",{personal:true,description:""}),makeApp("local:locale-user","中文名称",{personal:true,description:"打开即用工作界面"})];void SoduWorkApps.render(true)');
+    await until(()=>js('document.querySelector(".appsx-description-text:not([data-user-content])")?.textContent==="Open the app workspace"'),'English default app description');
+    assert.equal(await js('document.querySelector(".appsx-description-text[data-user-content]").textContent'),'打开即用工作界面','real user description is protected even if it equals UI copy');
+    assert.equal(await js('[...document.querySelectorAll(".appsx-card-headline b")].some(node=>node.textContent==="中文名称")'),true);
+    await js('SoduWorkI18n.setLocale("zh-CN")');
+    await until(()=>js('document.querySelector(".appsx-description-text:not([data-user-content])")?.textContent==="打开即用工作界面"'),'Chinese default app description');
+    await js('SoduWorkI18n.setLocale("en-US")');
+    await until(()=>js('document.querySelector(".appsx-description-text:not([data-user-content])")?.textContent==="Open the app workspace"'),'English default description restored');
+    await js('_appsCache=null;fixtureItems=[];catalogError="fixture unavailable";void SoduWorkApps.render(true)');
+    await until(()=>js('document.querySelector(".appsx-market-error")?.textContent.includes("The marketplace is temporarily unavailable")'),'English marketplace error');
+    assert.equal(await js('/[\\u3400-\\u9fff]/.test(appsPanel.innerText)'),false,'English marketplace error and remaining empty UI are localized');
+    await js('catalogError=""');
+    report.cases.push('Default descriptions translate across locale changes while real Chinese names and descriptions remain unchanged; marketplace error UI is English.');
+    await js('fixtureItems=localeItems;SoduWorkI18n.setLocale("zh-CN");void SoduWorkApps.render(true);appsAdd.click()');
     await until(()=>js('appsCreateInstall.textContent === "导入即用包"'),'Chinese import button');
     await js('window.packageImports=0;window.SoduWorkPluginMakerUtils={choosePackage:async()=>{packageImports++}};appsCreateInstall.click()');
     await until(()=>js('packageImports===1&&!appsCreateMask.classList.contains("show")'),'original package import route');
     report.cases.push('Import package/导入即用包 switch with the production locale catalogs and adapter; the filled import button is darker than Cancel, English footer fits narrow screens, and import reuses the existing package picker.');
+    await js(`closeAppsModal();closeAppsCreateDialog();SoduWorkI18n.setLocale('en-US');window.cacheGate=null;openAppSettings({item:{pluginId:'cache-ui-fixture',personal:false,name:'Cache fixture',description:'',version:'1.0.0'},title:'Cache fixture'})`);
+    await until(()=>js('!!document.getElementById("appsCacheClear")&&!appsCacheClear.disabled'),'English cache settings');
+    await until(()=>js('appsCacheClear.textContent === "Clear cache"'),'cache controls translated');
+    assert.equal(await js('appsCacheSize.textContent'),'Current cache: 2.00 MB');
+    await js('appsCacheClear.click()'); await until(()=>js('!appsCacheClear.disabled'),'English cache clear');
+    await until(()=>js('appsCacheSize.textContent === "Cleared. Current cache: 0.00 MB"'),'cache result translated');
+    assert.equal(await js(`document.querySelector('.appsx-cache').scrollWidth<=document.querySelector('.appsx-cache').clientWidth+1`),true,'cache controls fit the narrow settings dialog');
+    await delay(80);
+    fs.writeFileSync(path.join(out,'app-cache-settings-en.png'),(await win.webContents.capturePage()).toPNG());
+    await js(`window.cacheGate=new Promise(resolve=>window.releaseCache=resolve);appsCacheClear.click();closeAppSettings();window.releaseCache();window.cacheGate=null`);
+    await delay(30); assert.equal(await js('appsSettingsMask.classList.contains("show")'),false,'late clear result cannot reopen closed settings');
+    report.cases.push('Cache settings show size, clear and retry without changing app preferences; English cache controls/results fit narrow layouts, and late responses cannot reopen settings.');
     report.ok = true;
-  }).catch(error => { report.error = String(error.stack || error); }).finally(() => {
+  }).catch(async error => { report.error = String(error.stack || error); if(win&&!win.isDestroyed())report.visibleDescriptions=await win.webContents.executeJavaScript('[...document.querySelectorAll(".appsx-description-text,.appsx-cover-desc")].map(node=>({text:node.textContent,user:node.hasAttribute("data-user-content")}))').catch(()=>[]); }).finally(() => {
     fs.writeFileSync(path.join(out, 'report.json'), JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report)); if (win && !win.isDestroyed()) win.destroy(); if(coverServer)coverServer.close(); app.exit(report.ok ? 0 : 1);
   });

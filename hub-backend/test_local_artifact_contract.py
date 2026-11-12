@@ -29,13 +29,14 @@ class LocalArtifactContractTests(unittest.TestCase):
 
     def test_archive_preserves_directories_exact_bytes_and_live_store_override(self):
         expected = {"index.html": b'<link href="css/site.css">',
-                    "css/site.css": b"body { color: blue }", "assets/data.bin": b"\x00\xff"}
+                    "css/site.css": b"body { color: blue }", "assets/data.bin": b"\x00\xff",
+                    "guide.md": b"Guide", "summary.txt": b"Summary"}
         for i, (name, data) in enumerate(expected.items()):
             self.write(name, data, 1000 + i)
         with patch.object(ai_local, "_store_dir", return_value=str(self.root / "archive")) as store:
             bundle = ai_local._bundle_artifact(self.run, ai_local._fresh_entries(self.run))
         store.assert_called_once_with("fixture-run")
-        self.assertEqual(bundle["files"], 3)
+        self.assertEqual(bundle["files"], len(expected))
         filename = self.root / "archive" / "bundles" / bundle["filename"]
         with zipfile.ZipFile(filename) as zipped:
             self.assertEqual({name: zipped.read(name) for name in zipped.namelist()}, expected)
@@ -69,15 +70,17 @@ class LocalArtifactContractTests(unittest.TestCase):
         self.assertEqual(status["artifactsHidden"], 0)
         return status, bundles, bundled_bytes, expected
 
-    def test_two_or_more_flat_outputs_keep_loose_files_and_add_a_complete_bundle(self):
-        for count in (2, 3, 20):
+    def test_auto_archive_starts_after_two_final_outputs_without_renaming_loose_files(self):
+        for count in (1, 2, 3, 20):
             with self.subTest(files=count):
                 status, bundles, bundled_bytes, expected = self.flat_output_status(count)
-                self.assertEqual(len(status["attachments"]), count + 1)
-                self.assertEqual(len(bundles), 1)
-                self.assertEqual(status["artifactsBundled"], count)
-                with zipfile.ZipFile(io.BytesIO(bundled_bytes[0])) as zipped:
-                    self.assertEqual({name: zipped.read(name) for name in zipped.namelist()}, expected)
+                bundled = count > 2
+                self.assertEqual(len(status["attachments"]), count + int(bundled))
+                self.assertEqual(len(bundles), int(bundled))
+                self.assertEqual(status["artifactsBundled"], count if bundled else 0)
+                if bundled:
+                    with zipfile.ZipFile(io.BytesIO(bundled_bytes[0])) as zipped:
+                        self.assertEqual({name: zipped.read(name) for name in zipped.namelist()}, expected)
 
     def test_twenty_one_flat_outputs_expose_individual_files_and_complete_bundle(self):
         status, bundles, bundled_bytes, expected = self.flat_output_status(21)
@@ -129,9 +132,24 @@ class LocalArtifactContractTests(unittest.TestCase):
         with patch.object(ai_local, '_store_dir', return_value=str(self.root / 'archive')):
             self.assertIsNone(ai_local._bundle_artifact(self.run, ai_local._fresh_entries(self.run)))
             self.write('appendix.md', b'appendix', 1002)
+            self.assertIsNone(ai_local._bundle_artifact(self.run, ai_local._fresh_entries(self.run)))
+            self.write('summary.txt', b'summary', 1003)
             bundle = ai_local._bundle_artifact(self.run, ai_local._fresh_entries(self.run))
         with zipfile.ZipFile(self.root / 'archive' / 'bundles' / bundle['filename']) as archive:
-            self.assertEqual(set(archive.namelist()), {'result.md','appendix.md'})
+            self.assertEqual(set(archive.namelist()), {'result.md', 'appendix.md', 'summary.txt'})
+
+    def test_support_files_do_not_trigger_auto_archive_but_overflow_remains_complete(self):
+        self.write('index.html', b'<link href="site.css">', 1000)
+        self.write('site.css', b'body{}', 1001)
+        self.write('script.js', b'void 0;', 1002)
+        with patch.object(ai_local, '_store_dir', return_value=str(self.root / 'archive')):
+            self.assertIsNone(ai_local._bundle_artifact(self.run, ai_local._fresh_entries(self.run)))
+            for index in range(201):
+                self.write('assets/%s.css' % index, b'body{}', 1003 + index)
+            bundle = ai_local._bundle_artifact(self.run, ai_local._fresh_entries(self.run))
+            self.assertEqual(bundle['files'], 204)
+            with zipfile.ZipFile(self.root / 'archive' / 'bundles' / bundle['filename']) as archive:
+                self.assertEqual(len(archive.namelist()), 204)
 
 
 if __name__ == "__main__":

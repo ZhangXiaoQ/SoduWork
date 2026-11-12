@@ -61,10 +61,10 @@ if (typeof electron === 'string') {
     await win.loadFile(fixture);
     await js(`window.calls=[];window.toasts=[];window.petSay=text=>toasts.push(text);window.uid=()=> 'isolated-task';window.tasks=[];
       window.save=()=>calls.push({kind:'save-local'});window.Store={persistTask:async id=>{calls.push({kind:'persistTask',id});return true;},dropTask(){}};
-      window.Requirements={dateTimestamp:()=>null};window.fixtureFlow={bindingId:'binding-bug-fixture',key:'project-validation-release',name:'Bug修复上线测试环境',runnable:true,multiAgent:true,workflow:{nodes:[{key:'repair',type:'ai'},{key:'review',type:'ai_review'}]}};
+      window.Requirements={dateTimestamp:()=>null};window.fixtureFlow={bindingId:'binding-bug149',key:'soduwork-bugfix-149',name:'Bug修复上线149',runnable:true,multiAgent:true,workflow:{nodes:[{key:'repair',type:'ai'},{key:'review',type:'ai_review'}]}};
       window.SoduWorkAPI={taskStorageKey:()=> 'isolated-user',parseTaskText:async(...args)=>{calls.push({kind:'parse',args});return parsed;},
-        listTeammates:async()=>({mates:[{id:'user-example',name:'高示例成员',hasBox:true,deviceCount:1}]}),
-        workCatalog:async()=>{calls.push({kind:'work-catalog'});return{scenarios:[{key:'bugfix',name:'缺陷修复',defaultPluginKey:'project-validation-release'}]};},
+        listTeammates:async()=>({mates:[{id:'user-lipeng',name:'高礼朋',hasBox:true,deviceCount:1}]}),
+        workCatalog:async()=>{calls.push({kind:'work-catalog'});return{scenarios:[{key:'bugfix',name:'缺陷修复',defaultPluginKey:'soduwork-bugfix-149'}]};},
         taskExecutionOptions:async body=>{calls.push({kind:'execution-options',body,blocked});return {substrates:[{key:'local:pi',name:'Pi',available:true}],workflows:blocked?[]:[fixtureFlow],blockedWorkflows:blocked?[{...fixtureFlow,runnable:false,readiness:{blockers:['需要选择代码仓库']}}]:[],repos:[{id:'repo-a',name:'可选工程',projectId:'project-a'}]};},
         createAssignedTask:async body=>{calls.push({kind:'assign-human',body});return {ok:true,task:{id:'isolated-assigned',title:body.title},targetName:'示例成员'};},
         startTaskPlugin:async(id,body)=>{calls.push({kind:'start-workflow',id,body});return {ok:true};},
@@ -73,15 +73,15 @@ if (typeof electron === 'string') {
       await js(fs.readFileSync(path.join(client,'components/panels',name+'.js'),'utf8')+'\nvoid 0;');
     await js(fs.readFileSync(path.join(client,'components/requirements/requirement-fields.js'),'utf8')+'\nvoid 0;');
     const human=await scenario('named human overrides model workflow recommendation',
-      {title:'修复工作目标分析智能体',note:'修复附件缺陷',kind:'bug',assignee:'示例成员',assigneeExplicit:true,scene:'bugfix',flow:'project-validation-release'});
+      {title:'修复工作目标分析智能体',note:'修复附件缺陷',kind:'bug',assignee:'礼朋',assigneeExplicit:true,scene:'bugfix',flow:'soduwork-bugfix-149'});
     const noFlow=await scenario('unrequested workflow remains a recommendation',
-      {title:'修复附件缺陷',note:'修复附件缺陷',assignee:'ai',flow:'project-validation-release'}, {text:'检查附件中的缺陷'});
-    const flowFields={title:'修复附件缺陷',note:'修复附件缺陷',assignee:'ai',flow:'project-validation-release',flowRequested:'Bug修复上线测试环境',flowExplicit:true};
-    const explicitFlow=await scenario('明确插件建议在创建时不绑定或启动',flowFields,{text:'使用Bug修复上线测试环境流程修复附件缺陷'});
+      {title:'修复附件缺陷',note:'修复附件缺陷',assignee:'ai',flow:'soduwork-bugfix-149'}, {text:'检查附件中的缺陷'});
+    const flowFields={title:'修复附件缺陷',note:'修复附件缺陷',assignee:'ai',flow:'soduwork-bugfix-149',flowRequested:'Bug修复上线149',flowExplicit:true};
+    const explicitFlow=await scenario('明确插件建议在创建时不绑定或启动',flowFields,{text:'使用Bug修复上线149流程修复附件缺陷'});
     const blocked=await scenario('执行条件不满足时仍可保存需求',flowFields,
       {text:'使用Bug修复上线测试环境流程修复附件缺陷',blockedAtSubmit:true});
     const structured=await scenario('structured human identity survives workflow suggestion',{},
-      {proposal:{title:'修复缺陷',note:'附件缺陷',assigneeUserId:'user-example',flow:'project-validation-release'}});
+      {proposal:{title:'修复缺陷',note:'附件缺陷',assigneeUserId:'user-lipeng',flow:'soduwork-bugfix-149'}});
     for(const value of [human,structured]) {
       assert(value.before.body.includes('高示例成员')); assert(value.before.label.includes('转给'));
       assert.equal(value.after.calls.filter(c=>c.kind==='assign-human').length,1);
@@ -104,7 +104,7 @@ if (typeof electron === 'string') {
     assert.equal(human.after.calls.find(c=>c.kind==='assign-human').body.kind,'bug');
     for(const kind of ['requirement','bug','ticket','improvement','other']) {
       const value=await scenario('识别并保存业务类型：'+kind,
-        {title:'类型验证',note:'保留目标内容',kind,scene:'bugfix',flow:'project-validation-release'},{text:'记录待办事项'});
+        {title:'类型验证',note:'保留目标内容',kind,scene:'bugfix',flow:'soduwork-bugfix-149'},{text:'记录待办事项'});
       assert.equal(value.before.kind,kind); assert.equal(value.after.tasks[0].kind,kind);
     }
     const changed=await scenario('手动改为优化后保留用户选择',

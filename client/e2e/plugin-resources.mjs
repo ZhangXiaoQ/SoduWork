@@ -114,6 +114,9 @@ const child=spawn(path.join(client,'node_modules/electron/dist/electron.exe'),
 let page;const checks=[];
 async function click(selector){
  await page.waitFor(s=>{const e=document.querySelector(s);return Boolean(e&&!e.disabled&&e.getClientRects().length)},selector);
+ // Flush the offscreen compositor before sending native pointer coordinates.
+ // A DOM-ready element can otherwise precede the first hit-test frame.
+ await page.call('Page.captureScreenshot',{format:'png'});
  const pos=await page.run(s=>{const e=document.querySelector(s);if(!e||e.disabled)throw Error('Unavailable '+s);e.scrollIntoView({block:'center'});const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}},selector);
  for(const type of ['mousePressed','mouseReleased'])await page.call('Input.dispatchMouseEvent',{type,...pos,button:'left',clickCount:1});
 }

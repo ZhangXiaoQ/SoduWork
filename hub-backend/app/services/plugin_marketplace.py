@@ -258,10 +258,11 @@ async def upsert(session: AsyncSession, plugin_id: str, body: dict,
 
 
 # ---------------------------------------------------------------------------
-# Page placement slots (P1: compose surface, kind=app).
+# Administrator-managed application placement slots.
 
 COMPOSE_SURFACE = "compose"
-RECOMMENDATION_SURFACES = {COMPOSE_SURFACE}
+SIDEBAR_SURFACE = "sidebar"
+RECOMMENDATION_SURFACES = {COMPOSE_SURFACE, SIDEBAR_SURFACE}
 APP_KIND = "app"
 
 
@@ -290,13 +291,15 @@ async def by_target(session: AsyncSession, plugin_ids: list[str],
 
 async def sync_app_recommendation(session: AsyncSession, plugin_id: str, org_id: str | None,
                                   placed: bool, actor_id: str = "", *,
-                                  commit: bool = True) -> am.PluginRecommendation | None:
-    """The only writer for the app-on-compose placement slot.
+                                  commit: bool = True, surface: str = COMPOSE_SURFACE) -> am.PluginRecommendation | None:
+    """Write one independent application placement, defaulting to compose.
 
     Runs in the caller's transaction (``commit=False``) so marketplace policy
     and the placement slot flip together; ``placed=False`` removes the row.
     """
-    row = (await by_target(session, [plugin_id])).get(str(plugin_id))
+    if surface not in RECOMMENDATION_SURFACES:
+        raise ValueError("未知的推荐位置")
+    row = (await by_target(session, [plugin_id], surface)).get(str(plugin_id))
     if not placed:
         if row is not None:
             await session.delete(row)
@@ -306,7 +309,7 @@ async def sync_app_recommendation(session: AsyncSession, plugin_id: str, org_id:
                 await session.flush()
         return None
     if row is None:
-        row = am.PluginRecommendation(org_id=org_id, surface=COMPOSE_SURFACE,
+        row = am.PluginRecommendation(org_id=org_id, surface=surface,
                                       kind=APP_KIND, target_type="plugin",
                                       target_id=str(plugin_id))
         session.add(row)
@@ -363,6 +366,7 @@ async def active_recommendations(session: AsyncSession, org_ids: set[str],
     return out
 
 
-async def app_recommended_on(session: AsyncSession, plugin_id: str) -> bool:
-    row = (await by_target(session, [plugin_id])).get(str(plugin_id))
+async def app_recommended_on(session: AsyncSession, plugin_id: str,
+                             surface: str = COMPOSE_SURFACE) -> bool:
+    row = (await by_target(session, [plugin_id], surface)).get(str(plugin_id))
     return bool(row and row.enabled)

@@ -5,6 +5,10 @@ const { pathToFileURL } = require('node:url');
 
 test('automation and UI really call the same chat open/send pipeline; internal completion stays out of IPC', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-chat-pipeline-test-'));
+  const archivePath = path.join(directory, 'pi-agent', 'sessions', 'archived-chat.jsonl');
+  fs.mkdirSync(path.dirname(archivePath), { recursive: true });
+  fs.writeFileSync(archivePath, JSON.stringify({ type: 'message', message: {
+    role: 'assistant', content: [{ type: 'text', text: 'Shared local history' }] } }) + '\n');
   const file = path.resolve(__dirname, '../main/pi-session/ipc.js'), realRequire = createRequire(file);
   const handlers = new Map(), handles = [], opens = [], submits = [], quit = [], warms = [];
   let identity = { ...require('./helpers/platform-session-fixture.cjs').identity(), hub: 'http://isolated.invalid' };
@@ -24,9 +28,12 @@ test('automation and UI really call the same chat open/send pipeline; internal c
     handles.push(handle); return { ok: true, session: handle };
   }, list: () => handles, closeAll() {}, get: ref => handles.find(x => x.ref === ref),
   findBySessionId: id => handles.find(x => x.sessionId === id),
+  attachView(view) { handles.push(view); return view; },
+  historyEntry: async (_app, id) => ({ ok: true, entry: id === 'archived-chat'
+    ? { id, path: archivePath, cwd: directory, at: 42 } : null }),
   history: async () => { throw Error('Opening an identity must not scan the sidebar'); },
   archivedConversation: async (_app, id) => id === 'archived-chat'
-    ? { id, path: 'verified.jsonl', cwd: directory, adapterId: 'pi', at: 42 }
+    ? { id, path: archivePath, cwd: directory, adapterId: 'pi', at: 42 }
     : id.startsWith('archived-agent:')
       ? { id, path: 'verified.jsonl', cwd: directory, adapterId: id.slice('archived-agent:'.length), at: 42 } : null };
   const mocks = {
@@ -98,7 +105,7 @@ test('automation and UI really call the same chat open/send pipeline; internal c
     const archived = await handlers.get('pi-session-open')(event, { chatId: 'archived-chat' });
     assert.equal(archived.ok, true, archived.reason);
     assert.equal(archived.resumed, true);
-    assert.equal(opens.at(-1).resumePath, 'verified.jsonl');
+    assert.equal(opens.at(-1).resumePath, archivePath);
     assert.equal(opens.at(-1).resumeAt, 42);
     const count = opens.length;
     const missing = await handlers.get('pi-session-open')(event, { chatId: 'missing-chat' });
@@ -108,8 +115,13 @@ test('automation and UI really call the same chat open/send pipeline; internal c
     identity = { ...identity, session: require('./helpers/platform-session-fixture.cjs').sessions().two };
     trustedOwner = require('../main/platform-connections/runtime.cjs').scope(identity);
     const foreign = await handlers.get('pi-session-open')(event, { chatId: 'archived-chat' });
-    assert.equal(foreign.ok, false); assert.match(foreign.reason, /当前账号/);
-    assert.equal(opens.length, count, 'another account cannot open an ordinary archive by ID');
+    assert.equal(foreign.ok, true, foreign.reason);
+    assert.equal(foreign.localReplica, true);
+    assert.equal(handles.at(-1).readOnly, true);
+    assert.equal(handles.at(-1).snapshot().messages[0].text, 'Shared local history');
+    assert.equal(opens.length, count, 'shared local reads must not resume another account runtime');
+    const foreignSend = await handlers.get('pi-session-send')({ sender: {} }, foreign.ref, 'Must not execute', [], {});
+    assert.equal(foreignSend.ok, false);
     // Exercise the registered production entry points. Loading a capability
     // menu or opening a Runner-backed chat must not initialize an unrelated Pi.
     const adapters = ['pi', 'opencode', 'codex', 'codex-harness', 'claude', 'qwen', 'dsh', 'custom-example'];
@@ -147,4 +159,11 @@ test('automation and UI really call the same chat open/send pipeline; internal c
     await Promise.all(quit.map(fn => fn()));
     Object.assign(auth, savedAuth); fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test('automation turns bypass the interactive plugin-debug bridge', () => {
+  const source = fs.readFileSync(path.resolve(__dirname, '../main/pi-session/ipc.js'), 'utf8');
+  assert.match(source, /const automationTurn = rawOptions\?\.source === 'automation'/);
+  assert.match(source, /const debugBlocked = automationTurn \? '' : pluginDebug\.guard\(s\)/);
+  assert.match(source, /workflowTurn = automationTurn \? null/);
 });

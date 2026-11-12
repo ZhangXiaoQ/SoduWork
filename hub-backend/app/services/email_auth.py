@@ -12,7 +12,7 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from ..account_models import EmailChallenge, EmailRateLimit, UserConsent
+from ..account_models import EmailChallenge, EmailRateLimit
 from ..config import get_settings
 from ..models import User
 from ..mail_models import MailOutbox
@@ -204,19 +204,6 @@ async def consume_challenge(session, *, challenge_id, email, purpose, device_id,
 async def verified_user(session, email):
     return await session.scalar(select(User).where(User.email_normalized == normalize_email(email),
                                                    User.email_verified_at.is_not(None)))
-
-
-def validate_consents(consents):
-    from .account_legal import required_versions
-    if not isinstance(consents, dict) or any(consents.get(k) != version for k, version in required_versions().items()):
-        raise ClientAccessError("请阅读并同意最新用户协议与隐私政策", code="CONSENT_REQUIRED", status=422)
-
-
-def record_consents(session, user_id, device_id, consents):
-    from .account_legal import required_versions
-    validate_consents(consents)
-    for document, version in required_versions().items():
-        session.add(UserConsent(user_id=user_id, device_id=device_id, document=document, version=version))
 
 
 async def public_policy(session):

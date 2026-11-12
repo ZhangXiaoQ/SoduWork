@@ -70,6 +70,8 @@ async def decorate_many(session, tasks, apis):
     pairs = list(zip(tasks, apis))
     if not pairs:
         return apis
+    from . import conversation_review_projection
+    await conversation_review_projection.decorate_many(session, tasks, apis)
     await task_maintenance.decorate_many(session, tasks, apis)
     await requirement_edit_policy.decorate_many(session, tasks, apis)
     candidates = [task.id for task, _ in pairs if stage(task) not in {"closed", "delivered"}]

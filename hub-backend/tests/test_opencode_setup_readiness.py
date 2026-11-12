@@ -27,6 +27,11 @@ class OpenCodeSetupReadinessTests(unittest.TestCase):
         for key in ("opencode", "harness2"):
             with self.subTest(key=key):
                 result = self.detect(key, MISSING)
+                if key == 'harness2':
+                    self.assertTrue(result['installed'])
+                    self.assertEqual(result['state'], 'ready')
+                    self.assertEqual(result['runtimeIssue'], '')
+                    continue
                 self.assertFalse(result["installed"])
                 self.assertEqual(result["state"], "missing")
                 self.assertEqual(result["setupState"], "broken")
@@ -65,7 +70,7 @@ class OpenCodeSetupReadinessTests(unittest.TestCase):
                       patch("app.services.agent_setup_runtime._short", return_value="fixture") as version):
                     callback = local_base._PROFILES[key].get(check)
                     self.assertTrue(callable(callback), (key, check))
-                    self.assertEqual(callback(), MISSING)
+                    self.assertEqual(callback(), "" if key == "harness2" else MISSING)
                     run.assert_not_called()
                     version.assert_not_called()
 
@@ -80,7 +85,7 @@ class OpenCodeSetupReadinessTests(unittest.TestCase):
               patch.object(harness2_runtime, "is_bundled", return_value=True),
               patch.object(local_base, "_opencode_bin", return_value=""),
               patch.object(managed_agents, "runtime_issue", return_value=MISSING, create=True) as check):
-            self.assertIn("装上", harness2_runtime.runtime_issue())
+            self.assertEqual(harness2_runtime.runtime_issue(), "")
             check.assert_not_called()
 
     def test_other_cli_readiness_does_not_consume_opencode_dependency_state(self):

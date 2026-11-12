@@ -192,14 +192,14 @@
       if (typeof openTaskCenter === 'function') openTaskCenter();
     },
     team:     (p) => { if (typeof openTeamPanel === 'function') openTeamPanel({ entry: p.teamEntry || 'team' }); },
-    /* Personal schedules load independently of the task table. */
-    schedules: (p) => { if (typeof openSchedulePanel === 'function') openSchedulePanel(p); },
-    /* Select local skills from the administrator-approved catalog. */
-    skills: () => { if (typeof openSkillPanel === 'function') openSkillPanel(); },
-    /* Application plugins open work pages rather than conversations; local installation follows its existing approval policy. */
+    /* 我的定时任务（个人的东西放桌宠里管）：自己去后端拉，不依赖任务表 */
+    schedules: (p) => { if (typeof openSchedulePanel === 'function') return openSchedulePanel(p); },
+    /* 我的技能：管理端管"开放哪些"，这一页管"我这台用哪几个" */
+    skills: () => { if (typeof openSkillPanel === 'function') return openSkillPanel(); },
+    /* 应用：带界面的插件，点开是工作页面而不是新建会话；本地安装免审核 */
     apps: () => { if (typeof openAppsPanel === 'function') openAppsPanel(); },
-    library: () => { if (typeof openLibraryPanel === 'function') openLibraryPanel(); },
-    /* Manage personal model keys and custom models separately from the administrative catalog. */
+    library: (p) => { if (typeof openLibraryPanel === 'function') return openLibraryPanel(p); },
+    /* 我的模型：管理端管"有哪些服务/模型"，这一页管"我自己的 key + 我自己加的模型" */
     models: () => { if (typeof openModelsPanel === 'function') openModelsPanel(); },
     'model-editor': (p) => {
       if (typeof openModelsPanel === 'function') {
@@ -255,7 +255,7 @@
     account: 'personalAccountPanel', settings: 'settingsPanel', shortcuts: 'shortcutsPanel', archive: 'archivePanel', skin: 'skinManager', notices: 'noticePanel',
     team: 'teamPanel', inbox: 'teamPanel', daily: 'briefPanel', schedules: 'schPanel',
     skills: 'capPanel', library: 'libraryPanel', models: 'mdPanel', agents: 'agPanel', cloud: 'cloudEnvironmentPanel', codeacct: 'caPanel', usage: 'usagePanel',
-    apps: 'appsPanel',
+    apps: 'appsPanel', sidebarapp: 'workspaceAppPanel',
   };
   let _workspaceView = '';
   function _workspacePayload(view, payload) {
@@ -269,6 +269,7 @@
       try { window.AccountCenter?.closePanel(); } catch (e) { console.warn('[workspace] 收起个人账户失败', e); }
       return;
     }
+    if (_workspaceView === 'sidebarapp') { window.WorkspaceSidebarApps?.close(); return; }
     const name = CLOSERS[_workspaceView];
     if (name && typeof window[name] === 'function') {
       try { window[name](); } catch (e) { console.warn('[workspace] 收起旧页面失败', e); }
@@ -294,7 +295,7 @@
       if (typeof window.closeArchiveHistory === 'function') window.closeArchiveHistory();
       _workspaceCloseCurrent(key);
       document.querySelectorAll('.workspace-hosted').forEach((x) => x.classList.remove('workspace-hosted'));
-      const fn = OPENERS[key] || OPENERS.aidesk;
+      const fn = key === 'sidebarapp' ? p => window.WorkspaceSidebarApps.open(p) : OPENERS[key] || OPENERS.aidesk;
       const opened = fn(_workspacePayload(key, payload));
       const target = document.getElementById(WORKSPACE_TARGET[key]);
       if (target) target.classList.add('workspace-hosted');

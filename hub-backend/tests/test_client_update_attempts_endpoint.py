@@ -18,7 +18,7 @@ def _release(release_id: str, version: str, platform: str = "win32") -> ClientRe
     return ClientRelease(
         id=release_id, version=version, channel="stable", platform=platform,
         arch="x64", artifact_name=f"SoduWork-{version}-Setup.exe", artifact_size=1,
-        sha256="a" * 64, key_id="fixture-release-key", signature="s" * 88,
+        sha256="a" * 64, key_id="soduwork-client-release-2026b", signature="s" * 88,
         artifact_path="releases/x", enabled=True)
 
 

@@ -76,7 +76,7 @@ class RefinementErrorTests(unittest.TestCase):
         for response, code in cases:
             with self.subTest(code=code), tempfile.TemporaryDirectory() as temp:
                 def complete(messages):
-                    return response if "SODUWORK_HARNESS2_EDIT" in messages[0]["content"] else "Plan."
+                    return response if "stage=inv1.a1\n" in messages[0]["content"] else self.reply(messages)
                 with self.assertRaises(engine.Harness2RefinementError) as caught:
                     engine.refine("Fixture task", complete, Path(temp) / "turn", lambda _: None)
                 self.assertEqual(getattr(caught.exception, "code", None), code)
@@ -105,9 +105,9 @@ class RefinementErrorTests(unittest.TestCase):
         self.assertNotIn(private, errors.failure_message(failure, "refine"))
         with tempfile.TemporaryDirectory() as temp:
             def complete(messages):
-                if "SODUWORK_HARNESS2_EDIT" in messages[0]["content"]:
+                if "stage=inv1.a1\n" in messages[0]["content"]:
                     raise failure
-                return "Plan."
+                return self.reply(messages)
             with self.assertRaises(engine.Harness2RefinementError) as caught:
                 engine.refine("Task", complete, Path(temp) / "turn", lambda _: None)
             self.assertEqual(caught.exception.code, "model_timeout")

@@ -59,7 +59,7 @@ test('snapshot painting disables local continuation during streaming and runtime
  f.window.ChatCloudHandoff.sync(root,{status:'idle',cloudHandoff:{phase:'committed'}},{ref:'one'});assert.equal(local.disabled,false);
 });
 
-test('personal PC receipts retain the existing presentation and never create a local copy',async()=>{
+test('personal PC receipts show their actual location and never create a local copy',async()=>{
  const f=cloudFixture(),root=element(),local=element(),cloud=element(),trigger=element();
  local.dataset.chatExecution='local';cloud.dataset.chatExecution='cloud';
  root.querySelectorAll=s=>s==='[data-chat-execution]'?[local,cloud]:s==='[data-execution-menu]'?[trigger]:[];
@@ -67,16 +67,20 @@ test('personal PC receipts retain the existing presentation and never create a l
  f.window.WorkComposer={syncExecutionMenu:(_root,value)=>{location=value}};
  f.snapshot.cloudHandoff.target={runnerKind:'work-computer',runnerName:'My test PC'};
  f.window.ChatCloudHandoff.sync(root,f.snapshot,{ref:'one'});
- assert.equal(location,'cloud');assert.equal(cloud.getAttribute('aria-pressed'),'true');
+ assert.equal(location,'local');assert.equal(cloud.getAttribute('aria-pressed'),'false');
+ assert.equal(local.getAttribute('aria-pressed'),'true');
+ assert.equal(trigger.getAttribute('aria-label'),'执行位置：我的电脑');
  assert.equal(local.querySelector('span').textContent,'');
  f.cloud.preview=async()=>({ok:true,handoff:f.snapshot.cloudHandoff});
  await f.select();
- assert.equal(f.dialog.querySelector('#ncloudTitle').textContent,'云端会话');
- assert.match(f.dialog.querySelector('[data-cloud-body]').innerHTML,/权限由云端/);
+ assert.equal(f.dialog.querySelector('#ncloudTitle').textContent,'我的电脑会话');
+ assert.match(f.dialog.querySelector('[data-cloud-body]').innerHTML,/My test PC/);
+ assert.match(f.dialog.querySelector('[data-cloud-body]').innerHTML,/权限由该电脑/);
+ assert.doesNotMatch(f.dialog.querySelector('[data-cloud-body]').innerHTML,/权限由云端/);
  assert.equal(f.opened.length,0);assert.equal(f.continued.length,0);
 });
 
-test('permission presentation remains unchanged and personal PC cannot enable local permission changes',()=>{
+test('permission label distinguishes personal PC without enabling local permission changes',()=>{
  const root=element(),doc=element(),window=element();
  doc.createElement=()=>{const e=element();e.appendChild=()=>{};e.insertAdjacentHTML=()=>{};return e};
  root.querySelector('#nchatMode').before=()=>{};
@@ -86,10 +90,12 @@ test('permission presentation remains unchanged and personal PC cannot enable lo
  vm.runInNewContext(read('chat-session-controls.js'),{window,document:doc,AbortController});
  const controls=window.ChatSessionControls.create(root,{state:()=>state});
  const label=root.querySelector('#nchatModeName'),button=root.querySelector('#nchatMode');
- assert.equal(label.textContent,'云端权限');assert.equal(button.disabled,true);
- assert.equal(button.title,'权限由云端执行环境管理');
+ assert.equal(label.textContent,'电脑权限');assert.equal(button.disabled,true);
+ assert.equal(button.title,'权限由所选本人电脑的执行环境管理');
+ assert.equal(button.getAttribute('aria-label'),'电脑权限：权限由所选本人电脑的执行环境管理');
  state={...state,cloudHandoff:{phase:'committed',target:{runnerKind:'cloud'}}};controls.render();
  assert.equal(label.textContent,'云端权限');assert.equal(button.disabled,true);
+ assert.equal(button.getAttribute('aria-label'),'云端权限：权限由云端执行环境管理');
  state={...state,cloudHandoff:null};controls.render();
  assert.equal(label.textContent,'默认权限');assert.equal(button.disabled,false);
  controls.destroy();
@@ -105,6 +111,26 @@ function composeFixture(){
   click(v){const button=v==='cloud'?cloud:local;for(const fn of panel.events.click||[])fn({target:{closest:s=>s==='[data-execution]'?button:null}})},
   changeOwner(){owner='bob'},leave(){current=false},start:options=>window.ComposeExecution.start({text:'draft',attachments:[],isCurrent:()=>current,...options})};
 }
+
+test('remote conversation bar identifies downloaded results without relabeling the cache as an execution workspace',()=>{
+ const root=element(),workspace={dir:'C:/profile/cloud-results/private-hash',name:'private-hash'};
+ const ctx={document:{getElementById:id=>root.querySelector('#'+id)},global:{ChatChrome:{setWorkspace(){}}},
+  _wd:workspace,_snap:{cloudHandoff:{phase:'committed',target:{runnerKind:'cloud'}}},_mode:'full',
+  _sessionCaps:[],_composerControls:null};
+ ctx.ChatChrome=ctx.global.ChatChrome;
+ const source=read('panels-chat.js'),start=source.indexOf('  function _paintBar()');
+ vm.runInNewContext(source.slice(start,source.indexOf('  function _thinkingStatusHtml',start))+'\n_paintBar();',ctx);
+ assert.equal(root.querySelector('#nchatWdName').textContent,'云端成果');
+ assert.equal(root.querySelector('#nchatWd').title,workspace.dir);
+ assert.doesNotMatch(root.querySelector('#nchatWd').title,/AI 就在/);
+ assert.equal(workspace.name,'private-hash','display changes cannot mutate the output cache identity');
+ ctx._snap.cloudHandoff.target.runnerKind='work-computer';ctx._paintBar();
+ assert.equal(root.querySelector('#nchatWdName').textContent,'电脑成果');
+ ctx._snap={};ctx._paintBar();
+ assert.equal(root.querySelector('#nchatWdName').textContent,'private-hash');
+ assert.equal(root.querySelector('#nchatWd').title,workspace.dir);
+ assert.doesNotMatch(root.querySelector('#nchatWd').title,/点击打开/);
+});
 test('new drafts default local; a pending cloud check cannot switch back after the user selects local',async()=>{
  const f=composeFixture(),wait=deferred();assert.equal(f.window.ComposeExecution.value(),'local');f.runtime.refreshAccess=()=>wait.promise;
  f.click('cloud');f.click('local');wait.resolve();await tick();assert.equal(f.window.ComposeExecution.value(),'local');assert.equal(f.local.getAttribute('aria-pressed'),'true');assert.equal(f.starts.length,0);

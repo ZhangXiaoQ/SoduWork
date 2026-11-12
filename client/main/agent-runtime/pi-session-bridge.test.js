@@ -145,6 +145,73 @@ test('local and cloud history rows keep separate directory scopes and cloud wins
   await bridge.dispose();
 });
 
+test('account projections and local replay copies share one history row by trusted origin ids', async () => {
+  const raw = fakeSessionModule();
+  raw.history = async () => ({ ok: true, chats: [
+    { id: 'native-1', title: 'Same conversation', sourceSessionId: 'native-1', at: 30 },
+    { id: 'independent', title: 'Same conversation', at: 20 },
+  ] });
+  const bridge = createPiSessionBridge({ sessionModule: raw, runnerAdapters: [] });
+  bridge.setExternalHistory({ history: async () => ({ ok: true, chats: [
+    { id: 'acct-1', title: 'Same conversation', accountProjection: true,
+      sourceClientId: 'desktop', sourceSessionId: 'native-1', at: 40 },
+    { id: 'acct-independent', title: 'Same conversation', accountProjection: true,
+      sourceClientId: 'desktop', sourceSessionId: 'other-native', at: 10 },
+  ] }) });
+  bridge.setReplicaHistory({
+    projectRows: async rows => rows,
+    indexedRows: async () => [{ id: 'copy-1', title: 'Same conversation', cached: true,
+      source: { id: 'acct-1' }, sourceSessionId: 'native-1', at: 35 }],
+    store: { lifecycleRows: () => [] },
+  });
+  const rows = (await bridge.history()).chats;
+  assert.equal(rows.filter(row => row.title === 'Same conversation').length, 3);
+  const merged = rows.find(row => row.id === 'copy-1');
+  assert.ok(merged);
+  assert.ok(merged.historyAliasIds.includes('acct-1'));
+  assert.ok(merged.historyAliasIds.includes('native-1'));
+  assert.ok(rows.some(row => row.id === 'independent'));
+  assert.ok(rows.some(row => row.id === 'acct-independent'));
+  await bridge.dispose();
+});
+
+test('deleted account origins hide cached copies without hiding independent same-title chats', async () => {
+  const raw = fakeSessionModule();
+  raw.history = async () => ({ ok: true, chats: [
+    { id: 'independent', title: 'Same conversation', at: 20 },
+  ] });
+  const bridge = createPiSessionBridge({ sessionModule: raw, runnerAdapters: [] });
+  bridge.setExternalHistory({ history: async () => ({ ok: true,
+    chats: [{ id: 'acct-deleted', title: 'Same conversation', accountProjection: true, at: 30 }],
+    lifecycle: [{ id: 'acct-deleted', deleted: true, lifecycleRevision: 4, revision: 4 }] }) });
+  bridge.setReplicaHistory({
+    projectRows: async rows => rows,
+    indexedRows: async () => [{ id: 'copy-deleted', title: 'Same conversation', cached: true,
+      source: { id: 'acct-deleted' }, at: 35 }],
+    store: { lifecycleRows: () => [] },
+  });
+  const rows = (await bridge.history()).chats;
+  assert.deepEqual(rows.map(row => row.id), ['independent']);
+  await bridge.dispose();
+});
+
+test('bridge collapses account aliases from multiple devices by source session', async () => {
+  const raw = fakeSessionModule();
+  raw.history = async () => ({ ok: true, chats: [] });
+  const bridge = createPiSessionBridge({ sessionModule: raw, runnerAdapters: [] });
+  bridge.setExternalHistory({ history: async () => ({ ok: true, chats: [
+    { id: 'acct-current', title: 'Shared', accountConversation: true, sourceSessionId: 'source-1', at: 20 },
+    { id: 'acct-old', title: 'Shared', accountConversation: true, sourceSessionId: 'source-1', at: 30 },
+    { id: 'acct-other', title: 'Shared', accountConversation: true, sourceSessionId: 'source-2', at: 10 },
+  ] }) });
+  bridge.setReplicaHistory({ projectRows: async rows => rows, indexedRows: async () => [],
+    store: { lifecycleRows: () => [] } });
+  const rows = (await bridge.history()).chats;
+  assert.deepEqual(rows.map(row => row.id), ['acct-old', 'acct-other']);
+  assert.ok(rows[0].historyAliasIds.includes('acct-current'));
+  await bridge.dispose();
+});
+
 test('Pi bridge keeps mutable legacy fields while exposing normalized events', async () => {
   const raw = fakeSessionModule();
   const bridge = createPiSessionBridge({ sessionModule: raw });

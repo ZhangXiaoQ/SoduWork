@@ -65,17 +65,23 @@ function describe(value) {
   const upstream = String(error && error.upstream || '');
   const combined = [raw, String(error && error.message || ''), upstream].join(' ');
   const proxy = /soduwork(?:_work)?_proxy_error/i.test(type + ' ' + raw);
+  const providerCode = String(error?.providerCode || error?.code || '') === '1113' ||
+    /供应商错误码\s*[:：]?\s*1113\b/.test(combined) ? '1113' : '';
+  const billing = Boolean(providerCode) || /upstream_billing_error|billing_required|insufficient_quota|insufficient_balance|billing_hard_limit_reached|余额不足|计费额度不可用/i.test(combined);
   const transient = TRANSIENT_STATUS.has(status) || TRANSIENT_RE.test(combined) ||
     STREAM_INTERRUPTION_RE.test(raw) || STREAM_INTERRUPTION_RE.test(String(error && error.message || ''));
-  const authExpired = status === 401 && AUTH_EXPIRED_RE.test(combined);
-  const permanent = /insufficient_quota|quota exceeded|billing|out of budget|available balance|usage limit reached/i.test(combined) ||
+  const authExpired = !billing && status === 401 && AUTH_EXPIRED_RE.test(combined);
+  const permanent = billing || /insufficient_quota|quota exceeded|billing|out of budget|available balance|usage limit reached/i.test(combined) ||
     [400,403,404,413,422].includes(status) || (status === 401 && !authExpired);
   const retryable = authExpired || (!permanent && (transient || proxy && status === 0));
 
   let publicText = '';
   const privateResponse = PRIVATE_RESPONSE_RE.test(raw) || Boolean(payload && !(payload instanceof Error));
-  if (proxy || status || transient || privateResponse) {
-    if (/context_length_exceeded|context length exceeded|prompt (?:is )?too long/i.test(combined)) {
+  if (billing || proxy || status || transient || privateResponse) {
+    if (billing) {
+      publicText = '模型服务余额不足或计费额度不可用' + (providerCode ? '（供应商错误码 1113）' : '') +
+        '；请检查供应商账单、API Key 类型和接口地址';
+    } else if (/context_length_exceeded|context length exceeded|prompt (?:is )?too long/i.test(combined)) {
       publicText = '当前上下文超过模型容量，历史和本轮输入已保留';
     } else if (IMAGE_REJECTION_RE.test(combined)) {
       publicText = '当前模型不接受图片输入，请切换支持图片的模型或启用视觉适配';
@@ -92,7 +98,8 @@ function describe(value) {
     }
     if (status) publicText += '（HTTP ' + status + '）';
   }
-  return { raw, payload, type, status, proxy, transient, authExpired, retryable, publicText };
+  return { raw, payload, type, status, proxy, transient, authExpired, retryable, publicText,
+    ...(billing ? { code: 'upstream_billing_error', providerCode } : {}) };
 }
 
 function forDisplay(value, limit = 200) {

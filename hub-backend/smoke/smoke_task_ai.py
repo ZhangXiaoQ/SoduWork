@@ -6,10 +6,10 @@ after output receipt. Use uniquely named fixtures and clean them up.
 import asyncio
 import os
 import sys
+import tempfile
+from pathlib import Path
 
 sys.path.insert(0, ".")
-# Use temporary SQLite with a .smoke filename to satisfy db._smoke_db_guard.
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./.smoke-taskai.db"
 ok = fail = 0
 
 
@@ -180,6 +180,16 @@ async def main():
         await _purge(s)
 
 
-asyncio.run(main())
+async def isolated():
+    try:
+        await main()
+    finally:
+        from app.db import engine
+        await engine.dispose()
+
+
+with tempfile.TemporaryDirectory(prefix="soduwork-task-ai-") as directory:
+    os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///" + (Path(directory) / ".smoke-taskai.db").as_posix()
+    asyncio.run(isolated())
 print(f"\n{ok} PASS / {fail} FAIL")
 sys.exit(1 if fail else 0)

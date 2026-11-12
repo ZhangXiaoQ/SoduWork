@@ -24,7 +24,7 @@ result = plugin_packages.public_summary(parsed)
 sys.stdout.write(json.dumps(result['personalDraft'], ensure_ascii=True))
 `;
 
-for (const template of ['method', 'workflow']) for (const suffix of ['json', 'soduwork-plugin', 'zip']) {
+for (const template of ['method', 'workflow']) for (const suffix of ['json', 'soduwork-plugin', 'soduwork-plugin', 'soduwork-plugin', 'zip']) {
   test(template + ' ' + suffix + ' archive imports with complete Chinese and binary resources', async t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-export-roundtrip-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));

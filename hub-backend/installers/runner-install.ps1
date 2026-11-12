@@ -46,8 +46,9 @@ function Stop-RunnerTask {
         try { Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue } catch {}
     }
     # A stopped scheduled task may still be finishing work; wait for the executable to be released.
+    # Stop legacy soduwork-runner processes as well during upgrades.
     for ($i = 0; $i -lt 10; $i++) {
-        $p = Get-Process -Name 'soduwork-runner' -ErrorAction SilentlyContinue
+        $p = Get-Process -Name 'soduwork-runner', 'soduwork-runner' -ErrorAction SilentlyContinue
         if (-not $p) { break }
         Start-Sleep -Seconds 1
         if ($i -ge 6) { $p | Stop-Process -Force -ErrorAction SilentlyContinue }
@@ -168,7 +169,7 @@ Say ("④ 已注册常驻计划任务 $TaskName 并启动（身份：" + $princi
 Start-Sleep -Seconds 4
 # Match the executable path because the desktop client may run another bundled Runner.
 # Process-name matching alone could mistake another installation for this one.
-$proc = Get-Process -Name 'soduwork-runner' -ErrorAction SilentlyContinue |
+$proc = Get-Process -Name 'soduwork-runner', 'soduwork-runner' -ErrorAction SilentlyContinue |
 Where-Object { $_.Path -eq $Exe } | Select-Object -First 1
 if ($proc) {
     Say ""

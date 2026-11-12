@@ -3,10 +3,16 @@
 # The reported line can obscure the actual line-ending problem.
 # hub-backend/installers/runner-install.sh is distributed to Linux hosts.
 *.sh text eol=lf
-*.command text eol=lf
-*.cmd text eol=crlf
 ops/soduworkctl text eol=lf
 *.service text eol=lf
 *.timer text eol=lf
 # Preserve the exact pinned upstream license, including its final blank line.
 third-party/licenses/gradle-2.10-LICENSE.txt whitespace=-blank-at-eof
+# Preserve whitespace in the verified, unmodified upstream license snapshots.
+third-party/licenses/legal-import/duck-LICENSE.txt whitespace=-blank-at-eol
+third-party/licenses/legal-import/lop-LICENSE.txt whitespace=-blank-at-eol
+third-party/licenses/legal-import/mammoth-LICENSE.txt whitespace=-blank-at-eol
+third-party/licenses/legal-import/option-LICENSE.txt whitespace=-blank-at-eol
+third-party/licenses/legal-import/inherits-LICENSE.txt whitespace=-blank-at-eof
+third-party/licenses/legal-import/string_decoder-LICENSE.txt whitespace=-blank-at-eof
+third-party/licenses/duck-0.1.12-LICENSE.txt whitespace=-blank-at-eol

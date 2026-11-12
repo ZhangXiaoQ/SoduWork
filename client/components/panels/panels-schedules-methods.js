@@ -300,15 +300,21 @@ function _schmSnapshotLocked(editing) {
 async function _schmCreateAutomation(text, intent, options) {
   const generation = _schmGeneration;
   const current = () => generation === _schmGeneration && (!options?.isCurrent || options.isCurrent());
-  const sch = intent.schedule || { every: 'daily', atHour: 9, atMinute: 0, weekday: 1 };
+  const sch = { ...(intent.schedule || { every: 'daily', atHour: 9, atMinute: 0, weekday: 1 }) };
   const timeZone = sch.timeZone || (() => {
     try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; }
     catch (e) { return ''; }
   })();
-  if (sch.every === 'once') {
-    const error = window.ScheduleTiming?.validate({ ...sch, timeZone }) ||
-      (!window.ScheduleTiming ? '时间设置尚未就绪，请重新打开自动化' : '');
-    if (error) { if (typeof petSay === 'function') petSay(error); return false; }
+  if (sch.every === 'once' && sch.runAt && !/[T].*(?:Z|[+-]\d{2}:?\d{2})$/i.test(String(sch.runAt))) {
+    sch.runAt = window.ScheduleTiming?.fromLocalInput(String(sch.runAt), timeZone) || sch.runAt;
+  }
+  let timingError = '';
+  if (window.ScheduleTiming) timingError = window.ScheduleTiming.validate({ ...sch, timeZone });
+  else if (sch.every === 'once') timingError = '时间设置尚未就绪，请重新打开自动化';
+  if (timingError) {
+    const message = window.SoduWorkI18n?.translateText?.(timingError) || timingError;
+    if (typeof petSay === 'function') petSay(message);
+    return false;
   }
   // Conversation-created automations are plain chats. A selected personal
   // method is carried as a local plugin lock; it never creates a task or a
@@ -383,8 +389,13 @@ async function _schmCreateAutomation(text, intent, options) {
     await SoduWorkAPI.createSchedule({
       title: text.slice(0, 60), note: note.slice(0, 8000),
       every: sch.every, atHour: sch.atHour, atMinute: sch.atMinute,
+      ...(sch.every === 'custom' ? {customRule: sch.customRule} : {}),
       runAt: sch.every === 'once' ? sch.runAt : '',
-      weekday: sch.weekday, timeZone,
+      weekday: sch.weekday, weekdays: Array.isArray(sch.weekdays) ? sch.weekdays :
+        (sch.every === 'weekly' ? window.ScheduleTiming.cleanList(sch.weekday, 1, 7) : []),
+      monthDays: sch.monthDays || [], monthDayPolicy: sch.monthDayPolicy || 'skip',
+      startDate: sch.every === 'once' || sch.every === 'custom' ? null : sch.startDate || null,
+      endDate: sch.every === 'once' || sch.every === 'custom' ? null : sch.endDate || null, timeZone,
       assigneeId: selectedAgent.id, assigneeType: 'agent',
       modelName: selectedModel,
       repoId: String(sch.repoId || options?.repoId || '').trim(),
@@ -405,16 +416,34 @@ async function _schmCreateAutomation(text, intent, options) {
     return false;
   }
   if (!current()) return false;
-  const when = sch.every === 'once' ? window.ScheduleTiming.summary({ ...sch, timeZone })
-    : sch.every === 'hourly' ? '每小时 ' + String(sch.atMinute).padStart(2, '0') + ' 分'
-    : (sch.every === 'weekly' ? '每周' + '一二三四五六日'.charAt(Number(sch.weekday) - 1) + ' ' : '每天 ')
-      + String(sch.atHour).padStart(2, '0') + ':' + String(sch.atMinute).padStart(2, '0');
+  const translate = value => (typeof window !== 'undefined' && window.SoduWorkI18n &&
+    typeof window.SoduWorkI18n.translateText === 'function' ? window.SoduWorkI18n.translateText(value) : value) || value;
+  const selectedWeekdays = Array.isArray(sch.weekdays) && sch.weekdays.length ? sch.weekdays : [sch.weekday];
+  const weekdayNames = selectedWeekdays.map(day => translate('周' + '一二三四五六日'.charAt(Number(day) - 1))).join('、');
+  const monthNames = (Array.isArray(sch.monthDays) ? sch.monthDays : []).map(day => String(day).padStart(2, '0')).join('、');
+  const clockText = String(sch.atHour).padStart(2, '0') + ':' + String(sch.atMinute).padStart(2, '0');
+  let when = clockText;
+  if (sch.every === 'once') when = window.ScheduleTiming.summary({ ...sch, timeZone });
+  else if (sch.every === 'custom') when = window.ScheduleTiming.summary(sch);
+  else if (sch.every === 'hourly') when = translate('每小时第几分') + ' ' + String(sch.atMinute).padStart(2, '0') + ' ' + translate('分钟');
+  else if (sch.every === 'monthly') when = translate('每月') + ' ' + monthNames + ' ' + translate('日期') +
+    (sch.monthDayPolicy === 'last_day' ? ' · ' + translate('缺少日期时使用当月最后一天') : '') + ' ' + clockText;
+  else if (sch.every === 'weekly') when = translate('每周') + ' ' + weekdayNames + ' ' + clockText;
+  else when = translate('每天') + ' ' + clockText;
   if (typeof petSay === 'function') {
-    /* Translate generated cadence/time labels before assembling the sentence. */
-    const whenT = (typeof window !== 'undefined' && window.SoduWorkI18n &&
-      typeof window.SoduWorkI18n.translateText === 'function' ? window.SoduWorkI18n.translateText(when) : when) || when;
-    petSay('已建立自动化：' + whenT + (method ? '按「' + method.name + '」的方法' : '') +
-      '自动执行，可在「定时任务」里调整');
+    const whenT = translate(when);
+    const messageKey = method
+      ? '已建立自动化：{value1}按「{value2}」的方法自动执行，可在「定时任务」里调整'
+      : '已建立自动化：{value1}自动执行，可在「定时任务」里调整';
+    let message;
+    if (typeof window.SoduWorkI18n?.t === 'function') {
+      message = window.SoduWorkI18n.t(messageKey, messageKey, { value1: whenT, value2: method?.name || '' });
+    } else if (method) {
+      message = '已建立自动化：' + whenT + '按「' + method.name + '」的方法自动执行，可在「定时任务」里调整';
+    } else {
+      message = '已建立自动化：' + whenT + '自动执行，可在「定时任务」里调整';
+    }
+    petSay(message);
   }
   const input = document.getElementById('cpInput');
   if (input) { input.value = ''; input.style.height = ''; }

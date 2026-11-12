@@ -123,6 +123,14 @@ test('reopening the same app focuses its existing window without discarding page
   assert.equal(f.views[0].originalContents.draft, 'unsaved app state');
 });
 
+test('concurrent opens of the same app create only one window and retain the existing page', async t => {
+  const f = fixture(); t.after(() => f.call('destroy', ''));
+  const results = await Promise.all([f.detached('one'), f.detached('one'), f.detached('one')]);
+  assert.equal(f.windows.length, 1);
+  assert.equal(results.filter(result => result.reused).length, 2);
+  assert.ok(results.every(result => result.ok));
+});
+
 test('a detached app awaiting session preparation survives inline cleanup but not owner teardown', async t => {
   for (const action of ['reset-embedded', 'destroy']) {
     const cleanup = deferred(), f = fixture({ cleanup }); t.after(() => f.call('destroy', ''));

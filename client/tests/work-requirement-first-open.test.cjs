@@ -29,6 +29,7 @@ function ipcFixture({ app, bridge, owner, cwd, task, legacy = false }) {
     getURL: () => pathToFileURL(path.join(__dirname, '../desk.html')).href };
   const event = { sender, senderFrame: sender.mainFrame }, calls = [];
   const context = vm.createContext({ app, path, identityOf: async () => owner, sendIdentityOf: null,
+    _sessionOwners: null, _sharedHistory: null, _discardRenderer() {},
     taskInput: { request: async (requestOwner, route) => {
       assert.equal(requestOwner.clientId, owner.clientId);
       assert.equal(requestOwner.hub, owner.hub);
@@ -93,8 +94,15 @@ test('real Pi first requirement opens the same work archive, persists its bindin
     input: ['text'], key: 'fixture', baseUrl: 'http://127.0.0.1:' + server.address().port + '/v1',
     proxyExpiresAt: Date.now() + 60000 });
   process.env.SODUWORK_PROXY_KEY = 'fixture';
-  modelConfig.prepare = async (_app, _owner, name) => {
-    models.push(name); const selected = model(name); modelPath = modelConfig.writeModels(agentDir, selected);
+  modelConfig.prepare = async (_app, _owner, name, options) => {
+    models.push(name);
+    prepareOptions.push({ name, options: options || {} });
+    if (name === 'stale-model') return { ok: false, reason: 'selected model is unavailable' };
+    if (!name && rejectStaleDefault && options?.ignoreAgentPreference !== true)
+      return { ok: false, reason: '你选择的模型「dev-coding-large-agent-soduwork」现在不可用，请重新选择' };
+    if (name === 'mismatch-model') return { ok: true, provider: 'soduwork', agentDir,
+      model: model('server-default-model') };
+    const selected = model(name); modelPath = modelConfig.writeModels(agentDir, selected);
     return { ok: true, provider: 'soduwork', agentDir, model: selected };
   };
   modelConfig.fetchSelection = async (_owner, name) => ({ ok: true, model: model(name) });
@@ -167,6 +175,63 @@ test('real Pi first requirement opens the same work archive, persists its bindin
   assert.equal(resumed.snapshot.modelSelection.name, 'selected-model');
   assert.equal(current.calls.at(-1).requireTaskBinding, true, 'initialized archives retain the binding guard');
   assert.equal(models.at(-1), 'selected-model', 'the resumed runtime resolves its persisted choice after prewarming');
+
+  await bridge.get(resumed.ref).close();
+  const stale = sdk.SessionManager.create(cwd, path.join(agentDir, 'sessions', 'stale'));
+  // The SDK intentionally keeps metadata-only drafts in memory until the first
+  // assistant response. A resume regression needs an actual persisted archive.
+  stale.appendMessage({ role: 'assistant', content: [{ type: 'text', text: 'Earlier fixture response.' }],
+    api: 'openai-completions', provider: 'soduwork', model: 'stale-model', stopReason: 'stop', timestamp: Date.now(),
+    usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
+  stale.appendCustomEntry('soduwork.model.selection', { name: 'stale-model' });
+  const recovered = await bridge.open({ app, identity: owner, cwd,
+    resumePath: stale.getSessionFile(), modelName: 'stale-model' });
+  assert.equal(recovered.ok, true, recovered.reason);
+  assert.deepEqual(models.slice(-2), ['stale-model', ''],
+    'resuming an archive retries a stale explicit model with the current default');
+  assert.equal(prepareOptions.at(-1).options.ignoreAgentPreference, true,
+    'historical fallback bypasses only the stale Agent preference');
+  assert.equal(sdk.SessionManager.open(stale.getSessionFile()).getEntries().findLast(row =>
+    row.customType === 'soduwork.model.selection').data.name, '');
+  await recovered.session.close();
+
+  // Older archives may have no model-selection entry at all. The Hub can still
+  // reject its retired Agent default, so historical recovery must retry with
+  // the default preference explicitly ignored.
+  rejectStaleDefault = true;
+  const noSelection = sdk.SessionManager.create(cwd, path.join(agentDir, 'sessions', 'no-selection'));
+  noSelection.appendMessage({ role: 'assistant', content: [{ type: 'text', text: 'Archive predates model selection metadata.' }],
+    api: 'openai-completions', provider: 'soduwork', model: 'legacy-model', stopReason: 'stop', timestamp: Date.now(),
+    usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
+  const noSelectionOpened = await bridge.open({ app, identity: owner, cwd,
+    resumePath: noSelection.getSessionFile(), modelName: '' });
+  assert.equal(noSelectionOpened.ok, true, noSelectionOpened.reason);
+  assert.deepEqual(models.slice(-2), ['', ''],
+    'a historical archive without model metadata retries the rejected Agent default');
+  assert.equal(prepareOptions.at(-1).options.ignoreAgentPreference, true,
+    'the empty historical fallback must bypass the stale Agent preference');
+  await noSelectionOpened.session.close();
+
+  const rejectedModel = await bridge.open({ app, identity: owner, cwd, modelName: 'stale-model' });
+  assert.equal(rejectedModel.ok, false);
+  assert.equal(models.at(-1), 'stale-model', 'new chats keep strict explicit model selection');
+  assert.equal(Boolean(prepareOptions.at(-1).options.ignoreAgentPreference), false,
+    'new chats never bypass an explicit model choice');
+
+  const mismatched = sdk.SessionManager.create(cwd, path.join(agentDir, 'sessions', 'mismatch'));
+  mismatched.appendMessage({ role: 'assistant', content: [{ type: 'text', text: 'A model changed on the server.' }],
+    api: 'openai-completions', provider: 'soduwork', model: 'mismatch-model', stopReason: 'stop', timestamp: Date.now(),
+    usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
+  mismatched.appendCustomEntry('soduwork.model.selection', { name: 'mismatch-model' });
+  const mismatchOpened = await bridge.open({ app, identity: owner, cwd,
+    resumePath: mismatched.getSessionFile(), modelName: 'mismatch-model' });
+  assert.equal(mismatchOpened.ok, true, mismatchOpened.reason);
+  assert.deepEqual(models.slice(-2), ['mismatch-model', ''],
+    'a resumed model that resolves to another server model also falls back to the current default');
+  await mismatchOpened.session.close();
 
   const ordinary = sdk.SessionManager.create(cwd, path.join(agentDir, 'sessions', 'ordinary'));
   ordinary.appendMessage({ role: 'assistant', content: [{ type: 'text', text: 'An existing conversation.' }],

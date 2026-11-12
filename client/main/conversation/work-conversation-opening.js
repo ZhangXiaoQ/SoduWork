@@ -83,12 +83,14 @@ function bootstrapRecord(work, raw, options) {
   if (!work || segments.read(options.app, work.id)) throw Error('会话执行方式已变化，请重新打开');
   if (!scopeMatches(work.owner, options.identity, require('../device-auth').profiles(options.app))) throw Error('这条会话属于另一个账号');
   const snapshot = raw.snapshot();
+  const nativeDispatchId = raw.historyRow?.()?.nativeDispatchId;
   return { version: 1, id: work.id, owner: segments.scope(options.identity), title: work.title || '工作记录',
     cwd: work.cwd, originAdapter: 'pi', at: Date.now(), prefix: { messages: [], tools: [] },
     accessPolicy: snapshot.accessPolicy || options.accessPolicy, readOnly: options.readOnly,
     activePluginIds: snapshot.activePlugins || [],
     segments: [{ sessionId: work.id, adapterId: 'pi', path: work.path }],
     active: { sessionId: raw.sessionId, adapterId: raw.adapterId, ref: raw.ref,
+      ...(nativeDispatchId ? { nativeDispatchId } : {}),
       path: raw.resumeLocation?.() || raw.sessionId, modelName: snapshot.modelSelection?.name || options.modelName || '', started: false } };
 }
 module.exports = { prepare, applyPolicy, bootstrapRecord };

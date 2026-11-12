@@ -23,7 +23,7 @@
     input.addEventListener('input', function () { normalizeSingleLineInput(input); });
   }
 
-  /* Outlined password-visibility icons: open eye reveals the value; closed eye hides it. */
+  /* 密码显隐图标（lucide 风格描边）：睁眼=点击查看，闭眼=点击隐藏 */
   var EYE_VIEW_SVG = '<svg class="soduwork-auth-eye-icon icon-view" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>';
   var EYE_HIDE_SVG = '<svg class="soduwork-auth-eye-icon icon-hide" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c6.5 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3.5 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></svg>';
 
@@ -286,6 +286,7 @@
     document.body.appendChild(gate);
     form = gate.querySelector('form');
     accountInput = gate.querySelector('#soduWorkAuthAccount');
+    bindSingleLineInput(accountInput);
     passwordInput = gate.querySelector('#soduWorkAuthPassword');
     passwordEye = gate.querySelector('.soduwork-auth-pw-eye');
     displayInput = gate.querySelector('#soduWorkAuthDisplayName');
@@ -383,15 +384,15 @@
   function activate(user, quota) {
     updateIdentity(user, quota);
     if (!currentQuota?.exceeded) dismissedQuotaNotice = '';
+    void global.LegalUpdates?.refresh();
     if (emailView) emailView.invalidate();
-    if (quotaNotice && !quota?.exceeded) quotaNotice.hidden = true;
     document.documentElement.classList.remove('soduwork-auth-pending');
     document.body.classList.remove('soduwork-client-auth-open');
     if (gate) gate.hidden = true;
   }
 
   function accountCardHtml() {
-    /* Account summaries expose avatar and nickname editing; password and logout actions live on the security page. */
+    /* 账户摘要只保留头像与昵称编辑入口；密码和退出登录统一放在账号安全页。 */
     return '<div class="set-kline"><div class="k">当前账号</div><span class="soduwork-account-badge">已登录</span></div>' +
       '<div class="soduwork-account-person" data-account-profile-editor role="button" tabindex="0" aria-label="编辑个人资料" title="编辑个人资料"><span class="soduwork-account-avatar"></span><span><b class="soduwork-account-name"></b><small class="soduwork-account-id"></small></span></div>' +
       '<div class="set-note soduwork-account-quota"></div>';
@@ -412,20 +413,6 @@
     card.querySelector('.soduwork-account-id').textContent = text(currentUser.email || currentUser.username);
     renderAccountAvatar(card.querySelector('.soduwork-account-avatar'), name);
     card.querySelector('.soduwork-account-quota').textContent = quotaCopy(currentQuota);
-  }
-
-  function bindProfileEntry(card) {
-    var entry = card.querySelector('[data-account-profile-editor]');
-    if (!entry || entry.dataset.profileBound) return;
-    entry.dataset.profileBound = '1';
-    function open() { global.AccountCenter?.openProfileEditor?.(); }
-    entry.addEventListener('click', function (event) {
-      open();
-    });
-    entry.addEventListener('keydown', function (event) {
-      if (event.key !== 'Enter' && event.key !== ' ') return;
-      event.preventDefault(); open();
-    });
   }
 
   function bindProfileEntry(card) {
@@ -865,7 +852,6 @@
     api()?.listenAccountProfileChanges?.();
     global.addEventListener('soduwork-profile-updated', function (event) { updateIdentity(event.detail, null); });
     global.addEventListener('soduwork-locale-change', function () {
-      if (quotaNotice && !quotaNotice.hidden) showQuotaNotice({ user: currentUser, quota: currentQuota });
       mountSettings();
     });
     global.addEventListener('soduwork-device-auth', function (event) {

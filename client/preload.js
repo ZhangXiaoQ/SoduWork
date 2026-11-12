@@ -25,6 +25,7 @@ function timedPageInvoke(channel, ...args) {
  * Expose a runtime-neutral conversation facade; retain piSession as a compatibility alias.
  */
 const conversationSession = {
+  localHistorySupported: true,
   probe: (adapterId) => ipcRenderer.invoke('pi-session-probe', adapterId || 'pi'),
   runtimes: options => timedPageInvoke('pi-session-runtimes', options || {}),
   customAgents: Object.fromEntries(['list', 'add', 'activate', 'pick'].map(action =>
@@ -44,7 +45,7 @@ const conversationSession = {
   pathForFile: (file) => {
     try { return webUtils.getPathForFile(file); } catch (error) { return ''; }
   },
-  history: () => timedPageInvoke('pi-session-history'),
+  history: options => timedPageInvoke('pi-session-history', options),
   search: query => ipcRenderer.invoke('conversation-search', String(query || '').slice(0, 200)),
   searchHistory: () => timedPageInvoke('conversation-search-history'),
   cancelSearch: (clearCache = false) => ipcRenderer.send('conversation-search-cancel', clearCache === true),
@@ -119,7 +120,7 @@ const conversationSession = {
   workdir: () => ipcRenderer.invoke('pi-session-workdir'),
   pickWorkdir: (options) => ipcRenderer.invoke('pi-session-pick-workdir', options || {}),
   saveWorkdir: (dir) => ipcRenderer.invoke('pi-session-save-workdir', dir),
-  pickCwd: () => ipcRenderer.invoke('pi-session-pick-cwd'),
+  pickCwd: (options) => ipcRenderer.invoke('pi-session-pick-cwd', options || {}),
   openWorkdir: () => ipcRenderer.invoke('pi-session-open-workdir'),
   openSessionWorkdir: (ref) => ipcRenderer.invoke('pi-session-open-session-workdir', ref),
   setMode: (m) => ipcRenderer.invoke('pi-session-mode', m),
@@ -165,15 +166,18 @@ const conversationSession = {
  * renderer.
  */
 const workPreview = {
+  appCache: payload => ipcRenderer.invoke('work-preview-app-cache', payload || {}),
   show: (payload) => ipcRenderer.invoke('work-preview-show', payload || {}),
   /* Open independent native application windows. */
   showDetached: (payload) => ipcRenderer.invoke('work-preview-show-detached', payload || {}),
+  showEmbedded: payload => ipcRenderer.invoke('work-preview-show-embedded', payload || {}),
   windowDisplay: () => ipcRenderer.invoke('work-preview-window-display'),
   /*
    * Bridge real desk.html composer components to main-process conversation following,
    * content insertion, expansion, and send receipts.
    */
   composerHello: () => ipcRenderer.invoke('work-preview-composer-hello'),
+  composerActivity: busy => ipcRenderer.invoke('work-preview-composer-activity', { busy }),
   composerDock: (opts) => ipcRenderer.invoke('work-preview-composer-dock', opts || {}),
   composerStep: (payload) => ipcRenderer.invoke('work-preview-composer-step', payload || {}),
   composerSent: () => ipcRenderer.invoke('work-preview-composer-sent'),
@@ -482,7 +486,7 @@ const soduWorkBridge = {
   capturePage: (rect) => ipcRenderer.invoke('window-capture', rect),
   /* Forward capture options so the main-process service can hide only this
      requesting workspace window before acquiring display pixels. */
-  startScreenshot: options => ipcRenderer.invoke('screenshot-start', { hideOwner: options?.hideOwner === true }),
+  startScreenshot: (options) => ipcRenderer.invoke('screenshot-start', options || {}),
 
   /*
    * Open or update native workspace and tool windows through openDeskWindow and onDeskOpen;

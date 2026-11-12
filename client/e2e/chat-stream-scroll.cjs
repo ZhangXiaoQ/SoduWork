@@ -153,6 +153,25 @@ if (typeof electron === 'string') {
       assert.ok(report.longCode.after.chars > 24000, 'earlier output remains readable during streaming');
       assert.deepEqual(report.activeRow.live, {sameNode:true,flag:'true',visibility:'visible'});
       assert.deepEqual(report.activeRow.settled, {sameNode:true,flag:'false',visibility:'auto'});
+      // Exercise Chromium's real ResizeObserver independently of transcript
+      // changes. This is viewport coverage, not an iOS keyboard simulation.
+      await win.webContents.executeJavaScript('document.querySelector(".nchat-jump-latest").click();void 0;');
+      await delay(200);
+      await win.webContents.executeJavaScript('scrollBox.style.height="360px";void 0;');
+      await delay(250);
+      report.viewportLatest = await get();
+      assert.equal(report.viewportLatest.viewport, 360);
+      assert.ok(report.viewportLatest.height - report.viewportLatest.viewport - report.viewportLatest.top < 3,
+        'shrinking only the viewport keeps the latest content visible');
+      win.webContents.sendInputEvent({type:'mouseWheel',x:550,y:180,deltaY:150,deltaX:0});
+      await delay(200);
+      report.viewportReadBefore = await get();
+      assert.equal(report.viewportReadBefore.follow, false);
+      await win.webContents.executeJavaScript('scrollBox.style.height="480px";void 0;');
+      await delay(250);
+      report.viewportReadAfter = await get();
+      assert.ok(Math.abs(report.viewportReadAfter.top - report.viewportReadBefore.top) <= 2,
+        'viewport growth preserves an intentional history reading position');
     }
     report.ok = true;
   }).catch(error => { report.error = error.stack || String(error); }).finally(() => {

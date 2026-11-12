@@ -16,6 +16,8 @@ let _lastError = '';
 let _connectionState = 'stopped';
 let _lastConfig = '';
 let _identityOf = null;
+const _ownedRunners = new Map();
+const _runnerStops = new Set();
 const LOCAL_RPC_PREFIX = '@@SODUWORK_LOCAL_RPC@@';
 const STATUS_PREFIX = '@@SODUWORK_RUNNER_STATUS@@';
 const CONNECTION_ERRORS = Object.freeze({
@@ -373,6 +375,17 @@ function rpc(op, payload = {}, timeoutMs = 30000) {
   });
 }
 
+function _retire(child) {
+  const lifecycle = _ownedRunners.get(child);
+  if (!lifecycle) return Promise.resolve();
+  _ownedRunners.delete(child);
+  const work = lifecycle.stop().catch(error => {
+    console.warn('[runner] Owned process cleanup failed:', error.message);
+  }).finally(() => _runnerStops.delete(work));
+  _runnerStops.add(work);
+  return work;
+}
+
 function _stop() {
   if (_restartTimer) { clearTimeout(_restartTimer); _restartTimer = null; }
   _rejectRpc('Runner stopped');
@@ -380,25 +393,7 @@ function _stop() {
   const p = _proc;
   _proc = null;
   _connectionState = 'stopped';
-  if (p && !p.killed) {
-    /*
-     * Request shutdown through Runner's local control channel so Windows launcher children
-     * release WebSocket and identity locks. Use process termination only after timeout.
-     */
-    try {
-      if (p.stdin && p.stdin.writable) {
-        const id = 'shutdown-' + Date.now().toString(36);
-        p.stdin.write(LOCAL_RPC_PREFIX + JSON.stringify({
-          id, message: { op: 'runtime.shutdown' },
-        }) + '\n');
-        p.stdin.end();
-      }
-    } catch (e) { /* Use fallback cleanup if the process already exited. */ }
-    setTimeout(() => {
-      if (p.exitCode !== null || p.killed) return;
-      try { p.kill(); } catch (e) { /* Ignore an already-exited process. */ }
-    }, 10000);
-  }
+  return _retire(p);
 }
 
 function _schedule(app) {
@@ -439,6 +434,9 @@ function _start(app) {
       env: _runnerEnv(process.env, cfg.secret, app),
     });
     _proc = child;
+    if (Number.isInteger(child.pid)) {
+      _ownedRunners.set(child, require('./runner-process-lifecycle.cjs').supervise(child));
+    }
     _connectionState = 'connecting';
     if (child.stdout) child.stdout.on('data', (chunk) => {
       if (_proc === child) _consumeRunnerOutput(chunk, logPath);
@@ -460,6 +458,7 @@ function _start(app) {
       _schedule(app);
     });
     child.once('exit', (code) => {
+      void _retire(child);
       // A reconfigure may already have started the replacement.  The old
       // child's late exit must not erase or duplicate that new runner.
       if (_proc !== child) return;
@@ -594,10 +593,17 @@ function install({ app, ipcMain, identityOf }) {
       _start(app);
     }
   });
-  app.on('before-quit', () => {
+  let quitReady = false, quitWork = null;
+  app.on('before-quit', event => {
     _quitting = true;
     _wanted = false;
     _stop();
+    if (quitReady || !_runnerStops.size) return;
+    event.preventDefault();
+    if (!quitWork) quitWork = Promise.allSettled([..._runnerStops]).finally(() => {
+      quitReady = true;
+      app.quit();
+    });
   });
 }
 

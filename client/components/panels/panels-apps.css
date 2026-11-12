@@ -35,6 +35,8 @@
   font: inherit; font-size: 13px; color: var(--ink);
 }
 .appsx-search input::placeholder { color: var(--ink-4); }
+/* The wrapper owns focus; override the workspace's generic input outline. */
+html[data-desk-panel] .appsx-search input:focus-visible { outline: none; box-shadow: none; }
 .appsx-icon-btn {
   width: 36px; height: 36px; flex: none; display: inline-flex; align-items: center; justify-content: center;
   border: 0; border-radius: var(--r-full); background: transparent; color: var(--ink-3); cursor: pointer;
@@ -62,6 +64,11 @@
 /* Open the creation window directly from the Add button. */
 
 /* Use neutral theme tokens for local installation badges, independent of application type. */
+.appsx-cache{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 0;color:var(--ink-3)}
+.appsx-cache>div{display:grid;gap:5px;min-width:0}
+.appsx-cache b{font-size:14px;font-weight:500;color:var(--ink-2)}
+.appsx-cache small{font-size:12px;line-height:1.5}
+.appsx-cache button{flex-shrink:0}
 .appsx-source-tag {
   flex: none; display: inline-flex; align-items: center;
   height: 18px; padding: 0 8px; border-radius: var(--r-full);
@@ -335,6 +342,7 @@ html[data-desk-panel="workspace"] #appsClose { display: none; }
 .apps-modal-body .apps-install-head b { font-size: 13px; color: var(--ink); }
 .apps-modal-body .apps-install-head p { margin: 2px 0; font-size: 12px; color: var(--ink-2); }
 .apps-modal-body .apps-install-head em { font-style: normal; font-size: 12px; color: var(--ink-3); }
+.apps-modal-body progress { display: block; width: 100%; height: 5px; margin-top: 12px; accent-color: var(--accent); }
 .apps-modal-note { margin: 0; font-size: 12px; color: var(--ink-3); }
 .apps-modal-error { margin: 0; font-size: 12px; color: #d1242f; }
 .apps-modal footer { display: flex; gap: 8px; }

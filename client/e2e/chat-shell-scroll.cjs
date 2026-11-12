@@ -160,7 +160,8 @@ app.whenReady().then(async () => {
       'pi-session-outputs': {ok: true, files: [], artifacts: []}, 'pi-session-runtimes': {ok: true, runtimes: []},
       'pi-session-snapshot': {ok: true, snapshot: state}, 'pi-session-release': {ok: true},
       'pi-session-read-output': {ok:true,text:'# Isolated result'}, 'recent-workspace-get':{ok:true,dir:''},
-      'access-preferences-get': {ok: true}})) ipcMain.handle(name, () => value);
+      'access-preferences-get': {ok: true}})) ipcMain.handle(name, name === 'pi-session-history'
+        ? require('./fixtures/history-ipc.cjs').create(() => value) : () => value);
     const styles = [...read('desk.html').matchAll(/<link\b[^>]*rel=["']stylesheet["'][^>]*href=["']([^"']+)/g)]
       .map(match => pathToFileURL(path.join(client, match[1])).href);
     const html = '<!doctype html><html lang="zh-CN" data-theme="azure" data-desk-panel="workspace" data-workspace-view="create" data-workspace-layout="conversation" data-window-menu><meta charset="utf-8"><base href="'+pathToFileURL(client+path.sep).href+'"><body></body></html>';
@@ -242,6 +243,26 @@ app.whenReady().then(async () => {
     await js(`document.querySelector('#nchatScroll').scrollTop=document.querySelector('#nchatScroll').scrollHeight;void 0`);
     await wheel(1, 'expanded-draft-up'); await shot('expanded-draft');
     assert.match(await js(`document.querySelector('#nchatInput').value`), /保留未发送草稿第 21 行/);
+    assert.equal(await js('document.querySelector("#nchatWdPick")'), null, 'production composer has no workspace-switch button');
+    await resize(1800, 900, 1);
+    const headerBefore = await js('document.querySelector(".nchat-head-actions").getBoundingClientRect().toJSON()');
+    await click('[data-chat-summary]');
+    assert.equal(await js('document.querySelector(".nchat-summary").hidden'), false);
+    assert.deepEqual(await js('document.querySelector(".nchat-head-actions").getBoundingClientRect().toJSON()'), headerBefore, 'opening summary leaves the right-hand controls fixed');
+    await shot('summary-right-aligned');
+    await click('#nchatInput');
+    assert.equal(await js('document.querySelector(".nchat-summary").hidden'), true, 'editing dismisses the summary');
+    await js(`ChatWorkbench.openInput({path:'isolated-result.md',name:'isolated-result.md',kind:'file',text:'# Isolated result'});void 0`);
+    await wait(250);
+    await click('[data-chat-summary]');
+    const joined = await js(`(()=>{const rect=s=>document.querySelector(s).getBoundingClientRect(),root=rect('.nchat'),panel=rect('.nchat-summary'),stage=rect('.nchat-stage'),preview=rect('.ncw');
+      return Math.abs(stage.right-root.right)<1&&Math.abs(preview.right-root.right)<1&&Math.abs(panel.right-(rect('.nchat-head').right-8))<1;})()`);
+    assert.equal(joined, true, 'full desktop shell has no unoccupied column after the summary or preview');
+    await shot('summary-preview-full-width');
+    await click('[data-chat-summary-close]');
+    assert.equal(await js(`Math.abs(document.querySelector('.ncw').getBoundingClientRect().right-document.querySelector('.nchat').getBoundingClientRect().right)<1`), true);
+    assert.match(await js(`document.querySelector('#nchatInput').value`), /保留未发送草稿第 21 行/);
+    report.cases.push('Full source-client shell removes workspace switch, keeps header controls stationary when toggling summary, and fills the right edge with preview without losing the unsent draft.');
     assert.doesNotMatch(await js(`document.querySelector('#nchatList').textContent`), /开对话时出错|is not a function/);
     assert.deepEqual(await js('errors'), []); assert.deepEqual(report.errors, []);
     report.ok = true;

@@ -452,8 +452,8 @@ async def update_shared(session, client, task, data):
         task.requirement_content = content
     for key, value in data.items():
         setattr(task, tasks._FIELD_MAP.get(key, key), value)
-    # Increment requirement_version only for definition changes, matching update_task.
-    # Avoid a second increment when apply already performed the conditional version update.
+    # Match update_task: only definition changes advance the version. Edits with
+    # requirementVersion already increment it conditionally in apply.
     if not requirement_edit and set(data) & tasks._REQ_CONTENT_KEYS:
         task.requirement_version = int(task.requirement_version or 1) + 1
     from . import task_notifications

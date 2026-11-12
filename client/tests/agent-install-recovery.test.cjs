@@ -84,3 +84,29 @@ test('reopening Agent management resumes the existing installation job without s
   assert.equal(vm.runInContext('_agJobs["office~dsh"].jobId', f), 'existing');
   f.closeAgentsPanel();
 });
+
+test('job text translates server phrases while preserving unknown diagnostics and safe fallback', () => {
+  const f = fixture();
+  assert.equal(f._agTx(null), '');
+  assert.equal(f._agTx('custom diagnostic <fixture>'), 'custom diagnostic <fixture>');
+  // A parenthetical with no translated phrase must not recursively call itself.
+  assert.equal(f._agTx('\uff08unknown suffix\uff09'), '\uff08unknown suffix\uff09');
+  const phrases = new Map([
+    ['\u5b8c\u6210', 'Done'],
+    ['\u72b6\u6001\uff1a', 'Status:'],
+    ['\uff08\u8d70\u6211\u81ea\u5df1\u7684\u989d\u5ea6\uff09', ' (personal quota)'],
+  ]);
+  f.SoduWorkI18n = { translateText: text => phrases.get(text) || text };
+  assert.equal(f._agTx('\u5b8c\u6210'), 'Done');
+  assert.equal(f._agTx('model-id\uff08\u8d70\u6211\u81ea\u5df1\u7684\u989d\u5ea6\uff09'), 'model-id (personal quota)');
+  assert.equal(f._agTx('\u72b6\u6001\uff1a\u5b8c\u6210'), 'Status:Done');
+  assert.equal(f._agTx('model-id\uff08unknown suffix\uff09'), 'model-id\uff08unknown suffix\uff09');
+  f.esc = value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+  const html = f._agJobHtml({ key: 'office~dsh', action: 'repair', state: 'done', ok: true,
+    lines: ['\u5b8c\u6210', 'custom diagnostic <fixture>'] });
+  assert.match(html, /<b>Done<\/b>/);
+  assert.match(html, /Done\ncustom diagnostic &lt;fixture&gt;/);
+  assert.doesNotMatch(html, /<fixture>/);
+  f.SoduWorkI18n.translateText = () => { throw Error('unavailable'); };
+  assert.equal(f._agTx('original diagnostic'), 'original diagnostic');
+});

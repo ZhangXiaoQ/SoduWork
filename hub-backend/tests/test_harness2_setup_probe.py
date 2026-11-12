@@ -18,7 +18,7 @@ def answer():
 
 
 def proof(**changes):
-    return {"type": "harness2_probe_complete", "coverage": "execute-v2", "stages": 0, **changes}
+    return {"type": "harness2_probe_complete", "coverage": "native-execute-v1", "stages": 0, **changes}
 
 
 class Harness2SetupProbeTests(unittest.TestCase):
@@ -40,21 +40,21 @@ class Harness2SetupProbeTests(unittest.TestCase):
 
     def test_token_without_daily_execution_proof_is_not_a_pass(self):
         for evidence in (None, proof(stages=7), proof(stages=False), proof(stages=0.0),
-                         proof(coverage="executor-only"), proof(coverage="refine-v1", stages=7)):
+                         proof(coverage="executor-only"), proof(coverage="execute-v2"), proof(coverage="refine-v1", stages=7)):
             with self.subTest(evidence=evidence):
                 result, _, _ = self.run_probe(protocol(answer(), *([evidence] if evidence else [])))
                 self.assertFalse(result["ok"])
-                self.assertIn("执行组件", result["detail"])
+                self.assertIn("独立执行器", result["detail"])
 
     def test_complete_proof_token_and_zero_exit_are_all_required(self):
         result, logs, options = self.run_probe(protocol(answer(), proof()))
         self.assertTrue(result["ok"])
-        self.assertEqual(result["coverage"], "execute-v2")
+        self.assertEqual(result["coverage"], "native-execute-v1")
         self.assertEqual(options["timeout"], 180)
         self.assertNotIn("progress_line", options)
-        self.assertTrue(any("执行组件" in line and "额度" in line and "3 分钟" in line for line in logs))
+        self.assertTrue(any("独立执行器" in line and "额度" in line and "3 分钟" in line for line in logs))
         self.assertFalse(any("7 轮" in line or "10 分钟" in line for line in logs))
-        self.assertIn("执行组件", result["detail"])
+        self.assertIn("独立执行器", result["detail"])
         self.assertIn("不包含推演", result["detail"])
         for output, code in [(protocol(proof()), 0), (protocol(answer(), proof()), 124),
                              (protocol(answer(), proof(), {"error": {"message": "execution failed"}}), 0)]:
@@ -101,7 +101,7 @@ class Harness2SetupProbeTests(unittest.TestCase):
         from app.services import harness2_runtime
         old = {"ok": True, "at": 123, "detail": "old executor success", "steps": []}
         historical = {**old, "coverage": "refine-v1"}
-        current = {**old, "coverage": "execute-v2"}
+        current = {**old, "coverage": "native-execute-v1"}
         with (patch.object(agent_setup, "_bin_of", return_value=sys.executable),
               patch.object(agent_setup, "_runtime_issue", return_value=""),
               patch.object(agent_setup, "_version_of", return_value=("0.1.0", "bundled", "")),

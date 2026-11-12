@@ -52,11 +52,32 @@ with tempfile.TemporaryDirectory(prefix="soduwork-misplaced-smoke-") as temporar
     check("top-level smoke files cannot silently bypass registration",
           any("must live in smoke/" in error for error in audit_manifest(Path(temporary))))
 check("Harness2 and requirement maintenance regressions stay in the offline release gate",
-      {"test_harness2_regressions.py", "test_requirement_maintenance_regressions.py",
+      {"test_harness2_regressions.py", "test_requirement_review_access.py",
+       "test_requirement_maintenance.py", "test_requirement_maintenance_policy.py",
+       "test_handoff_maintenance_boundary.py", "test_notice_audience_regression.py",
        "test_darwin_process_tree.py", "test_harness2_engine.py",
        "test_harness2_lifecycle.py", "test_harness2_platforms.py",
        "test_managed_agent_download.py", "test_opencode_runtime_config.py"}
       <= set(RELEASE_SMOKES))
+import unittest
+from collections import Counter
+
+
+def test_ids(suite):
+    for item in suite:
+        if isinstance(item, unittest.TestSuite):
+            yield from test_ids(item)
+        else:
+            yield item.id()
+
+
+loader = unittest.TestLoader()
+expected = Counter(test_ids(loader.loadTestsFromName("test_requirement_maintenance_regressions")))
+distributed = Counter(test_ids(loader.loadTestsFromNames([
+    "test_requirement_maintenance", "test_requirement_maintenance_policy",
+    "test_handoff_maintenance_boundary", "test_notice_audience_regression", "test_requirement_review_access"])))
+check("distributed maintenance entries preserve every aggregate test exactly once",
+      bool(expected) and expected == distributed and not loader.errors, loader.errors)
 check("account deletion and device-channel revocation stay in the offline release gate",
       {"test_account_privacy.py", "test_device_connections.py"} <= set(RELEASE_SMOKES))
 check("tier entries stay sorted for reviewability",

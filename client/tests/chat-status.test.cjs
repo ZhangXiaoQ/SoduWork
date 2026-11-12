@@ -416,6 +416,14 @@ test('reopened completed turn uses the saved execution duration', () => {
   assert.match(view.metricsHtml(false),/data-thinking-elapsed>3m 05s<\/b>/);
 });
 
+test('a user-only history archive has unknown duration until delegated timing arrives', () => {
+  const current = { snap: { status: 'idle', messages: [{ role: 'user', text: 'Restore my work' }] } };
+  const view = status.createThinking(() => current);
+  assert.match(view.metricsHtml(false), /data-thinking-elapsed>未记录<\/b>/);
+  current.snap.execution = { controlled: true, running: false, elapsedMs: 47000 };
+  assert.match(view.metricsHtml(false), /data-thinking-elapsed>47s<\/b>/);
+});
+
 test('completed clock uses the persisted turn boundary after waiting, switching and reopening', () => {
   const originalNow = Date.now;
   let now = 100000;
@@ -462,7 +470,7 @@ test('completion while away discards the local open-panel clock and unknown hist
     current.snap = { status: 'idle', execution: { running: false, elapsedMs: 0 },
       messages: [{ role: 'user' }, { role: 'assistant', done: true }] };
     view.syncThinkingClock(false);
-    assert.match(view.metricsHtml(false), /data-thinking-elapsed>—<\/b>/);
+    assert.match(view.metricsHtml(false), /data-thinking-elapsed>未记录<\/b>/);
   } finally { view.stopThinkingClock(); Date.now = originalNow; }
 });
 
@@ -489,6 +497,6 @@ test('cloud timer ignores an old local submit and resets for the authoritative r
     now += 86400000;
     assert.match(view.metricsHtml(false), /data-thinking-elapsed>5s</);
     current.snap.execution.elapsedMs = null;
-    assert.match(view.metricsHtml(false), /data-thinking-elapsed>—</);
+    assert.match(view.metricsHtml(false), /data-thinking-elapsed>未记录</);
   } finally { view.stopThinkingClock(); Date.now = originalNow; }
 });

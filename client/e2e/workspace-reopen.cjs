@@ -35,7 +35,7 @@ if (typeof electron === 'string') {
   if (!profile || !path.resolve(profile).startsWith(path.resolve('D:/SoduWorkTests/workspace-reopen-'))) throw Error('Isolated profile required');
   fs.mkdirSync(profile, { recursive: true }); app.setPath('userData', profile);
   app.on('window-all-closed', () => {});
-  const report = { ok: false, scope: 'Production window route/preload/renderer; synthetic auth, Hub and Agent; no external model or user data', checks: [] };
+  const report = { ok: false, scope: 'Production window route/preload/renderer; synthetic auth, Hub and Agent; no external model or user data', checks: [], timings: [] };
   const client = path.resolve(__dirname, '..'), windows = new Map();
   let owner = 'fixture-hub|account-a', sends = 0, opens = 0;
   const snapshotRequests = [];
@@ -46,10 +46,12 @@ if (typeof electron === 'string') {
     status: id === 'local-chat' ? 'streaming' : 'idle', adapterId: 'pi', tools: [],
     messages: Array.from({ length: 220 }, (_, i) => i % 2 === 0
       ? { role: 'user', text: id + ' user message ' + i, sentAt: 1000 + i }
-      : { role: 'assistant', blocks: [{ kind: 'text', text: id + ' assistant message ' + i, done: true }], done: true }),
+      : { role: 'assistant', blocks: [{ kind: 'text', text: id + ' assistant message ' + i,
+        done: !(id === 'local-chat' && i === 219) }], done: !(id === 'local-chat' && i === 219) }),
     ...(id === 'cloud-chat' ? { cloudHandoff: { phase: 'committed', taskId: 'cloud-task' } } : {}),
   }]));
   const handle = (name, fn) => ipcMain.handle(name, fn);
+  ipcMain.on('client-distribution-info', event => { event.returnValue = { hubOrigin: 'http://127.0.0.1:19999' }; });
   handle('hub-connection-info', () => ({ hub: 'http://127.0.0.1:19999', internalTest: true, editable: false }));
   handle('device-auth-status', () => ({ ready: true, sessionReady: true, secure: true }));
   handle('pi-session-open', (event, input) => {
@@ -71,12 +73,16 @@ if (typeof electron === 'string') {
     return { ok: true, snapshot: uiWindow.snapshot(runtime) };
   });
   handle('pi-session-send', () => { sends++; throw Error('Restoration must not send'); });
-  handle('pi-session-history', () => ({ ok: true, items: [...snapshots.keys()].map(id => ({ id, title: id, state: 'running', adapterId: 'pi' })) }));
+  handle('pi-session-history', require('./fixtures/history-ipc.cjs').create(() => ({ ok: true,
+    items: [...snapshots.keys()].map(id => ({ id, title: id, state: 'running', adapterId: 'pi' })) })));
+  handle('pi-session-work-cards', () => ({ ok: true, cards: [], workOnly: false }));
   for (const channel of ['pi-session-history-archived', 'pi-session-outputs', 'session-memory-options',
     'pi-session-probe', 'pi-session-runtimes', 'conversation-capabilities', 'pi-session-release',
     'client-update-status', 'file-type-icons', 'workspace-titlebar-status', 'window-titlebar-info',
     'work-preview-occlusion', 'access-preferences-get', 'file-open-list', 'platform-connection-status',
-    'personal-plugin-list', 'personal-plugin-debug', 'pi-session-mode', 'work-preview-destroy', 'recent-workspace-get']) {
+    'personal-plugin-list', 'personal-plugin-debug', 'pi-session-mode', 'work-preview-destroy', 'recent-workspace-get',
+    'work-preview-reset-embedded', 'work-preview-app-data-changed', 'pi-session-conversation-runtimes',
+    'window-shortcuts-state', 'release-notes-release']) {
     handle(channel, () => ({ ok: true, items: [], files: [], runtimes: [], capabilities: [] }));
   }
   handle('work-root-default', () => profile);
@@ -97,6 +103,7 @@ if (typeof electron === 'string') {
     await delay(80);
   }
   async function open(payload = { panel: 'workspace' }, pending) {
+    const started = Date.now();
     holdBoot = !!pending;
     route.openDeskWindow(payload, null); win = windows.get('workspace');
     if (pending) {
@@ -108,12 +115,15 @@ if (typeof electron === 'string') {
     if (win.webContents.isLoading()) await new Promise(resolve => win.webContents.once('did-finish-load', resolve));
     await until('window.fixtureReady===true && window.WorkspaceHost && window.NativeChat', 'complete workspace');
     await delay(100);
+    report.timings.push({ operation: 'open', view: payload.view || '', chatId: payload.chatId || '', milliseconds: Date.now() - started });
   }
   async function close() {
     const old = win;
     await new Promise(resolve => { old.once('closed', resolve); old.close(); });
   }
   app.whenReady().then(async () => {
+    session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] },
+      (_request, callback) => callback({ cancel: true }));
     const timer = setTimeout(() => { report.error = 'Fixture exceeded 80 seconds'; finish(1); }, 80000);
     function finish(code) {
       clearTimeout(timer); fs.writeFileSync(path.join(output, phase + '.json'), JSON.stringify(report, null, 2)); app.exit(code);
@@ -122,7 +132,8 @@ if (typeof electron === 'string') {
       const main = fs.readFileSync(path.join(client, 'main.js'), 'utf8');
       const start = main.indexOf('function openDeskWindow('), end = main.indexOf('function _appIcon(', start);
       function FixtureWindow(options) {
-        const created = new BrowserWindow({ ...options, show: false, webPreferences: { ...options.webPreferences, offscreen: true } });
+        const created = new BrowserWindow({ ...options, show: false, webPreferences: {
+          ...options.webPreferences, offscreen: true, backgroundThrottling: false } });
         created.show = () => {}; created.focus = () => {};
         return created;
       }
@@ -144,7 +155,8 @@ if (typeof electron === 'string') {
           document.addEventListener('click',e=>{window.fixtureLastClick=e.target.outerHTML.slice(0,300);},true);
           window.fixtureUser='unbound';
           window.SoduWorkAPI=new Proxy({online:true,taskStorageKey:()=>fixtureUser,
-            clientAuthSnapshot:()=>({state:fixtureUser==='unbound'?'pending':'active'}),
+            clientAuthSnapshot:()=>({state:fixtureUser==='unbound'?'pending':'active',clientId:'fixture-device',
+              user:fixtureUser==='unbound'?null:{id:fixtureUser}}),
             myModels:async()=>({usable:[]}),pluginCatalog:async()=>({items:[]}),listTeammates:async()=>[],
             getTeamCapability:async()=>({canManage:false,meId:'fixture'}),getConfig:async()=>({})},
             {get:(target,key)=>key in target?target[key]:async()=>({items:[],skills:[],enabled:[],schedules:[],runs:[]})});
@@ -168,6 +180,7 @@ if (typeof electron === 'string') {
         for (const id of ['local-chat', 'cloud-chat']) {
           await open({ panel: 'workspace', view: 'create', chatId: id });
           await until(`NativeChat.sessionInfo().sessionId===${JSON.stringify(id)}`);
+          (report.resumeDiagnostics ||= []).push(await js('({view:WorkspaceHost.view,reading:NativeChat.readingPosition(),messageNodes:document.querySelectorAll("#nchatMessages>*").length,scroll:!!document.getElementById("nchatScroll"),readingModule:typeof ChatReadingPosition,body:document.body.innerText.slice(-800)})'));
           await until('Boolean(document.querySelector("[data-load-older]"))');
           await js('{const s=document.getElementById("nchatScroll");s.__soduworkScrollFollow.follow=false;s.__soduworkScrollFollow.userIntent=true;s.scrollTop=0;s.dispatchEvent(new Event("scroll"));}void 0;');
           await click('[data-load-older]');

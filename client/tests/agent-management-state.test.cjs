@@ -16,6 +16,20 @@ const machine = agents => ({ runnerId: 'computer', scope: 'current-instance', la
 const base = { key: 'opencode', name: 'OpenCode', installed: true, present: true,
   state: 'ready', version: '1.18.18', bin: 'opencode.exe', model: 'selected-model' };
 
+test('managed Agent defaults disclose Anthropic incompatibility while account-based Agents remain unchanged', () => {
+  const f = fixture();
+  f.run("_agData={models:[{name:'anthropic-model',providerKind:'anthropic'},{name:'openai-model',providerKind:'openai-compat'}]}");
+  for (const model of ['anthropic-model', '']) {
+    const html = f.context._agModelHtml({ modelPick: true, key: 'pi', model, modelEffective: 'anthropic-model' });
+    assert.match(html, /OpenAI 兼容协议/);
+    assert.match(html, /Anthropic 模型需使用支持其协议的 Agent/);
+  }
+  assert.match(f.context._agModelHtml({ modelPick: true, key: 'pi', model: 'openai-model' }), /role="note"/);
+  f.run("_agData={models:[{name:'openai-model',providerKind:'openai-compat'}]}");
+  assert.doesNotMatch(f.context._agModelHtml({ modelPick: true, key: 'pi', model: 'openai-model' }), /ag-model-warn/);
+  assert.doesNotMatch(f.context._agModelHtml({ modelPick: false, key: 'claude', model: 'anthropic-model' }), /OpenAI 兼容/);
+});
+
 test('Agent management renders only this client even when cloud and other instances share its label', () => {
   const f = fixture();
   f.context.machines = [machine([base]),

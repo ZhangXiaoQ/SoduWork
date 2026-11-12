@@ -93,6 +93,46 @@ class OpenKeepaliveTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["error"]["code"], 404)
         self.assertNotIn(b"model gone", data_frames[0])
 
+    async def test_billing_failures_are_safe_permanent_json_and_stream_diagnostics(self):
+        for upstream in ({"error": {"code": "1113", "message": "private-fixture-secret"}},
+                         {"error": {"type": "insufficient_quota", "message": "https://private.invalid"}}):
+            error = model_errors.UpstreamError(429, json.dumps(upstream))
+            error.retry_after = 2
+
+            async def boom():
+                raise error
+
+            ordinary = ai_proxy._proxy_error(error)
+            expected = json.loads(ordinary.body)
+            self.assertEqual(expected["error"]["code"], "upstream_billing_error")
+            self.assertEqual(expected["error"]["status"], 429)
+            self.assertIn("billing_required", expected["error"]["message"])
+            self.assertNotIn("retry-after", ordinary.headers)
+            self.assertNotIn("retry_after_ms", expected["error"])
+            self.assertEqual(expected["error"].get("providerCode"),
+                             "1113" if "code" in upstream["error"] else None)
+            self.assertIn("余额", model_errors.public_failure(upstream))
+            for responses in (False, True):
+                streamed = await ai_proxy._open_then_stream(None, boom, responses=responses)
+                body = b"".join(await self._drain(streamed))
+                await streamed.background()
+                frames = [line[6:] for line in body.split(b"\n") if line.startswith(b"data: ")]
+                self.assertEqual([json.loads(frame) for frame in frames], [expected])
+                self.assertNotIn(b"private-fixture-secret", body)
+                self.assertNotIn(b"private.invalid", body)
+
+    async def test_unknown_429_remains_transient_without_echoing_arbitrary_codes(self):
+        error = model_errors.UpstreamError(429, json.dumps({
+            "error": {"code": "11130-private", "message": "private-fixture-secret"}}))
+        error.retry_after = 2
+        response = ai_proxy._proxy_error(error)
+        payload = json.loads(response.body)["error"]
+        self.assertEqual(payload["code"], 429)
+        self.assertEqual(payload["retry_after_ms"], 2000)
+        self.assertEqual(response.headers["retry-after"], "2")
+        self.assertNotIn("11130", response.body.decode())
+        self.assertNotIn("private-fixture-secret", response.body.decode())
+
     async def test_generator_close_cancels_pending_open(self):
         # Closing the generator must cancel a pending upstream open to prevent socket or lease leaks.
         # Cancellation before coroutine startup marks the task cancelled without executing its body.

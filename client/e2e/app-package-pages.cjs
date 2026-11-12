@@ -88,11 +88,17 @@ if (typeof electron === 'string') {
     const end = source.indexOf('\n      },\n    };', start) + '\n      }'.length;
     const trial = source.slice(start, end);
     await js(host.webContents, fs.readFileSync(path.resolve(__dirname, '../components/panels/plugin-ui-host.js'), 'utf8'));
-    const opened = await js(host.webContents, '(async()=>{const closeModal=()=>{};return (' + trial + ')(' + JSON.stringify(personal.get(app, pluginId)) + ')})()');
-    assert.equal(opened.detached, true);
+    const embedded = process.env.SODUWORK_PACKAGE_EMBEDDED === '1';
+    const item = personal.get(app, pluginId);
+    const opened = embedded
+      ? await js(host.webContents, 'PluginUIHost.openContribution(' + JSON.stringify(item.ui.contributions[0]) + ',{item:' + JSON.stringify(item) + ',embedded:true,bounds:{x:52,y:0,width:748,height:600}})')
+      : await js(host.webContents, '(async()=>{const closeModal=()=>{};return (' + trial + ')(' + JSON.stringify(item) + ')})()');
+    assert.equal(embedded ? opened.embedded : opened.detached, true);
+    if (embedded) assert.equal(windows.length, 0, 'package embedding creates no standalone window');
     console.log('Package phase',phase,'window opened');
-    windows.at(-1).show();windows.at(-1).focus();
-    const [, application, composer] = windows.at(-1).contentView.children, wc = application.webContents;
+    const surface = embedded ? host : windows.at(-1);
+    surface.show();surface.focus();
+    const [, application, composer] = surface.contentView.children, wc = application.webContents;
     await until(() => js(wc, '!!window.staticReady && picture.naturalWidth===10'));
     console.log('Package phase',phase,'resources ready');
     const stored = await js(wc, `(async()=>{const r=await soduWorkApp.data.get({collection:'notes',id:'native_note'});if(!r.ok)throw Error(r.reason);return r.item})()`);
@@ -123,8 +129,20 @@ if (typeof electron === 'string') {
     assert.equal(await js(composer.webContents, 'draft.value'), '保留草稿');
     assert.equal(await js(wc, `(async()=> (await fetch('/references/private.txt')).status)()`), 404);
     console.log('Package phase',phase,'conversation checks passed');
+    const cookieUrl = new URL(wc.getURL()).origin + '/';
+    await wc.session.cookies.set({ url: cookieUrl, name: 'cache-preserved', value: 'signed-in-fixture' });
+    const cacheBefore = await js(host.webContents, 'soduWorkAPI.workPreview.appCache(' + JSON.stringify({ pluginId, action: 'stats' }) + ')');
+    assert.equal(cacheBefore.ok, true, cacheBefore.reason); assert.ok(cacheBefore.resourceBytes > 0);
+    const cleared = await js(host.webContents, 'soduWorkAPI.workPreview.appCache(' + JSON.stringify({ pluginId, action: 'clear' }) + ')');
+    assert.equal(cleared.ok, true, cleared.reason); assert.equal(cleared.resourceBytes, 0);
+    assert.equal((await wc.session.cookies.get({ url: cookieUrl, name: 'cache-preserved' }))[0].value, 'signed-in-fixture');
+    assert.equal(await js(wc, 'document.getElementById("total").textContent'), phase === 'restart' ? '2' : '1');
+    assert.equal((await js(wc, `(async()=> (await soduWorkApp.data.get({collection:'notes',id:'native_note'})).item.value.count)()`)), phase === 'restart' ? 2 : 1);
+    assert.equal(await js(wc, `(async()=> (await fetch('/data.json')).json())().then(x=>x.message)`), '离线数据', 'resource cache rebuilds after clearing');
+    assert.equal(await js(composer.webContents, 'draft.value'), '保留草稿');
     await wc.session.flushStorageData();
-    windows.at(-1).destroy();
+    if (embedded) await js(host.webContents, 'soduWorkAPI.workPreview.destroy(' + JSON.stringify(opened.tabId) + ')');
+    else windows.at(-1).destroy();
     const background = require('../main/app-conversation-connection.cjs').context(app,pluginId);
     const lease = await require('../main/pi-session/app-mcp-proxy.cjs').create(background.connection);
     try {

@@ -105,17 +105,28 @@ async def owns_envelope(session, integration, env):
         Sync.catalog_id == repo.id, Sync.enabled_at.isnot(None))))
 
 
-async def source(session, catalog_id):
-    repo = await session.get(am.ScmRepository, catalog_id)
+async def source(session, catalog_id, *, require_enabled=False):
+    # Resolve the current authorization snapshot in one query before each side
+    # effect. Identity-map hits must not hide revocation between HTTP calls.
+    result = (await session.execute(select(am.ScmRepository, models.Integration,
+        models.OrgUnit.id, Sync.enabled)
+        .select_from(am.ScmRepository)
+        .outerjoin(models.Integration, models.Integration.id == am.ScmRepository.integration_id)
+        .outerjoin(models.OrgUnit, models.OrgUnit.id == am.ScmRepository.org_id)
+        .outerjoin(Sync, Sync.catalog_id == am.ScmRepository.id)
+        .where(am.ScmRepository.id == catalog_id)
+        .execution_options(populate_existing=True))).first()
+    repo, integration, org_id, enabled = result if result else (None, None, None, None)
     if repo is None or repo.provider not in PROVIDERS or not repo.active or repo.archived:
         raise ValueError("仅支持有效且未归档的 GitLab 或 GitHub 仓库")
-    integration = await session.get(models.Integration, repo.integration_id)
     if integration is None or not integration.enabled:
         raise ValueError("仓库所属集成已停用")
     if integration.type != repo.provider:
         raise ValueError("仓库平台与集成配置不一致，请重新同步仓库目录")
-    if repo.provider == "github" and (not repo.org_id or not await session.get(models.OrgUnit, repo.org_id)):
+    if repo.provider == "github" and not org_id:
         raise ValueError("请先为 GitHub 仓库设置所属团队，再开启 Issue 同步")
+    if require_enabled and not enabled:
+        raise ValueError("Repository issue subscription is disabled")
     cfg, _ = await repository_catalog._runtime_config(session, integration)
     return repo, cfg
 

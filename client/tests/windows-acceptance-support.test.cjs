@@ -133,3 +133,29 @@ test('acceptance receipt is written only after every owned cleanup succeeds', as
     }
   }
 });
+
+
+test('public Windows acceptance reaches artifact validation without private distribution modules', () => {
+  const fs = require('node:fs'), vm = require('node:vm');
+  const entry = path.resolve(__dirname, '../../tools/ci/windows-installed-check.cjs');
+  const entryRequire = require('node:module').createRequire(entry);
+  const state = { platform: 'win32', env: {}, argv: ['node', entry,
+    path.join(os.tmpdir(), 'fixture-installer.exe'), path.join(os.tmpdir(), 'fixture-receipt')] };
+  let sideEffects = 0;
+  assert.throws(() => vm.runInNewContext(fs.readFileSync(entry, 'utf8'), {
+    process: state,
+    require(name) {
+      if (name === 'node:fs') return new Proxy(fs, { get(target, key) {
+        if (['readFileSync', 'mkdirSync', 'mkdtempSync', 'writeFileSync'].includes(key)) return () => {
+          sideEffects++; throw Error('Artifact validation must precede filesystem access');
+        };
+        return target[key];
+      } });
+      if (name === 'node:child_process') return { spawnSync() {
+        sideEffects++; throw Error('Artifact validation must precede native execution');
+      } };
+      return entryRequire(name);
+    },
+  }), /Provide the immutable build artifact SHA-256/);
+  assert.equal(sideEffects, 0);
+});

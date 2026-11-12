@@ -73,7 +73,7 @@ function _schCardHtml(s) {
   const method = s.pluginBindingId ? (plugin && plugin.name) || '企业插件'
     : s.personalPluginKey ? (plugin && plugin.name) || s.personalPluginKey : '';
   const repo = s.repoId ? (_schRepos.find(r => r.id === s.repoId) || {}).name || s.repoId : '';
-  const rh = _schRhythm(s).split(' ');
+  const rh = s.every === 'custom' ? [_schRhythm(s)] : _schRhythm(s).split(' ');
   const retry = s.retrying ? ' · 自动重试 ' + Number(s.retryCount || 0) + '/' + Number(s.retryLimit || 0) : '';
   // Keep the runtime identity visual and consistent with the chat composer.
   // The old card repeated the runtime name beside a generic robot, which made
@@ -152,6 +152,8 @@ async function _schToggleEnabled(sid, source) {
 function _schCardNext(s) {
   if (s.every === 'once' && s.onceFired) return s.retrying ? '等待重试' : '不再自动触发';
   if (!s.enabled) return '已停用，不会自动跑';
+  if (s.every === 'custom' && !s.nextRunAt) return _schTx(s.retrying ? '等待重试' : '自定义规则已无后续执行时间');
+  if (s.endDate && !s.nextRunAt) return _schTx(s.retrying ? '等待重试' : '计划已超出有效日期范围');
   if (s.every === 'once') {
     if (Date.parse(s.runAt) <= Date.now()) return '等待补跑一次';
     const local = window.ScheduleTiming?.localInput(s.runAt, s.timeZone || _schBrowserTimeZone()) || '';

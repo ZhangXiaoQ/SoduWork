@@ -261,6 +261,7 @@ def _new_run(s, trigger: str, idempotency_key: str = ""):
         owner_user_id=getattr(s, "owner_user_id", None),
         trigger=trigger, attempt=attempt, state="starting",
         receipt={"schema": "soduwork.automation-receipt/v1", "mode": mode,
+                 "conversationTitle": automation_conversation_title(s, started_at),
                  "plugin": plugin, "inputSnapshot": clean_plugin_inputs(
                      getattr(s, "plugin_inputs", {}) or {}),
                  "route": {"requested": requested}, "timing": snapshot(s), **origin},

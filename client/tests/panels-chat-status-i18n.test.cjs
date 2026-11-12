@@ -10,7 +10,7 @@ const vm = require('node:vm');
 const CORE = path.join(__dirname, '../core/');
 const LOCALES = path.join(CORE, 'locales/');
 const LOCALE_FILES = ['en-US.js', 'en-US-workspace.js', 'en-US-chat.js', 'en-US-notification-pages.js',
-  'en-US-chat-pages.js', 'ja-JP.js', 'ja-JP-gap-pages.js', 'ko-KR.js', 'ko-KR-gap-pages.js',
+  'en-US-chat-pages.js', 'en-US-plugin-pages.js', 'ja-JP.js', 'ja-JP-gap-pages.js', 'ko-KR.js', 'ko-KR-gap-pages.js',
   'en-US-runtime-surfaces.js', 'ja-JP-runtime-surfaces.js', 'ko-KR-runtime-surfaces.js'];
 
 // Node locale modules export values instead of populating browser globals.
@@ -45,6 +45,35 @@ function mergedCatalog(locale) {
     require(path.join(LOCALES, locale + '.js')),
     require(path.join(LOCALES, locale + '-gap-pages.js')));
 }
+
+test('completed summaries explain missing timing in every supported non-Chinese locale', () => {
+  const summary = require('../components/panels/chat-turn-summary');
+  const expected = {'en-US': 'Not recorded', 'ja-JP': '未記録', 'ko-KR': '미기록'};
+  for (const [locale, text] of Object.entries(expected)) {
+    loadI18n(locale);
+    const html = summary.create({esc: String}).html({key: 'reply:1', elapsedMs: null});
+    assert.ok(html.includes(text), locale);
+    assert.doesNotMatch(html, /未记录|—|0s/);
+    const current = require('../components/panels/panels-chat-status').createThinking(() => ({
+      snap: {status: 'idle', messages: [{role: 'user'}, {role: 'assistant', done: true}], execution: {elapsedMs: 0}},
+    })).metricsHtml(false);
+    assert.ok(current.includes('data-thinking-elapsed>' + text + '</b>'), locale);
+  }
+});
+
+test('controller reconnect and authentication reasons translate before rendering', () => {
+  const status = require('../components/panels/panels-chat-status');
+  const reasons = ['正在重新连接执行记录；后续需求继续等待', '停止尚未确认；后续需求继续等待',
+    '登录已过期，请重新连接后继续', '当前连接没有执行此操作的权限'];
+  for (const locale of ['en-US', 'ja-JP', 'ko-KR']) {
+    const i18n = loadI18n(locale);
+    for (const reason of reasons) {
+      const translated = i18n.translateText(reason);
+      assert.notEqual(translated, reason);
+      assert.equal(status.work({status:'waiting-user',statusText:reason}), translated);
+    }
+  }
+});
 
 test('system notices localize capability failures and envelopes without rewriting named resources', () => {
   const denied = '当前会话没有授权：浏览网页、Office 文档。请新建会话并开启对应能力后再使用这个插件';

@@ -171,7 +171,8 @@ if (typeof electron === 'string') {
       report.layouts.push(layout); await screenshot('completed-' + width);
     }
     await viewport(1100); report.results.push('Crew, metrics, final reply and real delivery card fit 1100 px and 360 px viewports');
-    await js("ctx._pending='继续下一轮'"); await publish(complete);
+    // Match the submission baseline captured by the production send path.
+    await js("ctx._pending='继续下一轮';ctx._pendingBaseline={messageCount:ctx._snap.messages.length}"); await publish(complete);
     assert.equal(await js('document.querySelectorAll("[data-turn-toggle]").length'), 1);
     assert.equal(await js('visible(window.savedDelivery)&&document.querySelector(".ndelivery")===window.savedDelivery'), true);
     const nextLive = structuredClone(complete); nextLive.messages.push(user('继续下一轮', at + 60000),

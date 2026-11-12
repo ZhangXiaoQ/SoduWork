@@ -25,7 +25,14 @@ function write(app, key, scope, value) {
   return value;
 }
 function begin(app, key, scope, disconnected) {
-  return write(app, key, scope, { revision: crypto.randomUUID(), disconnected, connecting: !disconnected, cleanupPending: disconnected });
+  const binding = key === 'feishu' && read(app, key, scope).registration;
+  return write(app, key, scope, { revision: crypto.randomUUID(), disconnected, connecting: !disconnected, cleanupPending: disconnected,
+    ...(binding ? {registration:binding} : {}) });
+}
+function bindRegistration(app, scope, id, url) {
+  const state = read(app, 'feishu', scope);
+  if (state.disconnected) throw Error('连接操作已取消');
+  return write(app, 'feishu', scope, {...state, registration:{id,url}});
 }
 function finish(app, key, scope, revision) {
   const current = read(app, key, scope);
@@ -58,4 +65,4 @@ function clear(app, key, scope) {
   targets.forEach(check);
   targets.forEach(target => fs.rmSync(target, { recursive: true, force: false }));
 }
-module.exports = { read, begin, finish, completeDisconnect, current, clear, MARKER };
+module.exports = { read, begin, finish, completeDisconnect, bindRegistration, current, clear, MARKER };

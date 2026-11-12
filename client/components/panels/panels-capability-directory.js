@@ -136,7 +136,7 @@
     const publisher = String(item.authorName ||
       item.provenance && item.provenance.publisherName || '');
     const label = ({ codex: 'Codex 兼容', claude: 'Claude Code 兼容',
-      adapter: 'SoduWork 标准', builtin: 'SoduWork 内置' })[kind] || '企业发布';
+      soduwork: 'SoduWork 原生', adapter: 'SoduWork 标准', builtin: 'SoduWork 内置' })[kind] || '企业发布';
     return publisher ? label + ' · ' + publisher : label;
   }
 

@@ -92,7 +92,7 @@ function resourceDraft(entries, manifest) {
 
 function readPersonalArchive(input) {
   const entries = readEntries(input);
-  const manifest = jsonEntry(entries, 'plugin.json');
+  const manifest = jsonEntry(entries, 'plugin.json') || jsonEntry(entries, 'soduwork/plugin.json');
   if (!manifest) throw new Error('插件包缺少 plugin.json');
   const capabilities = manifest.capabilities && typeof manifest.capabilities === 'object'
     ? manifest.capabilities : {};

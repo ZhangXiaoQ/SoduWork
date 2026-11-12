@@ -132,7 +132,19 @@ def audit_contract() -> None:
                            and "session.add(AuditLog(" in writer
                            and "actor_id=actor.id" in writer
                            and 'detail={"before": before, "after": after}' in writer)
-        if "audit.log(" in source or cloud_audit or quota_audit:
+        legal_audit = False
+        if route.endpoint.__module__ == "app.api.legal_documents":
+            from app.services import legal_publications
+            delegate = route.endpoint.__name__
+            body = source if delegate == "draft" else inspect.getsource(getattr(legal_publications, delegate))
+            writer = inspect.getsource(legal_publications.audit_event)
+            call = "legal.audit_event(" if delegate == "draft" else "audit_event("
+            service_at = source.find("await legal." + ("save_draft" if delegate == "draft" else delegate) + "(")
+            commit_at = source.rfind("await session.commit()")
+            legal_audit = (0 <= service_at < commit_at and call in body
+                           and "session.add(AuditLog(" in writer and "actor_id=actor.id" in writer
+                           and "action=action" in writer and "target_id=target" in writer)
+        if "audit.log(" in source or cloud_audit or quota_audit or legal_audit:
             continue
         for method in methods:
             key = (method, route.path)

@@ -16,7 +16,7 @@ window.catalog={skills:Array.from({length:10},(_,i)=>({name:'fixture-'+i,enabled
 window.SoduWorkAPI={capabilityCatalog:async()=>structuredClone(catalog),myMcpServers:async()=>({company:[],personal:[],enabledCompany:['fixture-a','fixture-b','fixture-c']}),
  setMySkills:async()=>{writes++},refreshMySkills:async()=>{refreshCalls++;if(window.holdRefresh)await new Promise(resolve=>window.finishRefresh=()=>{window.holdRefresh=false;resolve()});if(window.failRefresh)throw Error('模拟本机目录暂不可用');return structuredClone(catalog)}};
 const renderStub=(content,title)=>{content.innerHTML='<section class="cap-section"><div class="cap-section-head"><b>'+title+'</b><span>隔离页面 · 不连接真实服务</span></div><div class="cap-empty">工具栏交互验证</div></section>'};
-window.SoduWorkCapabilityPlugins={load:async()=>({items:[],submissions:[]}),snapshot:()=>({items:[],submissions:[]}),managedCount:()=>33,marketCount:()=>26,hasPendingReview:()=>false,revision:()=> 'fixture',render:content=>renderStub(content,'我的插件')};
+window.SoduWorkCapabilityPlugins={load:async()=>({items:[],submissions:[]}),hasCompleteCatalog:()=>true,snapshot:()=>({items:[],submissions:[]}),managedCount:()=>33,marketCount:()=>26,hasPendingReview:()=>false,revision:()=> 'fixture',render:content=>renderStub(content,'我的插件')};
 window.SoduWorkCapabilityDirectory={appCount:()=>3,renderApps:content=>renderStub(content,'连接外部系统'),renderMarket:content=>renderStub(content,'企业能力市场')};
 </script>
 <script src="../../components/panels/skill-catalog-sync.js"></script>

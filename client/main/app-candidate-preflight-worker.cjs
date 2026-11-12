@@ -58,13 +58,21 @@ app.whenReady().then(async()=>{
   const installed=personal.create(app,body).plugin;
   const entry=installed.ui.contributions.find(row=>row.slot==='workspace.navigation');
   fs.writeFileSync(path.join(folder,'host.html'),'<!doctype html><title>App startup check</title>');
-  fs.writeFileSync(path.join(folder,'composer.html'),'<!doctype html><p>AI业务未在隔离预检中执行</p><script>soduWorkAPI.workPreview.onComposerSubmit(p=>soduWorkAPI.workPreview.composerSubmitResult({id:p.id,ok:false,reason:"隔离预检不执行真实AI，请通过页面操作实测"}));</script>');
-  let observed=Promise.resolve(),contentReady=Promise.resolve();
+  fs.writeFileSync(path.join(folder,'composer.html'),'<!doctype html><meta charset="utf-8"><style>body{margin:0}footer{position:fixed;bottom:6px;left:8px;right:8px;color:#8b8b93;font:12px/16px "Segoe UI",sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}</style><footer title="AI业务未在隔离预检中执行">AI业务未在隔离预检中执行</footer><script>soduWorkAPI.workPreview.onComposerSubmit(p=>soduWorkAPI.workPreview.composerSubmitResult({id:p.id,ok:false,reason:"隔离预检不执行真实AI，请通过页面操作实测"}));</script>');
+  let observed=Promise.resolve(),contentReady=Promise.resolve(),composerReady=Promise.resolve(),composerContent;
   require('./work-preview').install({app,ipcMain,
-    BrowserWindow:Object.assign(function(options){const win=new BrowserWindow({...options,show:false,webPreferences:{...options.webPreferences,offscreen:true}});win.show=()=>{};windows.push(win);return win;},{fromWebContents:wc=>BrowserWindow.fromWebContents(wc)}),
+    BrowserWindow:Object.assign(function(options){const win=new BrowserWindow({...options,show:false,webPreferences:{...options.webPreferences,offscreen:true}});win.show=()=>{};win.maximize=()=>{};windows.push(win);return win;},{fromWebContents:wc=>BrowserWindow.fromWebContents(wc)}),
     WebContentsView:function(options){
       const view=new WebContentsView({...options,webPreferences:{...options.webPreferences,offscreen:true,backgroundThrottling:false}}),load=view.webContents.loadFile.bind(view.webContents);
-      view.webContents.loadFile=(file,opts)=>load(path.basename(file)==='desk.html'?path.join(folder,'composer.html'):file,opts);
+      view.webContents.loadFile=(file,opts)=>{
+        // Both the lazy launcher and expanded conversation use the isolated
+        // notice: diagnostics must never load the real conversation surface.
+        if(['app-composer-launcher.html','desk.html'].includes(path.basename(file))){
+          composerContent=view.webContents;
+          return composerReady=load(path.join(folder,'composer.html'),opts);
+        }
+        return load(file,opts);
+      };
       if(path.basename(options.webPreferences?.preload||'')==='work-preview-app-preload.cjs'){
         observed=observe(view.webContents);
         const loadURL=view.webContents.loadURL.bind(view.webContents);
@@ -94,6 +102,10 @@ app.whenReady().then(async()=>{
   await content.debugger.sendCommand('Debugger.resume').catch(()=>{});
   const first=await content.executeJavaScript(`(()=>{const visible=el=>!!el.getClientRects().length&&!el.hidden&&getComputedStyle(el).visibility!=='hidden';return {ready:document.readyState,text:document.body?.innerText?.trim().slice(0,240)||'',visual:[...document.querySelectorAll('canvas,img,svg')].some(visible),inputCount:[...document.querySelectorAll('input:not([type=hidden]),textarea,select')].filter(visible).length,sdkVersion:window.soduWorkApp?.version||'',native:typeof window.soduWorkAppBridge?.request==='function'}})()`);
   report.firstScreen=first; report.observationMs=1800;
+  if(composerContent){
+    await composerReady;
+    report.diagnosticNotice=await composerContent.executeJavaScript('(()=>{const el=document.querySelector("footer"),s=getComputedStyle(el),r=el.getBoundingClientRect();return {fontSize:s.fontSize,whiteSpace:s.whiteSpace,color:s.color,bottom:r.bottom,height:innerHeight}})()');
+  }
   check('app-first-screen','隔离原生首屏已加载，有可见内容',first.ready!=='loading'&&!!(first.text||first.visual));
   const capabilities=entry.source.bridge?.capabilities||[];
   const transport=await content.executeJavaScript('soduWorkAppBridge.request("context.get",{})');
@@ -132,4 +144,5 @@ app.whenReady().then(async()=>{
     if(!png.length)throw Error('首屏截图为空');
     fs.writeFileSync(path.join(folder,'first-screen.png'),png);
   }catch(error){report.warnings=[...(report.warnings||[]),'首屏截图未取得：'+error.message];}
+  check('app-check-hidden','隔离诊断窗口保持隐藏',windows.every(win=>win.isDestroyed()||!win.isVisible()));
 }).catch(error=>check('app-startup','原生启动检查失败',false,{reason:String(error.stack||error).slice(0,2500)})).finally(finish);

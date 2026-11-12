@@ -31,7 +31,7 @@ async def totals(session, user_ids, *, monthly=True, now=None):
     daily = select(AIUsageDaily.billing_user_id.label("uid"),
                    AIUsageDaily.provider.label("provider"), AIUsageDaily.model.label("model"),
                    func.sum(AIUsageDaily.total_tokens).label("tokens")).where(
-                       AIUsageDaily.billing_user_id.in_(ids))
+                        AIUsageDaily.billing_user_id.in_(ids), AIUsageDaily.quota_scope != "personal")
     legacy = select(AIUsageEvent.billing_user_id.label("uid"),
                     AIUsageEvent.provider.label("provider"), AIUsageEvent.model.label("model"),
                     func.sum(AIUsageEvent.total_tokens).label("tokens")).where(

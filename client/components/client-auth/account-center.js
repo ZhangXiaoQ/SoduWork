@@ -245,7 +245,12 @@
         '<div class="ac-setting-row ac-danger-row"><div><b>注销账号</b><span>注销后无法登录；团队业务记录按必要范围保留</span></div><button class="ac-secondary ac-danger" data-delete>注销账号</button></div>' +
         '<p class="ac-muted ac-data-note">' + text(result.deletionScopeSummary || '注销会清理账号资料、个人资料库文件与个人记忆，并撤销登录。组织需求、已共享材料和必要审计记录保留；设备本地对话、文件及第三方服务的数据需在对应设备或服务中管理。') + '</p>' +
         '<p class="ac-status" role="status" aria-live="polite"></p>';
-      content.querySelectorAll('[data-legal]').forEach(button => { button.onclick = () => ui().legal(document.body, docs, button.dataset.legal); });
+      content.querySelectorAll('[data-legal]').forEach(button => { button.onclick = () => ui().legal(document.body, docs, button.dataset.legal, {
+        consents: result.consents,
+        loadVersion: id => request('legalVersion', { id }, stamp),
+        getScope: () => JSON.stringify([api().hubBase(), api().clientAuthSnapshot()?.user?.id]),
+        load: () => request('privacy', {}, stamp)
+      }); });
       content.querySelector('[data-delete]').onclick = () => deletion(stamp);
     }
     function deletion(stamp) {

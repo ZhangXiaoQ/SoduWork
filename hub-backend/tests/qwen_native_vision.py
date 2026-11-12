@@ -33,7 +33,7 @@ def main():
         os.environ.update(DATABASE_URL="sqlite+aiosqlite:///:memory:",
                           AUTH_SECRET="isolated-qwen-vision-probe", SODUWORK_DATA_ROOT=str(root / "data"))
         from app.services import acp_agents, local_base, runtime_images
-        from smoke.smoke_runner_images import png
+        from smoke_runner_images import png
         from PIL import Image
         environment_lock = threading.Lock()
 

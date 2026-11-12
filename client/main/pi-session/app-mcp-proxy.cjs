@@ -15,7 +15,7 @@ async function create(connection) {
       if (closed) throw Error();
       current = connection.readCurrent();
       if (current.revision !== connection.revision || current.token !== connection.token) throw Error();
-    } catch (_) { return deny(401, '应用账号或设置已变化，请重新发送本轮消息'); }
+    } catch (_) { return deny(401, '应用接入凭据、账号或安装授权已变化，请检查应用接入配置'); }
     if (view) {
       if (request.method !== 'GET' || typeof connection.inspect !== 'function') return deny(403, '当前即用不支持只读查看');
       return void Promise.resolve().then(() => connection.inspect(request.url.endsWith('/shot') ? 'shot' : 'inspect')).then(result => {
@@ -53,6 +53,7 @@ async function create(connection) {
     const upstream = (target.protocol === 'https:' ? https : http).request(target, { method: request.method, headers, timeout: 300000 }, reply => {
       const forwarded = {};
       for (const key of ['content-type', 'mcp-session-id', 'cache-control']) if (reply.headers[key]) forwarded[key] = reply.headers[key];
+      require('./app-mcp-change.cjs').observe(reply,connection,()=>closed);
       response.writeHead(reply.statusCode, forwarded); reply.pipe(response);
     });
     active.add(upstream); let size = 0;

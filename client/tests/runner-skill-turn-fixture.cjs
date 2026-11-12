@@ -5,12 +5,27 @@ const { createRunnerRuntimeAdapter, getRunnerSessionDetails, _uuidV5 } = require
 const catalog = require('../main/agent-runtime/runtime-catalog');
 const rules = require('../main/access-control/policy');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+// Skill parsing is request-local. Reuse one real worker per test module while
+// keeping every conversation, workspace and skill directory independent.
+const suiteRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-runner-skills-suite-'));
+const app = { getPath: () => suiteRoot };
+test.after(async t => {
+  const runtime = require('../main/agent-runtime/process-session');
+  try { await runtime.reset(app); }
+  catch (error) {
+    t.diagnostic(JSON.stringify({ cleanup: error.message, report: error.report,
+      errors: Array.from(error.errors || [], item => ({ message: item.message, code: item.code })) }));
+    throw error;
+  }
+  assert.deepEqual(runtime.maintenanceWorkloads(), [], 'the owned parsing worker must be fully reclaimed');
+  fs.rmSync(suiteRoot, { recursive: true, force: true });
+});
 // Use the Windows native CI job's 180-second timeout instead of a shorter local override.
 const turnTimeout = process.platform === 'win32' ? 180000 : 15000;
 async function until(check) { for (let i = 0; i < 500; i++) { if (check()) return; await delay(10); } throw Error('fixture timeout'); }
 async function fixture(t, spec, overrides = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-runner-skills-'));
-  const app = { getPath: () => root }, calls = [], events = [], resolutions = [];
+  const root = fs.mkdtempSync(path.join(suiteRoot, 'case-'));
+  const calls = [], events = [], resolutions = [];
   const cwd = path.join(root, 'workspace'); fs.mkdirSync(cwd);
   function skill(name, directory = name) {
     const dir = path.join(root, directory); fs.mkdirSync(dir, { recursive: true });
@@ -18,7 +33,8 @@ async function fixture(t, spec, overrides = {}) {
     return { name, path: dir, installed: true };
   }
   const base = skill('base'), added = skill('added'), refreshed = skill('base', 'updated-base');
-  const ref = 'skill-turn-' + spec.id, id = _uuidV5('9af442c8-cd1d-4b91-a668-22da2b2635bf', 'chat:' + ref + ':' + spec.id);
+  const ref = 'skill-turn-' + spec.id + '-' + path.basename(root);
+  const id = _uuidV5('9af442c8-cd1d-4b91-a668-22da2b2635bf', 'chat:' + ref + ':' + spec.id);
   let held, released = false, round = 0, deny = false, preparing;
   let entered;
   const heldReady = new Promise(resolve => { entered = resolve; });
@@ -51,13 +67,8 @@ async function fixture(t, spec, overrides = {}) {
   } } } });
   const handle = getRunnerSessionDetails(session).handle;
   t.after(async () => { released = true; held?.(); preparing?.(); await session.dispose();
-    try { await require('../main/agent-runtime/process-session').reset(app); }
-    catch (error) {
-      t.diagnostic(JSON.stringify({ cleanup: error.message, report: error.report,
-        errors: Array.from(error.errors || [], item => ({ message: item.message, code: item.code })) }));
-      throw error;
-    }
     await delay(10); fs.rmSync(root, { recursive: true, force: true }); });
+  assert.deepEqual(handle.snapshot().messages, [], 'each case starts with an independent conversation');
   return { root, cwd, base, added, refreshed, session, handle, calls, resolutions,
     get held() { return Boolean(held); }, get preparing() { return Boolean(preparing); },
     waitHeld(first) { return Promise.race([heldReady, first.completion.then(result => {

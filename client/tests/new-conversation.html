@@ -122,7 +122,10 @@ window.WorkspaceHost={open:(view,payload={})=>{
   chk('目标状态只用轻提示而不复制任务工作台',
     !!goalRail&&goalRail.classList.contains('show')&&
     goalRail.dataset.state==='running'&&!document.querySelector('.ncw-workbrief'));
-  WorkspaceShell.setChats([{id:'saved-7',title:'历史会话',cwd:'C:\\workdir'}]);
+  WorkspaceShell.setChats([
+    {id:'saved-7',title:'历史会话',cwd:'C:\\workdir'},
+    {id:'cloud-9',title:'云端历史会话',cloud:true,cwd:'C:\\cache\\remote-only'},
+  ]);
   document.querySelector('[data-chat-id="saved-7"]').click();
   chk('历史入口带 chatId 而不冒充新建',routes.at(-1).payload.chatId==='saved-7'&&!routes.at(-1).payload.newSession);
   chk('历史会话按原 id 续接',await waitFor(()=>opened.some(x=>x.chatId==='saved-7')));
@@ -141,15 +144,68 @@ window.WorkspaceHost={open:(view,payload={})=>{
   document.querySelector('.ws-nav-item[data-view="create"]').click();
   chk('切回新会话恢复起手式草稿',document.getElementById('cpInput')?.value==='新会话里尚未发送的内容');
 
+  // fb2004f23 restores workspace continuity; conversation identity and cloud
+  // replay directories must remain isolated across the actual browser routes.
+  WorkspaceShell.setActiveChat('saved-7');
   openPiChatEntry();
-  chk('普通新会话不继承当前会话工作目录',!routes.at(-1).payload.cwd);
+  /* Main commit fb2004f2 restores directory continuation; conversation and
+     project identity still require an explicit entry and must not leak. */
+  chk('普通新会话沿用当前本地会话工作目录并标明来源',
+    routes.at(-1).payload.cwd==='C:\\workdir'&&routes.at(-1).payload.workspaceSource==='last-session');
+  chk('新会话输入框展示沿用的工作目录',await waitFor(()=>
+    document.getElementById('cpWorkspaceName').textContent==='workdir（沿用上一会话）'));
   chk('桌宠新对话入口也明确新建',routes.at(-1).payload.newSession===true&&!routes.at(-1).payload.chatId);
   openPiChatEntry('saved-8');
   chk('桌宠历史入口仍只续接指定会话',routes.at(-1).payload.chatId==='saved-8'&&!routes.at(-1).payload.newSession);
+  chk('历史入口不携带其他会话的目录覆盖',!routes.at(-1).payload.cwd&&!routes.at(-1).payload.workspaceSource);
   await waitFor(()=>opened.some(x=>x.chatId==='saved-8'));
+  WorkspaceShell.setActiveChat('saved-7');
   openCreateEntry({tab:'task'});
-  chk('普通新建需求入口不继承当前会话工作目录',!routes.at(-1).payload.cwd);
-  chk('统一新建入口不会恢复上一条会话',routes.at(-1).payload.newSession===true);
+  chk('普通新建需求入口沿用当前本地会话工作目录并标明来源',
+    routes.at(-1).payload.cwd==='C:\\workdir'&&routes.at(-1).payload.workspaceSource==='last-session');
+  chk('统一新建入口不会恢复上一条会话',routes.at(-1).payload.newSession===true&&!routes.at(-1).payload.chatId);
+
+  openCreateEntry({tab:'task',cwd:'C:\\explicit-work'});
+  chk('显式工作目录优先且不误标为延续',routes.at(-1).payload.cwd==='C:\\explicit-work'&&
+    !routes.at(-1).payload.workspaceSource&&routes.at(-1).payload.newSession===true);
+  for(const remote of [{cloud:true},{locationMode:'remote'}]){
+    WorkspaceShell.setChats([{id:'cloud-history',title:'云端会话',cwd:'C:\\private-replay-cache',...remote}]);
+    WorkspaceShell.setActiveChat('cloud-history');
+    openPiChatEntry();
+    chk('云端历史不向本地新对话传递缓存目录 '+JSON.stringify(remote),
+      !routes.at(-1).payload.cwd&&!routes.at(-1).payload.workspaceSource&&
+      routes.at(-1).payload.newSession===true&&!routes.at(-1).payload.chatId);
+    openCreateEntry({tab:'task'});
+    chk('云端历史不向本地新需求传递缓存目录 '+JSON.stringify(remote),
+      !routes.at(-1).payload.cwd&&!routes.at(-1).payload.workspaceSource&&
+      routes.at(-1).payload.newSession===true&&!routes.at(-1).payload.chatId);
+  }
+  WorkspaceShell.setChats([]);WorkspaceShell.setActiveChat('');
+  openCreateEntry();
+  chk('无历史或最近目录时保留默认工作区',!routes.at(-1).payload.cwd&&routes.at(-1).payload.newSession===true);
+
+  WorkspaceShell.setActiveChat('cloud-9');
+  openPiChatEntry();
+  chk('云端会话的缓存目录不会进入普通新会话',
+    !routes.at(-1).payload.cwd&&!routes.at(-1).payload.workspaceSource);
+  openCreateEntry({tab:'task'});
+  chk('云端会话的缓存目录不会进入新建需求',
+    !routes.at(-1).payload.cwd&&!routes.at(-1).payload.workspaceSource);
+  chk('云端会话之后的新建入口回落默认工作区',await waitFor(()=>
+    document.getElementById('cpWorkspaceName').textContent==='默认工作区'));
+
+  WorkspaceShell.setActiveChat('saved-7');
+  openCreateEntry({tab:'chat',cwd:'D:\\explicit-work',workspaceLabel:'显式工作区'});
+  chk('显式选择的工作目录优先于上一会话',
+    routes.at(-1).payload.cwd==='D:\\explicit-work'&&!routes.at(-1).payload.workspaceSource);
+  chk('显式工作目录不会误标为沿用目录',await waitFor(()=>
+    document.getElementById('cpWorkspaceName').textContent==='显式工作区'));
+  document.getElementById('cpWorkspace').click();
+  document.querySelector('#cpWorkspacePop [data-workspace="temp"]').click();
+  chk('明确选择默认工作区会清空已选目录与来源提示',
+    document.getElementById('cpWorkspaceName').textContent==='默认工作区'&&
+    !document.getElementById('cpWorkspace').title.includes('D:\\explicit-work')&&
+    document.querySelector('#cpWorkspacePop [data-workspace="temp"]').classList.contains('on'));
 
   document.getElementById('out').textContent=lines.join('\n')+'\n\nnew conversation smoke: '+pass+' passed, '+fail+' failed';
 })().catch(e=>{document.getElementById('out').textContent='FAIL  '+(e&&e.stack||e)+'\n\nnew conversation smoke: 0 passed, 1 failed'});

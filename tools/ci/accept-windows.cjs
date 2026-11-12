@@ -22,8 +22,45 @@ async function cleanupRoot(root, prefix) {
     for (const name of support.pendingUninstallers(await fs.readdir(directory), active)) {
       const scope = prefix === 'soduwork-install-acceptance-' ? '/allusers' : '/currentuser';
       const file = path.join(directory, name);
-      await run(file, ['/S', scope, '_?=' + directory],
-        { argv0: '"' + file + '"', windowsVerbatimArguments: true, timeout: 120000 });
+      try {
+        await run(file, ['/S', scope, '_?=' + directory],
+          { argv0: '"' + file + '"', windowsVerbatimArguments: true, timeout: 120000 });
+      } catch (error) {
+        // Some isolated NSIS fixtures return exit code 2 while completing the
+        // self-removal transaction. Wait for owned processes and the marker
+        // before deciding whether the transaction completed. If the marker is
+        // still present, retry once after the asynchronous helper has exited.
+        if (!/ exited 2;/.test(String(error?.message))) throw error;
+        support.waitForOwnedExit(root, ps, { timeout: 120000 });
+        const marker = path.join(directory, '.soduwork-active');
+        const markerGone = async (timeout = 120000) => {
+          const deadline = Date.now() + timeout;
+          while (Date.now() < deadline) {
+            if (!await fs.access(marker).then(() => true, () => false)) return true;
+            await new Promise(resolve => setTimeout(resolve, 250));
+          }
+          return false;
+        };
+        if (!await markerGone(5000)) {
+          try {
+            await run(file, ['/S', scope, '_?=' + directory],
+              { argv0: '"' + file + '"', windowsVerbatimArguments: true, timeout: 120000 });
+          } catch (retryError) {
+            if (!/ exited 2;/.test(String(retryError?.message))) throw retryError;
+          }
+          support.waitForOwnedExit(root, ps, { timeout: 120000 });
+        }
+        if (!await markerGone()) {
+          // The isolated NSIS fixture can leave its marker while returning 2
+          // from the self-delete helper. No owned process remains, and the
+          // fixture root is removed immediately below; retain the original
+          // failure for any process that is still alive.
+          console.warn('Windows acceptance: uninstaller exited 2 after owned processes exited; removing isolated fixture root:', file);
+        } else {
+          console.warn('Windows acceptance: uninstaller exited 2 after completing asynchronous cleanup; verified marker removal:', file);
+        }
+      }
+      support.waitForOwnedExit(root, ps, { timeout: 120000 });
       if (!await fs.access(path.join(directory, '.soduwork-active')).then(() => true, () => false)) break;
     }
   }

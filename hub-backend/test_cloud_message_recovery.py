@@ -1,5 +1,6 @@
 """Continuation recovery at commit, RPC and acknowledgement failure boundaries."""
 import asyncio
+import base64
 import json
 from pathlib import Path
 import tempfile
@@ -11,9 +12,9 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
-from app import models
+from app import db, models
 from app.automation_models import ExecutionSession, ResourceLease
-from app.automation_models import ApprovalRequest
+from app.automation_models import ApprovalRequest, RunnerNode
 from app.conversation_handoff_models import ConversationHandoff as Handoff, ConversationMessageReceipt as Receipt
 from app.db import Base
 from app.services import cloud_message_recovery as recovery, cloud_recovery
@@ -31,7 +32,7 @@ class CloudMessageRecoveryTests(unittest.IsolatedAsyncioTestCase):
         async with self.engine.begin() as connection:
             await connection.run_sync(lambda conn: Base.metadata.create_all(conn, tables=[
                 model.__table__ for model in (models.User, models.Client, models.Task,
-                    models.TaskEvent, ApprovalRequest, ExecutionSession, ResourceLease, Handoff, Receipt)]))
+                    models.TaskEvent, ApprovalRequest, ExecutionSession, ResourceLease, Handoff, Receipt, RunnerNode)]))
         async with self.sessions() as session:
             session.add(models.User(id='user', username='cloud-message-user', is_active=True))
             self.client = models.Client(id='device', user_ref='user', auth_state='active')
@@ -95,6 +96,89 @@ class CloudMessageRecoveryTests(unittest.IsolatedAsyncioTestCase):
     async def receipt(self):
         async with self.sessions() as session:
             return await session.scalar(select(Receipt))
+
+    async def test_endpoint_backed_image_releases_policy_lock_before_upload_and_receipt_probe(self):
+        from app.services import runner_hub, cluster_runtime
+        from app.services.runner_content_store import Store
+        async with self.sessions() as session:
+            session.add(RunnerNode(id='cloud', owner_user_id='user', client_id='', org_id='',
+                                   auth_state='active', management_state='', dispatch_mode='accepting'))
+            await session.commit()
+        socket = SimpleNamespace()
+        runner = runner_hub._Runner(socket, {'runnerId': 'cloud', 'bootId': 'boot-one',
+            'caps': ['admit1', 'executionSelection1', 'turnFiles1', 'conversationContent1']})
+        runner.owner_user_id, runner.ready = 'user', True
+        store = Store(str(Path(self.temp.name) / 'content'))
+        operations, chunks = [], []
+
+        async def wire(packet):
+            op = packet['op']
+            operations.append(op)
+            if op.startswith('content.'):
+                reply = await asyncio.to_thread(store.handle, packet)
+            elif op == 'input.chunk':
+                chunks.append(base64.b64decode(packet['b64']))
+                reply = {'ok': True, 'data': {}}
+            else:
+                reply = await self.rpc(op, packet)
+            runner.resolve(packet['id'], reply)
+
+        socket.send_json = wire
+        self.runner = runner
+        self.ctx['_turnFiles'] = [('image.png', b'isolated image bytes', 'image/png')]
+        with patch.object(db, 'SessionLocal', self.sessions), \
+             patch.object(runner_hub, 'get', return_value=runner), \
+             patch.object(runner_hub, '_LOOP', asyncio.get_running_loop()), \
+             patch.object(cluster_runtime, 'check_owner', AsyncMock()):
+            with patch.object(recovery, 'attempt', side_effect=asyncio.CancelledError):
+                with self.assertRaises(asyncio.CancelledError):
+                    await self.send()
+            row = await self.receipt()
+            self.assertIn('contentRef', row.payload)
+            self.assertNotIn('files', row.payload)
+            self.failure = 'after'
+            await recovery.attempt(row.id)
+            self.assertEqual(self.comment_calls, 1)
+            self.assertEqual((await self.receipt()).phase, 'uncertain')
+            self.assertEqual(b''.join(chunks), b'isolated image bytes')
+            await recovery.attempt(row.id)
+            self.assertEqual((await self.receipt()).phase, 'accepted')
+            self.assertEqual(self.comment_calls, 1)
+            self.assertEqual(operations.count('input.chunk'), 1)
+            self.assertEqual(operations.count('job.has'), 1)
+            self.assertEqual(len(self.queue.active_items()), 1)
+
+    async def test_skill_selection_survives_restart_and_lost_ack_on_original_execution(self):
+        from app.services import conversation_turn_skills
+        self.ctx['_turnSkills'] = ['office']
+        with patch.object(recovery, 'attempt', side_effect=asyncio.CancelledError):
+            with self.assertRaises(asyncio.CancelledError):
+                await self.send()
+        row = await self.receipt()
+        self.assertEqual(row.payload['skills'], ['office'])
+        self.failure = 'after'
+        with patch.object(conversation_turn_skills, 'validate', AsyncMock()) as validate:
+            await recovery.attempt(row.id)
+            await recovery.attempt(row.id)
+        validate.assert_awaited_once()
+        item = self.queue.active_items()[0]
+        self.assertEqual(item.payload['turnSkills'], ['office'])
+        self.assertEqual(item.ref, 'execution')
+        self.assertEqual(self.comment_calls, 1)
+        self.assertEqual((await self.receipt()).phase, 'accepted')
+        self.ctx['_turnSkills'] = ['browser-use']
+        with self.assertRaises(HTTPException) as conflict:
+            await self.send()
+        self.assertEqual(conflict.exception.status_code, 409)
+
+    async def test_revoked_skill_is_not_delivered_as_plain_text(self):
+        from app.services import conversation_turn_skills
+        self.ctx['_turnSkills'] = ['office']
+        with patch.object(conversation_turn_skills, 'validate',
+                          AsyncMock(side_effect=HTTPException(403, 'Skill revoked'))):
+            await self.send()
+        self.assertEqual((await self.receipt()).phase, 'rejected')
+        self.assertEqual(self.comment_calls, 0)
 
     async def test_commit_survives_caller_exit_and_worker_finishes_without_observer(self):
         with patch.object(recovery, 'attempt', side_effect=asyncio.CancelledError):
@@ -288,6 +372,29 @@ class CloudMessageRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result['ok'])
         self.assertEqual((await self.receipt()).phase, 'rejected')
         self.assertEqual(self.comment_calls, 0)
+
+
+    async def test_plugin_turn_retries_keep_same_task_and_version_conflicts_do_not_resend(self):
+        from app.services import conversation_turn_plugins
+        self.ctx['_turnPlugins'] = [{'pluginId':'local:plugin-builder','checksum':'a'*64}]
+        def authorize(client, runner, ref, selections, turn_id):
+            return {'operation':'plugin.prepare','args':{'ref':ref,'plugins':selections},'authorization':'temporary'}
+        with patch.object(conversation_turn_plugins,'validate',AsyncMock()), \
+             patch.object(conversation_turn_plugins,'authorization',authorize):
+            self.failure='after'
+            first=await self.send()
+            self.assertTrue(first['uncertain'])
+            row=await self.receipt()
+            self.assertEqual(row.payload['plugins'],self.ctx['_turnPlugins'])
+            self.assertNotIn('temporary',json.dumps(row.payload))
+            await recovery.attempt(row.id)
+            second=await self.send()
+            self.assertTrue(second['ok'])
+            self.assertEqual(self.comment_calls,1)
+            self.ctx['_turnPlugins']=[{'pluginId':'local:plugin-builder','checksum':'b'*64}]
+            with self.assertRaises(HTTPException):
+                await self.send()
+            self.assertEqual(self.comment_calls,1)
 
 
 if __name__ == '__main__':

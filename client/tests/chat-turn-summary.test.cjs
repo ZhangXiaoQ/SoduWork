@@ -61,8 +61,23 @@ test('completed current turn uses fixed receipts instead of a still-growing exec
   const reopened = view.html({ key: 'reply:2', tokens: 17, elapsedMs: 4000 },
     '<div class="nturn-metrics"><b data-thinking-elapsed>5m 03s</b></div>');
   assert.match(reopened, /data-thinking-elapsed>4s<\/b>/);
-  assert.match(view.html({ key: 'reply:3', tokens: null, elapsedMs: null },
-    '<div class="nturn-metrics"><b data-thinking-elapsed>0s</b></div>'), /data-thinking-elapsed>—<\/b>/);
+  const unknown = view.html({ key: 'reply:3', tokens: null, elapsedMs: null },
+    '<div class="nturn-metrics"><b data-thinking-elapsed>0s</b></div>');
+  assert.match(unknown, /data-thinking-elapsed>未记录<\/b>/);
+  assert.doesNotMatch(unknown, /0s|—/);
+});
+
+test('missing historical timing has a localized explanation without borrowing a live counter', t => {
+  const previous = global.SoduWorkI18n;
+  t.after(() => { global.SoduWorkI18n = previous; });
+  global.SoduWorkI18n = {translateText: text => ({'未记录': 'Not recorded', '用时': 'Duration'}[text] || text)};
+  const view = summary.create({esc: String});
+  const turn = summary.project({messages: [user(), {...reply('Old reply'), completedAt: 0}],
+    execution: {elapsedMs: 900000}}, new Set([1]))[0];
+  assert.equal(turn.elapsedMs, null);
+  const html = view.html(turn);
+  assert.match(html, /Duration Not recorded/);
+  assert.doesNotMatch(html, /900|15m|未记录|—/);
 });
 
 

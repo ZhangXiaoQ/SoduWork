@@ -26,7 +26,7 @@ def _base(value: dict | None = None) -> dict:
     out = {"schemaVersion": SCHEMA_VERSION}
     for key, limit in _LIMITS.items():
         text = _text(source.get(key), limit)
-        if text:
+        if text or (key == "runnerClientId" and source.get(key) is not None):
             out[key] = text
     return out
 
@@ -57,7 +57,7 @@ def from_dispatch(dispatch: dict | None, *, workflow_run_id: str = "",
     frozen = _base(current)
     incoming = _base(candidate)
     for key, value in incoming.items():
-        if key != "schemaVersion" and not frozen.get(key):
+        if key != "schemaVersion" and key not in frozen:
             frozen[key] = value
     return frozen
 
@@ -81,6 +81,6 @@ def from_snapshot(current: dict | None, snapshot: dict | None, runner=None) -> d
     clean = _base(supplied)
     # Route/model are frozen once known. CLI session id is the one legitimate late-bound fact.
     for key, value in clean.items():
-        if key != "schemaVersion" and (not out.get(key) or key == "agentSessionId"):
+        if key != "schemaVersion" and (key not in out or key == "agentSessionId"):
             out[key] = value
     return out

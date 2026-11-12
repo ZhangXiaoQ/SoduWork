@@ -48,7 +48,7 @@ chk("★上限不再是 10（一个静态站三十个文件是常态）", ai_loc
 ws = tempfile.mkdtemp(prefix="smoke-art-")
 try:
     # Create a representative website with HTML, CSS, JavaScript, assets, and duplicate basenames in separate directories.
-    files = ["index.html", "about.html",
+    files = ["index.html", "about.html", "contact.html",
              "css/style.css", "js/main.js",
              "assets/logo.svg", "assets/img/hero.png",
              "css/print.css", "vendor/style.css"]          # Same basename as css/style.css in a different directory.
@@ -285,6 +285,10 @@ try:
                 "<!doctype html><html><body>old</body></html>")
             io.open(os.path.join(round_ws, "assets", "app.js"), "w", encoding="utf-8").write(
                 "window.version='old'")
+            # Three final pages exercise automatic bundles under the updated contract.
+            for page in ("about.html", "contact.html"):
+                with open(os.path.join(round_ws, page), "w", encoding="utf-8") as stream:
+                    stream.write("<!doctype html><html><body>Supporting page</body></html>")
             run_v2 = {"ref": ref, "ws": round_ws, "seen": set(), "state": "done",
                       "cli": "pi", "lines": [], "title": "返修版本",
                       "segment": 1, "round": 1, "cfg": {}}

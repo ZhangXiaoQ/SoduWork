@@ -62,6 +62,21 @@ function fixture(saved, clock) {
   return {api: context.RequirementsBoard, root, rendered, stored, context};
 }
 
+test('ordinary chat executions do not appear in requirement lanes or counts', () => {
+  const f = fixture({scope: 'all'});
+  f.root.classList.add('show');
+  const original = f.context.tasks.length;
+  for (const origin of ['cloud-conversation', 'conversation-handoff']) {
+    f.context.tasks.push({id: origin, origin, status: 'doing', title: 'Chat', myRoles: ['creator', 'executor']});
+  }
+  f.api.open();
+  assert.ok(f.rendered.at(-1).ids.every(id => !['cloud-conversation', 'conversation-handoff'].includes(id)));
+  assert.equal(f.root.querySelector('#hbCount').textContent, '· 2 条');
+  assert.equal(f.context.tasks.length, original + 2, 'execution records remain available for conversation consumers');
+  assert.deepEqual(Requirements.select(f.context.tasks, {scope: 'all'}).map(row => row.id).sort(),
+    ['archived', 'review', 'running']);
+});
+
 test('explicit acceptance entry clears unrelated filters and opens the current review stage', () => {
   const f = fixture({scope: 'created', archive: 'archived', kind: 'bug', owner: 'another', project: 'old', due: 'overdue'});
   f.api.open({phase: 'reviewing'});

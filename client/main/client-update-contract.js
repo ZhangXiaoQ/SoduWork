@@ -10,8 +10,7 @@ const KEY_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/;
 
 /*
  * Match backend RELEASE_PLATFORM_SUFFIXES. Accept only platform-specific installer
- * suffixes, including compound tar.gz and legacy Windows Setup names, with the
- * single SoduWork- prefix.
+ * suffixes, including compound tar.gz and Windows Setup names.
  */
 const INSTALLER_STEM = 'SoduWork';
 const VERSION_STEM = '\\d+\\.\\d+\\.\\d+(?:-beta\\.(?:1|[1-9]\\d*))?';

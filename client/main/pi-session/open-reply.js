@@ -24,8 +24,10 @@ function openReply(app, handle, extra) {
   const ui = publicUi(handle.ui || {});
   const snapshot = { ...(typeof handle.uiSnapshot === 'function' ? handle.uiSnapshot() : handle.snapshot()),
     ...(handle.deliverySync ? { deliverySync: publicUi(handle.deliverySync) } : {}) };
-  const row = conversationTitles.decorate(app, typeof handle.historyRow === 'function'
-    ? handle.historyRow(snapshot) : { id: handle.sessionId, title: ui.title });
+  const historyRow = typeof handle.historyRow === 'function' ? handle.historyRow(snapshot) : null;
+  // A composer can have a title before it becomes a durable history entry.
+  const row = conversationTitles.decorate(app, historyRow || { id: handle.sessionId,
+    title: (typeof handle.title === 'string' && handle.title) || ui.title || '' });
   const rawModel = handle.model;
   const model = rawModel && typeof rawModel === 'object' ? (() => {
     const resolved = contextWindow.resolveContextWindow(rawModel);

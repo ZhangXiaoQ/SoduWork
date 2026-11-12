@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import importlib
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -58,7 +59,7 @@ class Harness2LifecycleTest(unittest.TestCase):
         self.assertTrue(item["bundled"])
         self.assertFalse(item["installed"])
         self.assertEqual(item["state"], "missing")
-        self.assertEqual(item["setupState"], "setup")
+        self.assertEqual(item["setupState"], "broken")
         self.assertTrue(item["present"])
         self.assertIn("执行组件缺失", item["why"])
         self.assertEqual(item["version"], "0.1.0")
@@ -77,28 +78,20 @@ class Harness2LifecycleTest(unittest.TestCase):
         self.assertEqual(ready["probe"], {})
         self.assertEqual(nollm["state"], "nollm")
 
-    def run_job(self, action, result=(True, "执行组件已准备"), issue=""):
+    def run_job(self, action, issue=''):
         from app.services import agent_setup, harness2_runtime, managed_agents
-        def install(requested, say):
-            if requested == "uninstall":
-                self.fail("Bundled core uninstall must not remove shared OpenCode")
-            if requested != action:
-                self.fail("Setup performed a different dependency action")
-            say("fixture setup progress")
-            return result
-        with (patch.object(agent_setup, "_spawn", side_effect=lambda jid, fn, *args: fn(jid, *args)),
-              patch.object(managed_agents, "install", side_effect=install),
-              patch.object(harness2_runtime, "runtime_issue", return_value=issue),
-              patch.object(harness2_runtime, "is_bundled", return_value=True)):
-            jid = agent_setup.start_install("harness2", action)
-            return agent_setup.job(jid)
+        with (patch.object(agent_setup, '_spawn', side_effect=lambda jid, fn, *args: fn(jid, *args)),
+              patch.object(managed_agents, 'install', side_effect=AssertionError('Harness must not install another runtime')),
+              patch.object(harness2_runtime, 'runtime_issue', return_value=issue),
+              patch.object(harness2_runtime, 'is_bundled', return_value=True)):
+            return agent_setup.job(agent_setup.start_install('harness2', action))
 
-    def test_explicit_install_prepares_dependency_and_reports_real_outcome(self):
+    def test_explicit_enable_verifies_bundled_runtime_and_reports_real_outcome(self):
         job = self.run_job("install")
         self.assertEqual(job["state"], "done")
         self.assertTrue(job["ok"])
-        self.assertTrue(any("fixture setup progress" in line for line in job["lines"]))
-        self.assertFalse(self.run_job("install", result=(False, "下载失败"))["ok"])
+        self.assertIn("独立执行器", job["detail"])
+        self.assertFalse(self.run_job("install", issue="内置核心缺失")["ok"])
         self.assertFalse(self.run_job("update", issue="组件自检失败")["ok"])
 
     def test_bundled_uninstall_does_not_remove_shared_executor(self):
@@ -108,7 +101,7 @@ class Harness2LifecycleTest(unittest.TestCase):
         job = self.run_job("uninstall")
         self.assertEqual(job["state"], "done")
         self.assertTrue(job["ok"])
-        self.assertIn("卸载", job["detail"])
+        self.assertIn("停用", job["detail"])
         self.assertTrue(self.disabled_marker().is_file())
         self.assertEqual(shared.read_text(encoding="utf-8"), '{"version":"fixture-shared"}')
 
@@ -123,11 +116,11 @@ class Harness2LifecycleTest(unittest.TestCase):
         self.assertFalse(item["installed"])
         self.assertEqual(item["state"], "missing")
         self.assertEqual(item["setupState"], "disabled")
-        self.assertIn("卸载", item["why"])
+        self.assertIn("停用", item["why"])
 
-    def test_reinstall_only_reenables_after_dependency_and_runtime_validation_succeed(self):
+    def test_reinstall_only_reenables_after_bundled_runtime_validation_succeeds(self):
         self.assertTrue(self.run_job("uninstall")["ok"])
-        self.assertFalse(self.run_job("install", result=(False, "下载超时"))["ok"])
+        self.assertFalse(self.run_job("install", issue="内置核心缺失")["ok"])
         self.assertTrue(self.disabled_marker().is_file())
         self.assertFalse(self.run_job("update", issue="组件自检失败")["ok"])
         self.assertTrue(self.disabled_marker().is_file())
@@ -153,26 +146,19 @@ class Harness2LifecycleTest(unittest.TestCase):
         self.assertIn(backend / "app/services/harness2_lifecycle.py",
                       runner_sources.build_inputs(backend, backend.parent))
 
-    def test_check_reports_core_and_managed_executor_versions_without_enabling_or_installing(self):
+    def test_check_reports_independent_runtime_without_enabling_or_installing(self):
         from app.services import agent_setup, harness2_runtime, managed_agents
-        self.assertTrue(self.run_job("uninstall")["ok"])
+        self.assertTrue(self.run_job('uninstall')['ok'])
         before = self.disabled_marker().read_bytes()
-        for current, expected in [
-            ("1.0.0", "需要更新"), (managed_agents.OPENCODE_VERSION, "无需更新"),
-            ("", "受管 OpenCode 执行组件尚未安装"),
-        ]:
-            with (self.subTest(current=current),
-                  patch.object(agent_setup, "_spawn", side_effect=lambda jid, fn, *args: fn(jid, *args)),
-                  patch.object(managed_agents, "install", side_effect=AssertionError("Version check installed software")),
-                  patch.object(managed_agents, "binary_version", return_value=current),
-                  patch.object(harness2_runtime, "is_bundled", return_value=True)):
-                job = agent_setup.job(agent_setup.start_install("harness2", "check"))
-            self.assertTrue(job["ok"], job)
-            self.assertIn(harness2_runtime.version(), job["detail"])
-            self.assertIn("随 SoduWork 升级", job["detail"])
-            self.assertIn(managed_agents.OPENCODE_VERSION, job["detail"])
-            self.assertIn(expected, job["detail"])
-            self.assertEqual(self.disabled_marker().read_bytes(), before)
+        with (patch.object(agent_setup, '_spawn', side_effect=lambda jid, fn, *args: fn(jid, *args)),
+              patch.object(managed_agents, 'install', side_effect=AssertionError('Unexpected install')),
+              patch.object(managed_agents, 'binary_version', side_effect=AssertionError('Unexpected OpenCode version query')),
+              patch.object(harness2_runtime, 'is_bundled', return_value=True)):
+            job = agent_setup.job(agent_setup.start_install('harness2', 'check'))
+        self.assertTrue(job['ok'], job)
+        self.assertIn(harness2_runtime.version(), job['detail'])
+        self.assertIn('无需安装其他底座', job['detail'])
+        self.assertEqual(self.disabled_marker().read_bytes(), before)
 
     def test_environment_does_not_fall_through_to_opencode_or_lose_runtime_identity(self):
         from app.services import harness2_runtime, local_base
@@ -205,7 +191,26 @@ class Harness2LifecycleTest(unittest.TestCase):
             "--harness2-bridge", "--version",
         ], capture_output=True, text=True, encoding="utf-8", timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "0.1.0")
+        self.assertEqual(result.stdout.strip(), "0.2.0")
+
+    def test_runner_native_entry_speaks_acp_without_starting_a_hub_connection(self):
+        from app.services import harness2_runtime
+        with tempfile.TemporaryDirectory() as folder:
+            env = dict(os.environ)
+            env.update({harness2_runtime.ROOT_ENV: folder, harness2_runtime.MODEL_ENV: '{}',
+                        'SODUWORK_MCP_SERVERS_JSON': '{}', 'SODUWORK_MCP_SERVERS': ''})
+            messages = [{'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {}},
+                        {'jsonrpc': '2.0', 'id': 2, 'method': 'session/new', 'params': {'cwd': folder}}]
+            child = subprocess.run([sys.executable, str(Path(__file__).with_name('runner_main.py')),
+                '--harness2-native'], input=''.join(json.dumps(row) + '\n' for row in messages),
+                env=env, capture_output=True, text=True, encoding='utf-8', timeout=15)
+            self.assertEqual(child.returncode, 0, child.stderr)
+            replies = [json.loads(line) for line in child.stdout.splitlines()]
+            self.assertEqual([row['id'] for row in replies], [1, 2])
+            self.assertTrue(replies[0]['result']['agentCapabilities']['loadSession'])
+            sid = replies[1]['result']['sessionId']
+            self.assertTrue(sid.startswith('h2_'))
+            self.assertTrue((Path(folder) / 'sessions' / (sid + '.json')).is_file())
 
 
 if __name__ == "__main__":

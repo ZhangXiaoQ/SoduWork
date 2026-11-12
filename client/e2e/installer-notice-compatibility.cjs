@@ -97,7 +97,7 @@ async function main() {
   const version = path.join(installed, '.soduwork-versions', active);
   assert.equal((await fs.readFile(path.join(version, licenseName))).length, license.length + 4096);
   const launchOutput = path.join(root, 'notice-launch.json');
-  assert.equal(await run(path.join(installed, 'SoduWork.exe'), [], {
+  assert.equal(await run(path.join(installed, executableName + '.exe'), [], {
     SODUWORK_UPDATE_E2E_PROFILE: path.join(root, 'profile'), SODUWORK_UPDATE_E2E_OUTPUT: launchOutput,
   }), 0);
   const deadline = Date.now() + 30000;

@@ -15,6 +15,8 @@ function publicModel(model) {
   const resolved = contextWindow.resolveContextWindow(m);
   return { id: String(m.id || ''), label: String(m.label || m.name || m.id || '默认模型'),
     ...(m.modality ? { modality: m.modality } : {}),
+    ...(m.quotaVersion === 2 && ['personal', 'platform'].includes(m.quotaScope)
+      ? { quotaVersion: 2, quotaScope: m.quotaScope } : {}),
     contextWindow: m.modality === 'image' ? 0 : resolved.contextWindow,
     contextWindowKnown: m.modality === 'image' ? false : resolved.contextWindowKnown,
     ...(m.modality === 'image' ? {} : {

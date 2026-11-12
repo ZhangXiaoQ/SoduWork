@@ -35,6 +35,17 @@ class AutomationDraftTests(unittest.IsolatedAsyncioTestCase):
                 model="fixture", automation=request)
         return result, primary
 
+    async def test_automation_parser_separates_execution_from_plan_configuration(self):
+        note = '只回复 AUTO-OK，不调用工具、不读写文件、不联网。'
+        result, primary = await self.parse({'title': '晨报', 'note': note},
+            instruction='创建晨报，每天09:00。工作内容：' + note + '先暂停保存。')
+        system = primary.await_args.args[3]
+        self.assertIn('note 是每次触发时交给 Agent 的执行指令', system)
+        self.assertIn('不包含创建成功、每天触发或初始暂停等配置标准', system)
+        self.assertEqual(result['note'], note)
+        from app.services import automation_draft
+        self.assertEqual(automation_draft.prompt(None), '')
+
     async def test_explicit_plugin_repo_agent_survive_real_parser(self):
         bindings = {
             "method": {"action": "select", "id": "mini-game", "name": "小游戏插件", "evidence": "使用小游戏插件"},

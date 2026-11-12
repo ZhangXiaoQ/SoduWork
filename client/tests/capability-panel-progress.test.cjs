@@ -17,6 +17,7 @@ function setup(capabilities) {
   vm.runInNewContext(source.replace('  window.openSkillPanel =', `
     window.fixture = {
       refreshRuntime, inventory: () => Array.from(runtimeSkills.keys()),
+      load, setLoader: loader => { loadCurrent = loader; },
       renderEmptySkills(content) { data = { skills: [] }; renderSkills(content); }
     };
     window.openSkillPanel =`), context);
@@ -52,3 +53,21 @@ test('switching scope discards an outstanding runtime response', async () => {
   await pending;
   assert.deepEqual(Array.from(api.inventory()), []);
 });
+
+for (const event of ['soduwork:plugins-changed', 'soduwork-plugin-policy', 'soduwork-locale-change']) {
+  test(event + ' lets a reopened page load fresh data while an invalidated request is pending', async () => {
+    const { api, listeners } = setup();
+    const pending = [];
+    api.setLoader(() => new Promise(resolve => pending.push(resolve)));
+    const old = api.load();
+    assert.equal(api.load(), old, 'normal opens coalesce');
+    for (let i = 0; i < 100; i++) listeners.get(event)({ type: event });
+    assert.equal(pending.length, 1, 'hidden invalidations perform no background fetch');
+    const fresh = api.load();
+    assert.notEqual(fresh, old);
+    assert.equal(pending.length, 2);
+    pending[0](); await old;
+    assert.equal(api.load(), fresh, 'stale completion cannot clear a newer request');
+    pending[1](); await fresh;
+  });
+}

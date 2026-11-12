@@ -533,16 +533,24 @@ async def assign_client(
         raise HTTPException(status_code=404, detail="SoduWork 不存在")
     await _assert_client_in_scope(session, user, c)
     connection_changed = False
+    replaced_desktops = []
     if body.userId:
         target = await session.get(User, body.userId)
         if target is None or not target.is_active:
             raise HTTPException(status_code=400, detail="目标用户不存在")
         await _assert_user_in_scope(session, user, target)
+        from ..services import desktop_login_policy
+        await desktop_login_policy.lock_assignment(session, c, target)
+        await _assert_client_in_scope(session, user, c)
+        await _assert_user_in_scope(session, user, target)
+        if not target.is_active or target.account_deleted_at:
+            raise HTTPException(status_code=400, detail="目标用户不存在")
         if not c.secret_hash:
             raise HTTPException(status_code=409, detail="这台 SoduWork 还没有提交设备密钥")
         if c.user_ref != target.id or c.auth_state != "active":
             connection_changed = True
             device_auth.activate(c, target)
+        replaced_desktops = await desktop_login_policy.replace_previous(session, c, target)
     else:
         connection_changed = bool(c.user_ref or c.auth_state == "active")
         if c.auth_state == "active":
@@ -551,6 +559,8 @@ async def assign_client(
     await session.commit()
     if connection_changed:
         await device_connections.disconnect(cid)
+    for previous_id in replaced_desktops:
+        await device_connections.disconnect(previous_id, 4401)
     await audit.log(session, user, "client.assign", "client", cid, c.name or cid,
                     {"ownerUserId": c.user_ref})
     return {"ok": True, "ownerUserId": c.user_ref, "authState": c.auth_state}
@@ -573,9 +583,18 @@ async def activate_client(
     if target is None or not target.is_active:
         raise HTTPException(status_code=400, detail="请选择一个可用的归属用户")
     await _assert_user_in_scope(session, user, target)
+    from ..services import desktop_login_policy
+    await desktop_login_policy.lock_assignment(session, c, target)
+    await _assert_client_in_scope(session, user, c)
+    await _assert_user_in_scope(session, user, target)
+    if not target.is_active or target.account_deleted_at or not c.secret_hash:
+        raise HTTPException(status_code=409, detail="设备或账号授权已变化，请刷新后重试")
     device_auth.activate(c, target)
+    replaced_desktops = await desktop_login_policy.replace_previous(session, c, target)
     await session.commit()
     await device_connections.disconnect(cid)
+    for previous_id in replaced_desktops:
+        await device_connections.disconnect(previous_id, 4401)
     await audit.log(session, user, "client.activate", "client", cid, c.name or cid,
                     {"ownerUserId": target.id})
     return {"ok": True, "ownerUserId": target.id, "authState": c.auth_state}
@@ -1178,9 +1197,14 @@ async def put_model_provider(
     """
     from ..models import ModelProvider
     from ..services import model_config_guard
+    new_key = str(body.get("apiKey") or "").strip()
+    if len(new_key) > 400:
+        raise HTTPException(status_code=400, detail="模型服务密钥最多 400 个字符，原密钥未更改")
     p = await model_config_guard.catalog(session, ModelProvider, pid, body.get("expectedRevision"))
     if p is None:
-        p = ModelProvider(id=pid[:48], builtin=False)
+        if len(pid) > 48:
+            raise HTTPException(status_code=400, detail="模型服务标识最多 48 个字符，请缩短后再保存")
+        p = ModelProvider(id=pid, builtin=False)
         session.add(p)
     if "name" in body:
         p.name = str(body.get("name") or "")[:64]
@@ -1195,9 +1219,8 @@ async def put_model_provider(
         p.enabled = bool(body.get("enabled"))
     if "note" in body:
         p.note = str(body.get("note") or "")[:300]
-    new_key = str(body.get("apiKey") or "").strip()
     if new_key:
-        p.api_key = new_key[:400]
+        p.api_key = new_key
     await session.commit()
     from ..services.client_domain_events import models_changed
     await models_changed(session)
@@ -1248,6 +1271,10 @@ async def put_model_def(
         raise HTTPException(status_code=400, detail="要选一个模型服务、并填模型标识")
     mid = pid + ":" + name
     m = await model_config_guard.catalog(session, ModelDef, mid, body.get("expectedRevision"))
+    # Existing SQLite catalogs may contain longer identifiers from older versions.
+    # Keep those exact rows editable; never truncate or rename their identities.
+    if m is None and len(mid) > 64:
+        raise HTTPException(status_code=400, detail="模型服务标识加模型标识共超过 64 个字符，请缩短模型标识")
     if await session.get(ModelProvider, pid, populate_existing=True) is None:
         raise HTTPException(status_code=400, detail="这个模型服务不存在")
     if m is None:

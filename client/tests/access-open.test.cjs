@@ -5,6 +5,12 @@ const fs = require('node:fs'), path = require('node:path'), os = require('node:o
 const source = fs.readFileSync(path.join(__dirname, '../main/pi-session/ipc.js'), 'utf8');
 const handler = source.slice(source.indexOf('  async function openConversation('), source.indexOf("  ipcMain.handle('pi-session-open',"));
 
+function standardPreferenceFixture(t, options = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-saved-standard-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, 'access-preferences.json'), JSON.stringify({ schema: 1, mode: 'standard', revision: 0 }));
+  return fixture({ ...options, app: { getPath: () => root } });
+}
 function fixture(options = {}) {
   const calls = [], dialogs = [], ownerActions = [], cwd = os.tmpdir();
   let viewAttachments = 0, viewDetachments = 0, rendererGrants = 0;
@@ -16,6 +22,7 @@ function fixture(options = {}) {
   const event = { sender, senderFrame: sender.mainFrame };
   const context = vm.createContext({
     _accountSync: options.accountSync,
+    _sharedHistory: options.sharedHistory || null,
     _cloudHandoff: options.cloudHandoff || { observe() {} },
     skillTurn: require('../main/pi-session/skill-turn'), sendIdentityOf: null,
     taskInput: { request: async (_identity, route) => options.request(route) },
@@ -32,7 +39,7 @@ function fixture(options = {}) {
       historyEntry: async () => ({ entry: options.archive }),
       open: async value => { if (options.validateWork) await value.validateWorkConversation?.();
         calls.push(value); return options.openResult || { ok: true, session: { sessionId: 'fixture', cwd,
-        close: async () => {} } }; } },
+        close: async () => {} } }; }, ...options.session },
     capabilities: { resolve: options.resolve || (async () => ({ catalog: {}, selectedSkills: [], capabilityIds: [] })) },
     capabilityGrantsOf: null, _skillDirs: () => [], _newSessionCwd: () => cwd, _defaultCwd: () => cwd,
     workDir: () => cwd, attachments: { stage: async () => ({ files: [], warnings: [] }) },
@@ -72,6 +79,7 @@ function fixture(options = {}) {
       }
       if (name === '../conversation/acceptance-session' && options.acceptance) return options.acceptance;
       if (name === '../conversation/account-native-source.cjs') return require('../main/conversation/account-native-source.cjs');
+      if (name === '../conversation/shared-history.cjs') return require('../main/conversation/shared-history.cjs');
       if (!['../native-locale.cjs', '../agent-runtime/runtime-catalog', '../access-control/policy', '../access-control/preferences', '../access-control/automation-access', '../platform-connections/runtime.cjs', '../conversation/history-access', '../conversation/requirement-context', '../conversation/acceptance-session', '../conversation/work-conversation-opening', '../conversation-connectors.cjs', './resume-cwd', './task-access'].includes(name)) throw Error('Unexpected dependency ' + name);
       return require(path.join(__dirname, '../main/pi-session', name));
     },
@@ -89,6 +97,131 @@ function automationIdentity(uid = 'owner') {
   const claims = Buffer.from(JSON.stringify({ typ: 'device', uid, cid: 'fixture', iat: now - 60, exp: now + 3600 })).toString('base64url');
   return { hub: 'http://fixture.invalid', clientId: 'fixture', session: claims + '.' + 'a'.repeat(64) };
 }
+
+test('a downloaded transcript cannot shadow the cloud original on repeated desktop opens', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-cloud-copy-open-'));
+  const app = { getPath: () => root };
+  const store = require('../main/conversation/replica-store.cjs').create(path.join(root, 'replicas.sqlite'));
+  const bridge = require('../main/agent-runtime/pi-session-bridge').createPiSessionBridge({
+    sessionModule: { open() { assert.fail('must not execute locally'); }, probe() {} }, runnerAdapters: [],
+  });
+  const original = 'cloud-sync-original', copy = 'copy-local';
+  store.register([{ id: copy, cached: true, source: { id: original } }]);
+  let localReads = 0, remoteReads = 0;
+  const view = (id, remote) => ({ ref: 'view-' + id, sessionId: id, cwd: root,
+    localReplica: !remote, passiveCloudView: remote, snapshot: () => ({ messages: [{role: 'assistant', text: 'CLOUD-OK'}] }),
+    close: async () => true });
+  const f = fixture({ app, session: bridge,
+    sharedHistory: { resolve: async id => store.get(id), open: async id => { localReads++; return view(store.get(id).id, false); } },
+    cloudHandoff: { isRemote: id => id === original, observe() {}, reopen: async id => { remoteReads++; return view(id, true); } },
+    openReply: handle => ({ ok: true, sessionId: handle.sessionId, cloud: handle.passiveCloudView, messages: handle.snapshot().messages }),
+  });
+  t.after(async () => { for (const h of bridge.list()) await h.close(); store.close(); fs.rmSync(root, {recursive: true, force: true}); });
+  for (let i = 0; i < 3; i++) {
+    const reply = await f.open({chatId: original});
+    assert.equal(reply.ok, true, reply.reason);
+    assert.equal(reply.sessionId, original);
+    assert.equal(reply.cloud, true);
+    assert.equal(reply.messages[0].text, 'CLOUD-OK');
+  }
+  assert.equal(remoteReads, 1);
+  assert.equal(localReads, 0);
+  assert.equal(store.get(copy).id, copy, 'the explicit local copy remains available');
+});
+
+test('local history aliases reopen their canonical registered view without identity conflicts', async t => {
+  const bridge = require('../main/agent-runtime/pi-session-bridge').createPiSessionBridge({
+    sessionModule: { open() { assert.fail('read-only history must not execute'); }, probe() {} }, runnerAdapters: [],
+  });
+  const row = {id: 'copy-local', cached: true, historyAliasIds: ['source-alias']};
+  const f = fixture({ session: bridge, sharedHistory: { resolve: async () => row,
+    open: async () => ({ref: 'local-copy', sessionId: row.id, localReplica: true, close: async () => true}) },
+    openReply: handle => ({ok: true, sessionId: handle.sessionId}),
+  });
+  t.after(async () => { for (const h of bridge.list()) await h.close(); });
+  for (let i = 0; i < 3; i++) assert.equal((await f.open({chatId: 'source-alias'})).sessionId, row.id);
+  assert.equal(bridge.list().length, 1);
+});
+
+test('a downloaded account transcript cannot intercept authenticated original opens or bypass account login', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-account-copy-open-'));
+  const app = { getPath: () => root }, actor = automationIdentity();
+  const store = require('../main/conversation/replica-store.cjs').create(path.join(root, 'replicas.sqlite'));
+  t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const original = 'acct-original', copy = 'copy-local';
+  store.register([{ id: copy, cached: true, source: { id: original }, historyAliasIds: ['explicit-native-alias'] }]);
+  let current = actor, localReads = 0, accountReads = 0;
+  const f = fixture({ app, cachedIdentity: () => current, identityOf: async () => current,
+    sharedHistory: { resolve: async id => store.get(id), open: async id => {
+      localReads++; return { sessionId: id, localReplica: true };
+    } },
+    accountSync: { isAccountConversation: id => id === original,
+      row: async () => ({ id: original, sourceClientId: 'other-device', sourceSessionId: 'foreign-native' }),
+      openProjection: async id => { accountReads++; return { sessionId: id, adapterId: 'account-sync' }; } },
+    openReply: handle => ({ ok: true, sessionId: handle.sessionId, localReplica: handle.localReplica,
+      adapterId: handle.adapterId }),
+  });
+  assert.equal(store.get(original).id, copy, 'the passive read locator remains available');
+  const reply = await f.open({ chatId: original });
+  assert.equal(reply.ok, true, reply.reason); assert.equal(reply.sessionId, original);
+  assert.equal(reply.adapterId, 'account-sync'); assert.equal(localReads, 0); assert.equal(accountReads, 1);
+  current = null;
+  assert.equal((await f.open({ chatId: original })).ok, false);
+  for (const id of [copy, 'explicit-native-alias']) {
+    const local = await f.open({ chatId: id });
+    assert.equal(local.ok, true, local.reason); assert.equal(local.sessionId, copy); assert.equal(local.localReplica, true);
+  }
+  assert.equal(accountReads, 1); assert.equal(f.calls.length, 0);
+});
+
+test('owned local history remains readable offline without starting a runtime or changing cloud access', async () => {
+  for (const unavailable of [async () => null, async () => { throw Error('Hub offline'); }]) {
+    const local = { id: 'offline-native', adapterId: 'codex-harness',
+      workOwner: require('../main/platform-connections/runtime.cjs').scope(automationIdentity()) };
+    const projection = { sessionId: local.id, localReplica: true, readOnly: true };
+    const f = fixture({ identityOf: unavailable, sharedHistory: {
+      resolve: async id => id === local.id ? local : null, open: async () => projection,
+    }, openReply: handle => ({ ok: true, readOnly: handle.readOnly }) });
+    assert.equal((await f.open({ chatId: local.id })).readOnly, true);
+    assert.equal(f.calls.length, 0);
+    assert.equal((await f.open({ chatId: 'cloud-execution:private' })).ok, false);
+  }
+});
+
+test('requirement execution IPC opens and reattaches the remote view without starting a native runtime', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-task-execution-ipc-'));
+  const app = { getPath: () => root }, actor = automationIdentity();
+  let allowed = true, reads = 0, view;
+  const context = { location: { mode: 'remote' }, runner: { runnerId: 'isolated-cloud' } };
+  const cloud = require('../main/conversation/cloud-handoff').create({ app, identityOf: async () => actor,
+    interval: 60000, request: async (_, route) => {
+      if (route === '/tasks/req') {
+        reads++;
+        if (!allowed) throw Error('access revoked');
+        return { id: 'req', kind: 'requirement', status: 'done', workRouting: { executionContext: context } };
+      }
+      if (route.includes('/ai-session?')) return { ok: true, taskId: 'req', ref: 'cloud-run',
+        runnerId: 'isolated-cloud', executionContext: context, canSend: true, status: 'done', last: 0, items: [] };
+      if (route.endsWith('/attachments')) return [];
+      assert.fail(route);
+    } });
+  t.after(async () => { await view?.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const first = fixture({ app, cloudHandoff: cloud, attachView: remote => (view = remote) });
+  const input = { chatId: 'task-execution:req', taskRef: 'req', taskSession: true };
+  assert.equal((await first.open(input)).ok, true);
+  assert.equal(first.calls.length, 0);
+  assert.equal(view.passiveCloudView, true);
+  const again = fixture({ app, cloudHandoff: cloud, live: view });
+  assert.equal((await again.open(input)).ok, true);
+  assert.equal(reads, 2, 'live reuse must revalidate authoritative task access');
+  assert.equal(again.calls.length, 0);
+  allowed = false;
+  assert.equal((await again.open(input)).ok, false);
+  assert.equal(again.calls.length, 0);
+  const missing = fixture({ app, cloudHandoff: cloud });
+  assert.equal((await missing.open(input)).ok, false);
+  assert.equal(missing.calls.length, 0, 'failed remote opens must never manufacture local conversations');
+});
 
 test('an account switch while the initial identity is resolving rejects before runtime work', async () => {
   const owner = automationIdentity(); let current = owner, releaseIdentity, identityStarted = false;
@@ -225,6 +358,36 @@ test('an alias restored before the history cache is ready still opens the native
   assert.equal(result.ok, true, result.reason);
   assert.equal(f.calls.length, 0);
   assert.equal(f.viewAttachments(), 1);
+});
+
+test('a stale account projection never falls through to the Agent registry', async () => {
+  const identity = automationIdentity();
+  const f = fixture({ identityOf: async () => identity, archive: {
+    id: 'stale-account-row', adapterId: 'account-sync', accountConversation: true,
+    accountProjection: true, owner: require('../main/platform-connections/runtime.cjs').connectionScope(identity),
+    sourceClientId: identity.clientId, sourceSessionId: 'native-source',
+  }, accountSync: {
+    isAccountConversation: () => false,
+    openProjection: async () => null,
+  } });
+  const result = await f.open({ chatId: 'stale-account-row' });
+  assert.equal(result.ok, false);
+  assert.equal(result.notFound, true);
+  assert.equal(typeof result.reason, 'string');
+  assert.ok(result.reason.length > 0);
+  assert.equal(f.calls.length, 0);
+});
+
+test('verified native archive ignores stale account flags on the sidebar row', async () => {
+  const identity = automationIdentity();
+  const local = {id: 'native-source', adapterId: 'pi', path: 'verified-archive',
+    workOwner: require('../main/platform-connections/runtime.cjs').scope(identity)};
+  const f = fixture({archive: local, sharedHistory: {resolve: async () => local},
+    accountSync: {openProjection: async () => assert.fail('native history must not read an account projection') }});
+  const reply = await f.open({chatId: local.id, adapterId: 'account-sync', accountConversation: true, accountProjection: true});
+  assert.equal(reply.ok, true, reply.reason);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].adapterId, 'pi');
 });
 
 test('an unconfirmed close leaves the failed open quarantined', async () => {
@@ -584,34 +747,42 @@ test('本机新建需求继承系统权限，显式选择优先且后台派发�
   assert.equal(f.calls.at(-1).accessPolicy.mode, 'standard', '历史未确认的 full 不能提升权限');
 });
 
-test('a composer task full choice uses task-scoped native confirmation and cancellation never falls back to standard', async () => {
+test('a fresh interactive desktop chat inherits full access while headless calls cannot inherit it', async () => {
+  const fresh = fixture();
+  assert.equal((await fresh.open({ adapterId: 'pi' })).ok, true);
+  assert.equal(fresh.calls[0].accessPolicy.mode, 'full'); assert.equal(fresh.dialogs.length, 0);
+  const headless = fixture();
+  assert.equal((await headless.open({ adapterId: 'pi' }, null)).ok, true);
+  assert.equal(headless.calls[0].accessPolicy, null, 'headless legacy calls do not inherit device preferences');
+});
+test('a composer task full choice uses task-scoped native confirmation and cancellation never falls back to standard', async t => {
   const options = { taskRef: 'fixture-task', taskSession: true, adapterId: 'pi', accessMode: 'full' };
-  const allowed = fixture({ response: 1 });
+  const allowed = standardPreferenceFixture(t, { response: 1 });
   assert.equal((await allowed.open(options)).ok, true);
   assert.equal(allowed.calls[0].accessPolicy.mode, 'full');
   assert.equal(allowed.dialogs.length, 1);
-  const cancelled = fixture();
+  const cancelled = standardPreferenceFixture(t);
   assert.equal((await cancelled.open(options)).cancelled, true);
   assert.equal(cancelled.calls.length, 0);
   assert.equal(cancelled.dialogs.length, 1);
 });
 
-test('full access requires native consent before opening; cancel and noninteractive callers cannot enable it', async () => {
-  const cancelled = fixture();
+test('full access requires native consent before opening with a saved standard default; cancel and noninteractive callers cannot enable it', async t => {
+  const cancelled = standardPreferenceFixture(t);
   assert.equal((await cancelled.open({ accessMode: 'full' })).cancelled, true);
   assert.equal(cancelled.calls.length, 0);
   assert.equal(cancelled.dialogs[0].fixture, true);
-  const headless = fixture({ response: 1 });
+  const headless = standardPreferenceFixture(t, { response: 1 });
   assert.equal((await headless.open({ accessMode: 'full' }, null)).ok, false);
   assert.equal(headless.calls.length, 0);
   assert.equal(headless.dialogs.length, 0);
-  const allowed = fixture({ response: 1 });
+  const allowed = standardPreferenceFixture(t, { response: 1 });
   assert.equal((await allowed.open({ accessMode: 'full' })).ok, true);
   assert.equal(allowed.calls[0].accessPolicy.mode, 'full');
   assert.equal(allowed.calls[0].accessPolicy.schema, 'soduwork.access-policy/v1');
 });
 
-test('main process compiles policy and ignores renderer-supplied full access on standard or unsupported calls', async () => {
+test('main process compiles policy and ignores renderer-supplied full access on standard or unsupported calls', async t => {
   const forged = { schema: 'soduwork.access-policy/v1', mode: 'full', revision: 100, workspaceRoot: os.tmpdir() };
   const standard = fixture();
   const raw = { accessMode: 'standard', accessPolicy: forged };
@@ -623,7 +794,7 @@ test('main process compiles policy and ignores renderer-supplied full access on 
   assert.equal((await legacy.open({ adapterId: 'unknown-runtime', mode: 'full', accessPolicy: forged })).ok, true);
   assert.equal(legacy.calls[0].accessPolicy, null);
   assert.equal(legacy.calls[0].readOnly, false);
-  const newChat = fixture();
+  const newChat = standardPreferenceFixture(t);
   assert.equal((await newChat.open({ mode: 'full', accessPolicy: forged })).ok, true);
   assert.equal(newChat.calls[0].accessPolicy.mode, 'standard');
 });

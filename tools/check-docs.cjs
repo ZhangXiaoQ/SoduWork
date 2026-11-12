@@ -7,7 +7,7 @@ const PAIRS = [
   ['README.md', 'README.zh-CN.md'], ['docs/README.md', 'docs/README.zh-CN.md'],
   ['CONTRIBUTING.md', 'docs/contributing.zh-CN.md'], ['SECURITY.md', 'docs/security.zh-CN.md'],
   ['NOTICE.md', 'NOTICE.zh-CN.md'],
-  ...['getting-started', 'development', 'release-scope', 'open-source', 'plugin-authoring']
+  ...['getting-started', 'development', 'release-scope', 'open-source', 'plugin-authoring', 'model-services']
     .map(name => [`docs/${name}.md`, `docs/${name}.en.md`]),
   ...['client', 'hub-backend', 'hub-frontend', 'third-party', 'ops/self-host', 'client/sdk']
     .map(name => [`${name}/README.md`, `${name}/README.zh-CN.md`]),

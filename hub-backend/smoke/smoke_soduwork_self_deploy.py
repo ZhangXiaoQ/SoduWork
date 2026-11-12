@@ -1,8 +1,8 @@
-"""Safety invariants for SoduWork's constrained trial self-deployment adapter."""
+"""Safety invariants for SoduWork's constrained 149 self-deployment adapter."""
 from pathlib import Path
 
 
-SCRIPT = (Path(__file__).resolve().parent.parent / "deployers" / "soduwork-hub-local.sh").read_text(
+SCRIPT = (Path(__file__).resolve().parents[1] / "deployers" / "soduwork-hub-local.sh").read_text(
     encoding="utf-8")
 
 
@@ -10,7 +10,7 @@ def main() -> None:
     checks = {
         "approved full commit": "^[0-9a-f]{40}$" in SCRIPT,
         "deployment endpoint comes from environment config": (
-            "192.0.2.10" not in SCRIPT and "SODUWORK_HEALTH_URL is required" in SCRIPT
+            "192.0.2.149" not in SCRIPT and "SODUWORK_HEALTH_URL is required" in SCRIPT
         ),
         "workspace commit locked": 'git rev-parse HEAD)' in SCRIPT,
         "immutable image revision": "org.opencontainers.image.revision" in SCRIPT,

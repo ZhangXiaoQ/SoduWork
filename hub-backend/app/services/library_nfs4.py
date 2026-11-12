@@ -49,7 +49,7 @@ def _connect(config):
         raise _error("PLATFORM_UNSUPPORTED", "NFSv4.1 直连需要 Linux x86_64 Hub，当前系统不受支持", False)
     # nfs-rs parses the URL with Rust url::Url but does not percent-decode its
     # export path. Reject paths it would silently change instead of mounting a
-    # different export; for example, /exports/soduwork-library is supported.
+    # different export; the configured /srv/soduwork-shared/uploads is supported.
     if not re.fullmatch(r"/[A-Za-z0-9._~/-]*", config["export"]):
         raise _error("NOT_CONFIGURED", "当前 NFSv4.1 客户端要求导出路径使用 ASCII 字母、数字或 /._~-", False)
     try:

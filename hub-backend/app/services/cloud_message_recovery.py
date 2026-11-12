@@ -48,6 +48,10 @@ async def envelope(session, client, task_id, ref, text, ctx):
     result = {"schema": 1, "ownerUserId": client.user_ref, "ref": ref,
             "runnerId": runner.id, "runnerBootId": "", "text": text,
             "executionSelection": normalize(chosen)}
+    if ctx.get("_turnPlugins"):
+        result["plugins"] = ctx["_turnPlugins"]
+    if ctx.get("_turnSkills"):
+        result["skills"] = ctx["_turnSkills"]
     if ctx.get("_turnFiles"):
         # Keep bounded user material with the pending intent so a Hub restart
         # cannot deliver text without its files. Acceptance clears the payload.
@@ -131,6 +135,23 @@ async def deliver(row_id):
         runner = runner_hub.get(payload["runnerId"])
         if not runner or not runner.alive() or "admit1" not in getattr(runner, "caps", []):
             return "waiting"
+        durable_payload = dict(payload)
+        if payload.get("contentRef"):
+            from . import conversation_content
+            try:
+                saved = await conversation_content.get_json(payload["contentRef"], user.id, "message:" + row.id, session=session)
+            except Exception:
+                return "waiting"
+            if any(saved.get(key) != payload.get(key) for key in ("ownerUserId", "ref", "runnerId")):
+                await _save(session, row, attempts, "uncertain", {"error": "已保存消息的执行归属不匹配"}, retry=False)
+                return "uncertain"
+            payload = {**saved, "runnerBootId": durable_payload.get("runnerBootId", "")}
+        # Hydration borrows this transaction's personal Runner policy lock.
+        # Admission probes and file uploads authorize in their own transaction;
+        # release the read lock before either RPC can wait on its own caller.
+        # The attempt was already persisted; the sending claim below still
+        # fences concurrent recovery and commits before job.comment.
+        await session.commit()
         boot = str(getattr(runner, "boot_id", "") or "")
         key = "comment:" + row.id
         if row.phase != "queued":
@@ -158,6 +179,24 @@ async def deliver(row_id):
             return "waiting"
         cfg = dict(ai_exec._cfg_of(ctx, ai_remote))
         selection = cfg.pop("_executionSelection", None)
+        plugin_turn = None
+        if payload.get("skills"):
+            from . import conversation_turn_skills
+            try:
+                await conversation_turn_skills.validate(session, caller, handoff,
+                    payload["ref"], payload["skills"])
+            except Exception as error:
+                await _save(session, row, attempts, "rejected", {"error": str(getattr(error, "detail", error))})
+                return "rejected"
+        if payload.get("plugins"):
+            from . import conversation_turn_plugins
+            try:
+                await conversation_turn_plugins.validate(session, caller, handoff, payload["ref"], payload["plugins"])
+                plugin_turn = conversation_turn_plugins.authorization(caller, runner,
+                    payload["ref"], payload["plugins"], row.id)
+            except Exception as error:
+                await _save(session, row, attempts, "rejected", {"error": str(getattr(error, "detail", error))})
+                return "rejected"
         packet = {}
         if payload.get("files"):
             if "turnFiles1" not in getattr(runner, "caps", []):
@@ -173,9 +212,10 @@ async def deliver(row_id):
             if error:
                 return "waiting"
         payload["runnerBootId"] = boot
+        durable_payload = {**durable_payload, "runnerBootId": boot} if durable_payload.get("contentRef") else payload
         changed = await session.execute(update(Receipt).where(
             Receipt.id == row.id, Receipt.phase.in_(PENDING), Receipt.recovery_attempts == attempts,
-        ).values(phase="sending", payload=payload).execution_options(synchronize_session=False))
+        ).values(phase="sending", payload=durable_payload).execution_options(synchronize_session=False))
         if changed.rowcount:
             from .cloud_sync_notifications import mark
             mark(session, row.task_id)
@@ -187,6 +227,8 @@ async def deliver(row_id):
             reply = await runner.call("job.comment", {
                 "ref": payload["ref"], "text": payload["text"], "cfg": cfg,
                 "recordUser": True, "turnId": row.id,
+                **({"turnSkills": payload["skills"]} if payload.get("skills") else {}),
+                **({"pluginTurn": plugin_turn} if plugin_turn else {}),
                 **({"files": packet} if packet else {}),
                 **({"executionSelection": selection} if selection is not None else {}),
             }, timeout=60)

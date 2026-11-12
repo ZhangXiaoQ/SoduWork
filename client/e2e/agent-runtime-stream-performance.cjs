@@ -109,6 +109,8 @@ async function runElectron(electron, mode, output, nodeExe) {
       env: { PATH: process.env.PATH, HOME: root, TMPDIR: root, PI_TELEMETRY: '0' },
       execArgv: [], stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
     let hub;
+    server.on('exit', (code, signal) => { report.fixtureExit = { code, signal }; });
+    server.on('error', error => { report.fixtureProcessError = String(error.message); });
     server.on('message', value => {
       if (value.type === 'ready') hub = value.hub;
       else if (value.type === 'stream') source.set(value.runId, value);
@@ -213,7 +215,7 @@ async function runElectron(electron, mode, output, nodeExe) {
   finally {
     clearInterval(heartbeat); await bridge?.dispose().catch(error => { report.cleanupError = String(error.message || error); report.ok = false; });
     await runtime?.dispose?.().catch(error => { report.cleanupError = String(error.message || error); report.ok = false; });
-    win?.destroy(); server?.disconnect();
+    win?.destroy(); if (server?.connected) server.disconnect();
     fs.writeFileSync(output, JSON.stringify(report, null, 2)); app.exit(report.ok ? 0 : 1);
   }
 }

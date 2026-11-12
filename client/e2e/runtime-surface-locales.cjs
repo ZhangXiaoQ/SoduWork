@@ -30,6 +30,8 @@ app.whenReady().then(async () => {
        blurb:'Kimi 官方编码助手，通过 ACP 接入，使用已授权的企业模型。'}]}]});
     SoduWorkAPI.agentSetup=SoduWorkAPI.localAgentSetup;openAgentsPanel();void 0;`);
   await tick();
+  await js(`_agJobs['fixture-local~claude']={key:'fixture-local~claude',action:'repair',state:'done',ok:false,
+    detail:'fixture detail <fixture>',lines:['\u4fee\u590d\u672a\u5b8c\u6210','custom diagnostic <fixture>']};`);
   await js(`document.querySelector('[data-atoggle="fixture-local~claude"]').click()`);
   await js(read('components/panels/panels-chat-status.js'));
   await js(`window.runtimeNotice='当前会话没有授权：浏览网页。请新建会话并开启对应能力后再使用这个插件';
@@ -50,6 +52,12 @@ app.whenReady().then(async () => {
     assert.ok(!text.includes('Claude Code CLI'));
     assert.ok(text.includes('fixture account login 保存 {sender}'));
     assert.ok(text.includes(await js('SoduWorkI18n.t("agent.auth.required")')), locale + ' drawer status');
+    const repairLabel = await js("SoduWorkI18n.translateText('\u4fee\u590d\u672a\u5b8c\u6210')");
+    assert.equal(await js('document.querySelector("#agDrawerWrap .ag-job-h b").textContent'), repairLabel, locale + ' repair status');
+    assert.equal(await js('document.querySelector("#agDrawerWrap [data-alog]").textContent'), repairLabel + '\ncustom diagnostic <fixture>', locale + ' translated and original log lines');
+    assert.equal(await js('document.querySelector("#agDrawerWrap .ag-job-h>span").textContent'), 'fixture detail <fixture>');
+    assert.equal(await js('document.querySelector("#agDrawerWrap fixture")'), null, 'diagnostics render as text');
+
     const notice = await js(`_noticePresentation({kind:'task_assignment',senderName:'保存',text:'legacy',textMessage:{key:'notification.task_assignment',params:{sender:'保存',title:'New chat'},fallback:'legacy'}}).text`);
     assert.ok(notice.includes('保存') && notice.includes('New chat'), 'business values preserved');
     assert.notEqual(notice, 'legacy');

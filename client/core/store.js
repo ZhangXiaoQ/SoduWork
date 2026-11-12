@@ -789,7 +789,7 @@ function isActiveTask(t){
 }
 function activeTasks(){ return tasks.filter(isActiveTask); }
 
-/* Retain the latest 100 bubble notifications for review in the notification center. */
+/* Retain remote history and the latest 100 local transient notifications. */
 const LS_NOTICES=()=>_taskStorageKey('notices','soduwork_work_notices_v1');
 function _readNotices(){
   try{
@@ -808,7 +808,8 @@ function _readNotices(){
         if(recovered.length){raw=JSON.stringify(recovered);localStorage.setItem(key,raw);}
       }
     }
-    const rows=JSON.parse(raw||'[]');return Array.isArray(rows)?rows:[];
+    const rows=JSON.parse(raw||'[]'),local=Array.isArray(rows)?rows:[];
+    return window.MateNoticeSync?.cachedRows?.(key,local)||local;
   }catch(e){return[]}
 }
 let notices=_readNotices();
@@ -816,14 +817,18 @@ let notices=_readNotices();
  * Persist notifications and broadcast invalidation so read state, badges, and open
  * notification lists stay synchronized across windows.
  */
-function _saveNotices(){try{localStorage.setItem(LS_NOTICES(),JSON.stringify(notices))}catch(e){return false;}
+function _saveNotices(){try{
+    const key=LS_NOTICES(),rows=window.MateNoticeSync?.ready?.(key)?notices.filter(row=>!row.serverMessageId):notices;
+    localStorage.setItem(key,JSON.stringify(rows));
+  }catch(e){return false;}
   if(window.WinSync)WinSync.pushNotices();return true;}
 function logNotice(text,taskId,kind,extra){
   if(!text)return false;
   const eventId=extra&&extra.noticeEventId?String(extra.noticeEventId):extra&&extra.messageId ? 'mate_'+String(extra.messageId).slice(0,64) : '';
   // Deduplicate against current-account persisted records because another window may have written before WinSync arrives.
-  const latest=_readNotices();notices.splice(0,notices.length,...latest);
+  const latest=_readNotices();notices.length=0;for(const row of latest)notices.push(row);
   if(eventId&&notices.some(n=>n.id===eventId))return false;
+  if(eventId&&window.MateNoticeSync?.dismissedId?.(eventId))return false;
   try{if(eventId&&JSON.parse(localStorage.getItem(LS_NOTICES()+':sync')||'{}').ids?.includes(eventId))return false;}catch(_){}
   const files=(Array.isArray(extra&&extra.attachments)?extra.attachments:[]).slice(0,20)
     .filter(f=>f&&f.id&&f.name).map(f=>({id:String(f.id),name:String(f.name),size:Number(f.size)||0}));
@@ -832,10 +837,12 @@ function logNotice(text,taskId,kind,extra){
     serverMessageId:extra&&extra.serverMessageId?String(extra.serverMessageId):'', messageId:extra&&extra.messageId?String(extra.messageId):'',
     senderId:extra&&extra.senderId?String(extra.senderId):'', senderName:extra&&extra.senderName?String(extra.senderName):'', recipientId:String(extra&&extra.recipientId||''),
     website:extra&&extra.website&&typeof extra.website==='object'?extra.website:null,
+    ...(kind==='legal_update'&&['terms','privacy'].includes(extra?.legalUpdate?.kind)&&extra.legalUpdate.revisionId
+      ? {legalUpdate:{kind:extra.legalUpdate.kind,revisionId:String(extra.legalUpdate.revisionId),action:extra.legalUpdate.action==='accept'?'accept':'notice'}} : {}),
     at,text:String(text),taskId:taskId||null,kind:kind||'notice',read:false});
   // Remote rows are durable inbox/outbox records; trim only local transient notices.
   let localCount=0;const kept=notices.filter(n=>n.serverMessageId||++localCount<=100);
-  notices.splice(0,notices.length,...kept);
+  notices.length=0;for(const row of kept)notices.push(row);
   if(_saveNotices()===false)return false;
   if(typeof updateNoticeBadge==='function')updateNoticeBadge();
   return true;
@@ -843,6 +850,7 @@ function logNotice(text,taskId,kind,extra){
 function noticeUnread(){let n=0;const rows=window.MateNoticeSync?MateNoticeSync.rows('received'):notices;
   for(const x of rows)if(x.folder!=='sent'&&!x.read)n++;return n}
 function markMateNoticeRead(messageId, readAt){
+  if(globalThis.MateNoticeSync?.persistent)return MateNoticeSync.confirmedRead(messageId,readAt);
   const key=String(messageId||''); if(!key)return false; let changed=false;
   notices.forEach(n=>{
     /* The recipient knows the server row id from the notification payload,

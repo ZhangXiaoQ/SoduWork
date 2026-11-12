@@ -3,6 +3,9 @@
 Unicode true
 RequestExecutionLevel user
 SilentInstall silent
+!ifndef SODUWORK_E2E_EXECUTABLE_NAME
+  !error "An isolated fixture executable name is required"
+!endif
 OutFile "${SODUWORK_E2E_BASELINE_OUT}"
 Section
   StrCpy $INSTDIR "${SODUWORK_E2E_ROOT}"

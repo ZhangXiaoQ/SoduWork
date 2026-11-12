@@ -267,7 +267,7 @@ def _cpu_compatibility_issue() -> str:
                if any(flags and flag not in flags for flags in capabilities)]
     if missing:
         return ("所选 Linux 执行机的 CPU 缺少 " + "、".join(missing)
-                + " 指令集，无法运行 OpenCode 及依赖它的 Harness²。请选择兼容的执行机，或由管理员调整该虚拟机的 CPU 配置。")
+                + " 指令集，无法运行 OpenCode。请选择兼容的执行机，或由管理员调整该虚拟机的 CPU 配置。")
     return ""
 
 

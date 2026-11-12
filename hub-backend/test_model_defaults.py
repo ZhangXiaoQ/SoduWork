@@ -8,7 +8,7 @@ os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 
 import httpx
 from fastapi import FastAPI
-from app.api import ai_proxy, tasks
+from app.api import ai_proxy, tasks, task_options
 from app.db import get_session
 from app.models import Client, ModelDef, ModelProvider, User
 from app.services import device_auth, model_catalog
@@ -63,6 +63,7 @@ class ModelDefaultsTests(IsolatedDatabase):
             ])
         app = FastAPI()
         app.include_router(tasks.router)
+        app.include_router(task_options.router)
         app.include_router(ai_proxy.router)
 
         async def isolated_session():
@@ -84,6 +85,30 @@ class ModelDefaultsTests(IsolatedDatabase):
         response = await self.http.get("/api/v1/" + path, params=params, headers=self.headers)
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
+
+    async def test_assignment_defaults_match_real_dispatch_without_changing_preferences(self):
+        from unittest.mock import AsyncMock, patch
+        from app.db import Base
+        from app.services import ai_exec, task_execution_model
+        async with self.engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        # Only Runner discovery/config loading is isolated. Authentication,
+        # the HTTP route, catalog queries and final model resolution stay real.
+        with patch.object(ai_exec, 'load', new=AsyncMock(return_value={})), \
+                patch.object(ai_exec, 'list_assignees_sync', return_value={'agents': []}):
+            response = await self.http.post('/api/v1/task-execution-options', json={}, headers=self.headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        options = response.json()
+        self.assertEqual(options['defaultModels']['pi'], 'second')
+        self.assertIn('first', [row['name'] for row in options['modelOptions']])
+        self.assertNotIn('fixture-company-private', response.text)
+        async with self.sessions() as session:
+            client = await session.get(Client, 'fixture')
+            context, _ = await task_execution_model.prepare(session, client, {'cfg':{},'localCfg':{}}, {'id':'local:pi'})
+            self.assertEqual(options['defaultModels']['pi'], context['cfg']['llm']['model'])
+            context, _ = await task_execution_model.prepare(session, client, {'cfg':{},'localCfg':{}}, {'id':'local:pi'}, 'first')
+            self.assertEqual(context['cfg']['llm']['model'], 'first')
+            self.assertEqual(client.agent_models['pi'], 'second')
 
     async def test_default_names_match_all_gateway_config_resolutions(self):
         metadata = await self.get("my-models")

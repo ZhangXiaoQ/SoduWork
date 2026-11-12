@@ -21,8 +21,8 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--key-file", required=True)
     parser.add_argument("--key-id", required=True)
     parser.add_argument("--channel", default="stable", choices=("stable", "beta"))
-    parser.add_argument("--platform", default="win32", choices=("win32",))
-    parser.add_argument("--arch", default="x64", choices=("x64", "arm64"))
+    parser.add_argument("--platform", default="win32", choices=("win32", "darwin", "linux", "android"))
+    parser.add_argument("--arch", default="x64", choices=("x64", "arm64", "universal"))
     parser.add_argument("--notes", default="")
     parser.add_argument("--minimum", default="")
     parser.add_argument("--mandatory", action="store_true")
@@ -34,6 +34,9 @@ def main() -> None:
     source = Path(args.installer).resolve()
     output = Path(args.output).resolve()
     key_path = Path(args.key_file).resolve()
+    arches = {"universal"} if args.platform == "android" else updates.RELEASE_ARCHES
+    if args.arch not in arches:
+        raise SystemExit("architecture does not match release platform")
     if updates.parse_version(args.version) is None:
         raise SystemExit("version must be x.y.z")
     if args.minimum and updates.parse_version(args.minimum) is None:

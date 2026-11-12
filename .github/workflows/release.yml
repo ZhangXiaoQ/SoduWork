@@ -126,9 +126,23 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y rpm libarchive-tools
+      - name: Prepare macOS signing and notarization
+        if: startsWith(matrix.shard, 'macos-')
+        run: bash tools/ci/prepare-macos-signing.sh
+        env:
+          SODUWORK_MAC_CERTIFICATE_B64: ${{ secrets.SODUWORK_MAC_CERTIFICATE_B64 }}
+          SODUWORK_MAC_CERTIFICATE_PASSWORD: ${{ secrets.SODUWORK_MAC_CERTIFICATE_PASSWORD }}
+          SODUWORK_MAC_KEYCHAIN_PASSWORD: ${{ secrets.SODUWORK_MAC_KEYCHAIN_PASSWORD }}
+          SODUWORK_MAC_SIGN_IDENTITY: ${{ secrets.SODUWORK_MAC_SIGN_IDENTITY }}
+          SODUWORK_MAC_NOTARY_KEY_ID: ${{ secrets.SODUWORK_MAC_NOTARY_KEY_ID }}
+          SODUWORK_MAC_NOTARY_ISSUER: ${{ secrets.SODUWORK_MAC_NOTARY_ISSUER }}
+          SODUWORK_MAC_NOTARY_PRIVATE_KEY_B64: ${{ secrets.SODUWORK_MAC_NOTARY_PRIVATE_KEY_B64 }}
+          SODUWORK_MAC_NOTARY_PROFILE: ${{ secrets.SODUWORK_MAC_NOTARY_PROFILE }}
       - name: Build once and run native installation acceptance
         if: matrix.shard != 'android'
         run: python tools/github/build.py ${{ matrix.shard }} --output release-out/${{ matrix.shard }}
+        env:
+          SODUWORK_MAC_SIGN_IDENTITY: ${{ startsWith(matrix.shard, 'macos-') && secrets.SODUWORK_MAC_SIGN_IDENTITY || '' }}
       - name: Enable Android emulator acceleration
         if: matrix.shard == 'android'
         run: |
@@ -155,6 +169,9 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
+      - name: Clean up macOS signing material
+        if: always() && startsWith(matrix.shard, 'macos-')
+        run: bash tools/ci/cleanup-macos-signing.sh
 
   hub:
     needs: [quality, security]

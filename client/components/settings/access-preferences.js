@@ -4,7 +4,7 @@
   let state = { mode: 'standard', revision: 0 }, loaded = false, saving = false, serial = 0, pending;
   const listeners = new Set();
   const api = () => global.soduWorkAPI?.accessPreferences;
-  const t = text => global.SoduWorkI18n?.t?.(text) || text;
+  const t = text => global.SoduWorkI18n?.getLocale?.() === 'zh-CN' ? text : global.SoduWorkI18n?.t?.(text) || text;
   function paint(message = '', error = false) {
     const host = document.getElementById('defaultAccessModes');
     if (!host) return;
@@ -65,6 +65,7 @@
     if (button && !button.disabled) void choose(button.dataset.defaultAccess);
   });
   api()?.onChange?.(value => { ++serial; accept(value); });
+  global.addEventListener?.('soduwork-locale-change', () => paint());
   global.AccessPreferences = Object.freeze({ refresh,
     ready: () => loaded ? Promise.resolve({ ...state }) : refresh(),
     snapshot: () => ({ ...state }),

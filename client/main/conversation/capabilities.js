@@ -342,8 +342,9 @@ async function inspect(options) {
     };
   });
   const runtimeByName = new Map((runtime.contracts || []).map((item) => [String(item.name || ''), item]));
-  const businessSkills = (policy.skills || []).filter((item) =>
-    !CAPABILITY_SKILLS.has(String(item.name || ''))).map((item) => {
+  // Explicit guide selection includes foundation skills. Loading their trusted
+  // resources never grants the corresponding browser, computer or office tools.
+  const skillCatalog = (policy.skills || []).map((item) => {
     const name = String(item.name || '');
     const local = runtimeByName.get(name);
     const installed = !!local;
@@ -360,9 +361,10 @@ async function inspect(options) {
       reason: installed ? '' : (item.downloadable ? '选择后会安全同步到本机' : '当前执行节点没有这个 Skill 文件'),
     };
   });
+  const businessSkills = skillCatalog.filter((item) => !CAPABILITY_SKILLS.has(item.name));
   const policyReason = policy.reason || runtime.warning || '';
   return {
-    ok: true, policyOk: !!policy.ok, policyReason, items, businessSkills, policy,
+    ok: true, policyOk: !!policy.ok, policyReason, items, skillCatalog, businessSkills, policy,
     runtime: { dirs: runtime.dirs || [], contracts: runtime.contracts || [], warning: runtime.warning || '' },
   };
 }

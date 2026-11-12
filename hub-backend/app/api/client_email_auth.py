@@ -12,6 +12,7 @@ from ..auth import hash_password, verify_password
 from ..db import get_session
 from ..models import Client, User
 from ..services import client_access, device_connections, email_auth
+from ..services import legal_publications
 from .client_auth import _access_error, _device_with_key, complete_login
 
 
@@ -41,6 +42,7 @@ class Registration(EmailProof):
     password: str = Field(min_length=8, max_length=128)
     displayName: str = Field(default="", max_length=64)
     consents: dict[str, str] = Field(default_factory=dict)
+    consentLocales: dict[str, str] = Field(default_factory=dict)
 
 
 class PasswordLogin(DeviceEmail):
@@ -100,7 +102,7 @@ async def register(body: Registration,
         policy = await client_access.policy(session)
         if not policy["allowSelfRegistration"]:
             raise client_access.ClientAccessError("自助注册已关闭", code="SELF_REGISTRATION_DISABLED", status=403)
-        email_auth.validate_consents(body.consents)
+        await legal_publications.validate_registration(session, body.consents)
         password = client_access.validate_password(body.password, new_account=True)
         email = await _consume(session, body, "register")
         if await session.scalar(select(User.id).where(User.email_normalized == email)):
@@ -116,7 +118,7 @@ async def register(body: Registration,
                     password_hash=hash_password(password), display_name=body.displayName.strip() or email.split("@", 1)[0],
                     org_id=org_id, role_id=policy.get("defaultRoleId") or None, is_active=True, is_super=False)
         session.add(user)
-        email_auth.record_consents(session, user.id, client.id, body.consents)
+        await legal_publications.register_receipts(session, user.id, client.id, body.consents, body.consentLocales)
         await session.flush()
         return await complete_login(session, client, user, body, created=True)
     except IntegrityError as exc:

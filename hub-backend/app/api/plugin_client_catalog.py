@@ -1,7 +1,8 @@
 """Employee plugin catalog, conversation grants and personal publication APIs."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile, Request, Response
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -104,7 +105,7 @@ async def client_plugin_recommendations(
     client: Client = Depends(current_client),
     session: AsyncSession = Depends(get_session),
 ):
-    """Thin placement list for a page surface (P1: compose, kind=app).
+    """Thin application placement list for compose or the main sidebar.
 
     Returns rows only; the client derives display material by joining the
     catalog it already fetched. Starting a plugin re-checks permissions hard,
@@ -258,14 +259,26 @@ async def probe_client_plugin_installation(
 
 
 @router.get("/plugins/{plugin_id}/ui-package")
-async def client_plugin_ui_package(plugin_id: str,
+async def client_plugin_ui_package(plugin_id: str, request: Request, response: Response,
     client: Client = Depends(current_client), session: AsyncSession = Depends(get_session)):
     from ..services import plugin_installed, plugin_package_resources
     actor = await _client_actor(session, client)
     try:
         selected = await plugin_installed.resolve(session, actor.org_id, actor.user_id,
                                                   [plugin_id], provision_defaults=False)
-        return plugin_package_resources.ui_for_version(selected[0][1])
+        version = selected[0][1]
+        # Authorization always precedes a conditional response. The immutable
+        # version, manifest and package file identity all participate in the tag.
+        etag = plugin_package_resources.cache_tag(version)
+        headers = {"ETag": etag, "Cache-Control": "private, no-cache"}
+        validators = [value.strip().removeprefix("W/") for value in request.headers.get("if-none-match", "").split(",")]
+        if etag in validators or "*" in validators:
+            return Response(status_code=304, headers=headers)
+        value = await run_in_threadpool(plugin_package_resources.ui_for_version, version)
+        if plugin_package_resources.cache_tag(version) != etag:
+            raise ValueError("插件包在读取期间发生变化，请重试")
+        response.headers.update(headers)
+        return value
     except (ValueError, IndexError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 

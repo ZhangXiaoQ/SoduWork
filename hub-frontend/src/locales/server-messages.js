@@ -6,6 +6,8 @@ export const serverMessages = {
   'plugin.check.project': ['项目与环境配置', 'Project and environment', 'プロジェクトと環境', '프로젝트 및 환경'],
   'plugin.check.agent': ['逐节点 Agent 与模型', 'Agent and model per step', '各ステップの Agent とモデル', '단계별 Agent 및 모델'],
   'plugin.check.mcp': ['MCP 连接可用', 'MCP connections', 'MCP 接続', 'MCP 연결'],
+  'plugin.check.app-mcp': ['应用 MCP 接入声明', 'App MCP declaration', 'アプリ MCP 接続の宣言', '앱 MCP 연결 선언'],
+  'plugin.app-mcp.declared': ['已声明应用自有连接：{names}；无需重复注册企业 MCP', 'App-owned connection declared: {names}; no duplicate company MCP registration required.', 'アプリ独自の接続を宣言済み：{names}。企業 MCP への重複登録は不要です。', '앱 자체 연결 선언됨: {names}. 회사 MCP에 중복 등록할 필요가 없습니다.'],
   'plugin.check.mcp-tools': ['MCP 工具最小授权', 'MCP tool permissions', 'MCP ツールの最小権限', 'MCP 도구 최소 권한'],
   'plugin.check.runtime': ['执行能力可用', 'Execution capabilities', '実行機能', '실행 기능'],
   'plugin.trust.ready': ['可以进入项目绑定', 'Ready to bind to a project', 'プロジェクトに紐付けできます', '프로젝트에 연결할 수 있습니다'],

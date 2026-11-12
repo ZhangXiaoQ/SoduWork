@@ -57,7 +57,7 @@ test('source grant discovers the current bridge and executes app list/call witho
   assert.equal(seen.at(-1).params.arguments.text, '项目文档');
   const text = '项目文档\n引号 "正式"；$HOME `literal`；民生🙂';
   const stdin = await run([...args, 'call', connection.server, 'whoami'],
-    { SODUWORK_MCP_ARGS_STDIN: '1' }, JSON.stringify({ record_id: 'document-fixture', text }));
+    { SODUWORK_MCP_ARGS_STDIN: '1' }, JSON.stringify({ space_id: 'team-media', text }));
   assert.equal(stdin.code, 0, stdin.stderr);
   assert.equal(seen.at(-1).params.arguments.text, text);
   assert.ok(seen.every(r => r.authorization === 'Bearer ' + current.token));

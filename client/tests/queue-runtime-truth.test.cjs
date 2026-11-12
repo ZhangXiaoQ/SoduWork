@@ -24,6 +24,14 @@ test('waiting approval and failed model never masquerade as running',()=>{
  assert.doesNotMatch(f.render(),/nqueue-progress/);assert.match(f.render(),/等待输入/);
  f.ctx._snap.status='unreachable';assert.doesNotMatch(f.render(),/nqueue-progress/);assert.match(f.render(),/执行失败/);
 });
+test('controller reconnect and authorization waits do not ask for an unrelated chat reply',()=>{
+ const f=fixture(),e=f.ctx._snap.execution;e.turnQueue.activeTaskId='t2';f.ctx._snap.status='waiting-user';
+ for(const [waitingReason,label] of [['connection','等待连接'],['auth','需要重新登录'],['permission','等待授权'],['stop','停止中']]){
+  e.taskExecutions=[{taskId:'t2',status:'waiting',waitingReason}];
+  const html=f.render();assert.match(html,new RegExp(label));assert.doesNotMatch(html,/nqueue-progress|等待输入/);
+ }
+ e.taskExecutions=[];assert.match(f.render(),/等待输入/);
+});
 test('live completion wins over stale running receipt; other conversation receipts cannot take over',()=>{
  const f=fixture(),e=f.ctx._snap.execution;e.turnQueue.tasks=[{taskId:'t1',status:'completed'}];
  f.entries[0].task.workRouting={conversationTurn:{conversationId:'chat',state:'running'}};

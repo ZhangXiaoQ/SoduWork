@@ -1,0 +1,28 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os');
+const personal=require('../main/personal-plugins'),probe=require('../main/app-candidate-preflight.cjs');
+test('draft, archive and install IPC validate packages without running first-screen diagnostics',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'soduwork-no-startup-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const out=path.join(root,'candidate');
+  require('../../skills/app-developer/scripts/scaffold.cjs').scaffold({out,key:'no-startup',name:'安装不运行页面'});
+  fs.writeFileSync(path.join(out,'ui/app.js'),'throw new Error("page must not execute during installation");');
+  const file=path.join(out,'soduwork-plugin-draft.json');
+  const body=require('../main/plugin-resources').collect(JSON.parse(fs.readFileSync(file,'utf8')),file,root);
+  const app={getPath:()=>path.join(root,'profile')},handlers={};
+  const original=probe.run;probe.run=()=>{assert.fail('installation must not start Electron diagnostics');};
+  t.after(()=>{probe.run=original;});
+  personal.install({app,ipcMain:{handle:(name,fn)=>handlers[name]=fn}});
+  const checked=await handlers['personal-plugin-preflight']({},body);
+  assert.equal(checked.ok,true);assert.equal(checked.runtime,undefined);
+  assert.equal(checked.checks.some(row=>row.key==='app-startup'||row.key==='app-first-screen'),false);
+  const installed=await handlers['personal-plugin-create']({},body);
+  assert.equal(installed.ok,true);assert.ok(installed.plugin);
+  const archive=path.join(root,'export.soduwork-plugin');
+  await personal.exportToFile(app,{showSaveDialog:async()=>({filePath:archive})},installed.plugin.pluginId);
+  const imported=await handlers['personal-plugin-preflight-archive']({},'export.soduwork-plugin',fs.readFileSync(archive).toString('base64'));
+  assert.equal(imported.ok,true);assert.equal(imported.runtime,undefined);
+  const tampered={...body,resources:body.resources.map((row,index)=>index===0?{...row,content:Buffer.from('changed').toString('base64'),encoding:'base64'}:row)};
+  await assert.rejects(()=>handlers['personal-plugin-create']({},tampered),/校验不一致/);
+  assert.equal(fs.existsSync(path.join(app.getPath(),'diagnostics','app-preflight')),false);
+});

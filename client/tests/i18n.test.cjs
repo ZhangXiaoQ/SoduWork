@@ -4,6 +4,21 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
 const script = fs.readFileSync(path.join(__dirname, '../core/i18n.js'), 'utf8');
+
+test('device and account history controls retain all four locale translations', () => {
+  const c = client();
+  const expected = {
+    'zh-CN': ['加载更多', '重新加载', '本机历史暂时无法读取', '部分会话暂时无法读取', '正在加载…'],
+    'en-US': ['Load more', 'Reload', 'Local history is temporarily unavailable', 'Some conversations are temporarily unavailable', 'Loading…'],
+    'ja-JP': ['さらに読み込む', '再読み込み', 'ローカル履歴を一時的に読み込めません', '一部の会話を一時的に読み込めません', '読み込み中…'],
+    'ko-KR': ['더 불러오기', '새로고침', '현재 로컬 기록을 불러올 수 없습니다', '현재 일부 대화를 불러올 수 없습니다', '불러오는 중…'],
+  };
+  const keys = ['more', 'retry', 'localError', 'accountError', 'loading'];
+  for (const [locale, values] of Object.entries(expected)) {
+    c.api.setLocale(locale);
+    assert.deepEqual(keys.map(key => c.api.t('workspace.history.' + key)), values);
+  }
+});
 test('renderer catalog packages preserve frozen snapshots and match canonical package order', () => {
   const context = vm.createContext({}), expected = {};
   const directory = path.join(__dirname, '../core/locales');
@@ -127,6 +142,41 @@ test('delivery download receipts and bounded HTTP errors follow every supported 
   }
 });
 
+test('conversation lifecycle status and retry copy follow renderer locales and preserve error details', () => {
+  const c = client();
+  const phrases = [
+    '账号或服务已切换，请重新打开会话',
+    '无法核对账号会话状态，请稍后重试',
+    '这条会话还在执行，完成或停止后再操作',
+    '账号会话状态未保存，请重试',
+    '该会话将从当前账号的会话列表中删除，其他设备也会同步；需求和成果文件不会删除。',
+    '删除未完成',
+    '删除没有完成。账号会话已归档，请在归档会话中重试。',
+    '本地会话尚未同步成功，本次操作未完成，请联网后重试',
+    '无法确认账号会话状态，请稍后重试',
+    '账号会话来源不匹配，请刷新后重试',
+    '本地会话同步尚未确认，本次操作未完成，请稍后重试',
+    '无法读取账号会话状态，本次操作未完成，请联网后重试',
+    '请先登录 SoduWork 后操作会话',
+    '会话操作无效',
+    '这条会话正在更新，请稍后重试',
+    '账号会话操作未确认，请刷新后重试',
+    '会话状态已更新，本次操作未全部完成，请刷新后重试',
+  ];
+  for (const id of ['en-US', 'ja-JP', 'ko-KR', 'zh-CN']) {
+    c.api.setLocale(id);
+    const catalog = id === 'zh-CN' ? null : require('../core/locales/' + (id === 'en-US' ? 'en-US-native' : id) + '.js');
+    for (const source of phrases) {
+      assert.equal(c.api.translateText(source), catalog ? catalog[source] : source, id + ': ' + source);
+    }
+    for (const source of ['删除没有完成：{reason}', '本地会话尚未同步，请重试后再操作：{reason}']) {
+      const reason = 'EBUSY: D:/work/保存.jsonl';
+      const text = source.replace('{reason}', reason);
+      assert.equal(c.api.translateText(text), catalog ? catalog[source].replace('{reason}', reason) : text, id);
+    }
+  }
+});
+
 test('new client profiles default to English while explicit locale choices remain intact', () => {
   const fresh = client({}, false, { initialLocale: null });
   assert.equal(fresh.api.getLocale(), 'en-US');
@@ -217,6 +267,7 @@ test('language updates the lexical cfg and calls its persistence function', () =
   assert.equal(c.read('cfg.locale'), 'en-US');
   assert.equal(c.read('saves'), 1);
   assert.equal(c.storage.get('soduwork_work_cfg_v5_locale'), 'en-US');
+  assert.equal(c.storage.get('soduwork_work_cfg_v5_locale_explicit'), '1');
   assert.equal(c.api.t('settings'), 'Settings');
   assert.equal(c.context.document.documentElement.lang, 'en-US');
 });
@@ -246,6 +297,7 @@ test('accepted remote configuration updates the reload mirror without saving bac
   const c = client();
   c.api.setLocale('en-US', { persist: false });
   assert.equal(c.storage.get('soduwork_work_cfg_v5_locale'), 'en-US');
+  assert.equal(c.storage.get('soduwork_work_cfg_v5_locale_explicit'), undefined);
   assert.equal(c.read('saves'), 0);
   assert.equal(c.sent.at(-1), 'en-US');
   c.listeners.get('ipc-locale')('zh-CN');

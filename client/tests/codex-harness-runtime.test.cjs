@@ -513,6 +513,15 @@ test('Codex Harness reports fatal protocol responses as failures, not assistant 
   assert.deepEqual(snapshot.messages.map((row) => row.role), ['user']);
 });
 
+test('Codex Harness explains an unsupported Responses endpoint without pretending another runtime ran', async () => {
+  const { result, snapshot } = await runScriptedHarnessTurn(
+    'unexpected status 404 Not Found, url: https://base-ai.mdiri.com/v1/responses');
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /不支持 Codex Harness 所需的 Responses 接口/);
+  assert.equal(snapshot.status, 'unreachable');
+  assert.deepEqual(snapshot.messages.map((row) => row.role), ['user']);
+});
+
 test('Codex Harness persists user turns, deduplicates live events and rebuilds history', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-harness-transcript-'));
   const alias = 'transcript-contract';

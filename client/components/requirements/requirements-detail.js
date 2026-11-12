@@ -548,7 +548,7 @@
     const actions = editing ? '<div class="rq-edit-actions"><button type="submit" form="rqEditForm" class="rq-primary" data-rq-save aria-live="polite">保存修改</button>' +
       '<button type="button" data-rq-edit-cancel>取消</button><button type="button" data-rq-reload>重新加载</button></div>' : '<div class="rq-detail-actions rq-detail-toolbar">' +
       (R.canTriage(task) && ['intake', 'clarifying'].includes(phase) ? '<button type="button" class="rq-primary" data-rq-ready>移至待开始</button>' : '') +
-      (canArrange ? '<button type="button" class="rq-primary" data-rq-assign>' + (task.readOnly ? '接手并安排执行' : '安排执行') + '</button>' : '') +
+      (canArrange ? '<button type="button" class="rq-primary" data-rq-assign>安排执行</button>' : '') +
       (R.canOpenConversation(task, global.SoduWorkAPI?.clientId) && !reworkPending ? '<button type="button" data-rq-chat>打开执行会话（仅本机）</button>' : '') +
       (canEdit ? '<button type="button" data-rq-edit>编辑</button>' : '') +
       (more ? '<details class="rq-detail-more"><summary>更多</summary><div class="rq-detail-more-menu">' + more + '</div></details>' : '') + '</div>';
@@ -769,18 +769,24 @@
       ? '<details class="rq-material-group ' + className + '" data-rq-material-group="' + esc(key) + '"><summary>' + esc(title) + ' · ' + items.length + ' 份<small>' + esc(hint) + '</small></summary>' + items.map(materialRow).join('') + '</details>'
       : '';
     const input = current.filter(file => String(file.role || '') === 'input');
-    const evidence = current.filter(file => ['evidence', 'verification', 'process'].includes(String(file.role || '')));
-    const outputs = current.filter(file => String(file.role || '') === 'output');
-    const other = current.filter(file => !['input', 'evidence', 'verification', 'process', 'output'].includes(String(file.role || '')));
+    const categoryOf = file => String(file.category || file.evidenceMeta?.category || '');
+    const isEvidence = file => ['evidence', 'verification', 'process'].includes(String(file.role || '')) ||
+      ['evidence', 'internal'].includes(categoryOf(file));
+    const evidence = current.filter(file => String(file.role || '') !== 'input' && isEvidence(file));
+    const outputs = current.filter(file => String(file.role || '') === 'output' && !isEvidence(file));
+    const other = current.filter(file => !['input', 'evidence', 'verification', 'process', 'output'].includes(String(file.role || '')) && !isEvidence(file));
     const storedBundles = outputs.filter(isBundle);
     const deliverables = outputs.filter(file => !isBundle(file));
-    const autoBundle = outputs.length >= 2
+    // Keep original filenames visible. Reuse a stored transport bundle instead
+    // of replacing it with a second archive named after the requirement.
+    const finalCount = deliverables.filter(file => categoryOf(file) !== 'supporting').length;
+    const autoBundle = !storedBundles.length && finalCount > 2
       ? [{autoBundle: true, id: '', name: bundleName(R.content(task).title || task.title || '交付物'), size: 0, attachmentIds: outputs.map(file => file.id)}]
       : [];
     const archive = archived.length ? '<details class="rq-material-group rq-material-archive"><summary>历史轮次 · ' + archived.length + ' 份<small>历史交付与未通过校验的文件，仅供追溯</small></summary>' + archived.map(materialRow).join('') + '</details>' : '';
     node.innerHTML = section('rq-material-input', 'input', '需求资料', [...input, ...other], '创建需求时提供的原始资料') +
       section('rq-material-evidence', 'evidence', '过程证据', evidence, '截图、验证记录和执行过程材料') +
-      section('rq-material-output', 'output', '交付物', autoBundle.length ? autoBundle : [...deliverables, ...storedBundles], '仅包含本轮交付文件') +
+      section('rq-material-output', 'output', '交付物', [...autoBundle, ...storedBundles, ...deliverables], '仅包含本轮交付文件') +
       (autoBundle.length ? '<p data-rq-bundle-status role="status" aria-live="polite" hidden></p>' : '') + archive +
       (rework.length ? '<details class="rq-material-group rq-material-rework" data-rq-material-group="rework"><summary>返修参考资料 · ' + rework.length + ' 个<small>仅供返修使用，不计入交付产物</small></summary>' +
         rework.map(materialRow).join('') + '</details>' : '') || '<p>暂无材料</p>';

@@ -92,7 +92,7 @@ app.whenReady().then(async () => {
         return navigation;
       } finally { WorkspaceHost.open = original; }
     })()`);
-    assert.deepEqual(result, [{ view: 'create', payload: { newSession: true } }]);
+    assert.deepEqual(result, [{ view: 'create', payload: { newSession: true, tab: 'chat' } }]);
   }
   report.cases.push('Deleting or archiving the active chat opens a clean draft without previous cwd or project.');
   // Exercise page admission with the production composer and session controller.

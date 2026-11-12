@@ -14,10 +14,11 @@ from fastapi.responses import JSONResponse
 
 from .api import admin, agents, ai_proxy, aidesk, approvals, attachments, capabilities, client_updates, client_release_notes, clients, delivery, download, environments, evolution, identity, ingest, library, repomap, updates
 from .api import admin_cloud_runners, client_auth, cloud_environments, cloud_conversations, conversation_handoffs, deliveries, memory_records, session_memory
-from .api import account_profile, admin_mail, client_email_auth, quotas
+from .api import account_profile, admin_mail, client_email_auth, quotas, legal_documents
 from .api import remote_screen
 from .api import conversation_projects
 from .api import account_conversations
+from .api import conversation_content_migrations
 from .api import cloud_execution_sync, personal_conversation_relay
 from .api import model_runtime as model_runtime_api
 from .api import model_capabilities as model_capabilities_api
@@ -321,7 +322,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"detail": "服务器内部错误"})
 
 
-for _r in (cloud_execution_sync.router, account_profile.router, account_profile.admin_router, admin_mail.router, client_email_auth.router, account_conversations.router, conversation_projects.router, remote_screen.router, im_api.router, admin_cloud_runners.router, cloud_environments.router, cloud_conversations.router, conversation_handoffs.router, session_memory.router, memory_records.router, memory_records.admin_router, client_auth.router, clients.router, tasks.router, retired_endpoints.router, task_options.router, approvals.router, delivery.router, aidesk.router, config_api.router,
+for _r in (cloud_execution_sync.router, legal_documents.router, legal_documents.admin_router, account_profile.router, account_profile.admin_router, admin_mail.router, client_email_auth.router, account_conversations.router, conversation_projects.router, remote_screen.router, im_api.router, admin_cloud_runners.router, cloud_environments.router, cloud_conversations.router, conversation_handoffs.router, session_memory.router, memory_records.router, memory_records.admin_router, client_auth.router, clients.router, tasks.router, retired_endpoints.router, task_options.router, approvals.router, delivery.router, aidesk.router, config_api.router,
            admin.router, quotas.router, model_runtime_api.router, model_capabilities_api.router, work_catalog_api.router, work_catalog_api.admin_router,
            release.router, environments.router, repomap.router, repositories.router, repository_issues.router, attachments.router, ingest.router,
            library.router, deliveries.router,
@@ -334,6 +335,7 @@ for _r in (cloud_execution_sync.router, account_profile.router, account_profile.
            capabilities.router, capabilities.admin_router, jiyong_data.router):
     app.include_router(_r)
 app.include_router(personal_conversation_relay.router)
+app.include_router(conversation_content_migrations.router)
 from .api import desktop_capabilities
 app.include_router(desktop_capabilities.router)
 

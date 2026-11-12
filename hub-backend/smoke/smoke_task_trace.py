@@ -141,9 +141,9 @@ async def seed():
                                        "expectSha": SHA}))
         # Create timeline and AI dispatch events.
         s.add(models.TaskEvent(task_id="t-tt", kind="ai.dispatched", actor="SoduWork 插件", at=at(1),
-                               detail={"ref": "ref-1", "assigneeName": "张三办公电脑 · Codex",
-                                       "provider": "runner", "runnerId": "fedcba987654",
-                                       "host": "DESKTOP-FIXTURE",
+                               detail={"ref": "ref-1", "assigneeName": "胡耕永办公电脑 · Codex",
+                                       "provider": "runner", "runnerId": "532786f4df13",
+                                       "host": "DESKTOP-C28C287",
                                        "plugin": {"runId": "run-tt", "node": "implement"}}))
         s.add(models.TaskEvent(task_id="t-tt", kind="plugin.gerrit_merged", actor="SoduWork AI",
                                at=at(24), detail={"change": 168488, "commit": SHA}))
@@ -429,7 +429,7 @@ async def main():
         s.add(models.Task(id="t-direct", title="直接让 AI 做一张原型", status="doing",
                           owner_client_id="c-tt"))
         s.add(am.ExecutionSession(id="es-direct", task_id="t-direct", ref="ref-direct",
-                                  runner_id="r-direct", host="trial-runner", engine="pi",
+                                  runner_id="r-direct", host="149-runner", engine="pi",
                                   state="running", seq=1, work_dir="/srv/soduwork/t-direct",
                                   started_at=at(50)))
         s.add(am.ExecutionEvent(session_id="es-direct", seq=1, kind="step",
@@ -452,7 +452,7 @@ async def main():
     # Historical running sessions remain evidence but cannot override a newer terminal state.
     async with SessionLocal() as s:
         s.add(am.ExecutionSession(id="es-direct-done", task_id="t-direct", ref="ref-direct-done",
-                                  runner_id="r-direct", host="trial-runner", engine="pi",
+                                  runner_id="r-direct", host="149-runner", engine="pi",
                                   state="done", seq=2, work_dir="/srv/soduwork/t-direct",
                                   started_at=at(60), finished_at=at(70)))
         await s.commit()

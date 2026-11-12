@@ -1,4 +1,4 @@
-"""Harness² bounded text refinement followed by native OpenCode execution.
+"""Harness² bounded text refinement followed by independent native execution.
 
 Selecting Harness² runs its method before each user turn. Refinement changes
 instructions, never permissions or executable plugins. Health probes can test
@@ -12,118 +12,33 @@ import os
 from pathlib import Path
 import sys
 import tempfile
-import urllib.error
-import urllib.parse
-import urllib.request
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     __package__ = "app.services"
 
-from .harness2_runtime import MODEL_ENV, ROOT_ENV, EXECUTOR_ENV, CONTINUE_ENV, VERSION
+from .harness2_runtime import MODEL_ENV, ROOT_ENV, EXECUTOR_ENV, CONTINUE_ENV, NETWORK_ENV, VERSION
 from .harness2_errors import Harness2Error, StructuredFailure
 
-MAX_RESPONSE = 2 * 1024 * 1024
-
-
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        # A model endpoint redirect must not forward its Authorization credential.
-        return None
-
-
 def complete(model: dict, messages: list[dict], on_usage=None, *, timeout: float = 20) -> str:
-    """One bounded, tool-free inference; provider errors never expose raw bodies."""
-    base = str(model.get("base") or "").rstrip("/")
-    parsed = urllib.parse.urlsplit(base)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
-        raise StructuredFailure("model_config")
-    if not all(model.get(key) for key in ("key", "model")):
-        raise StructuredFailure("model_config")
-    anthropic = model.get("kind") == "anthropic"
-    output_limit = model.get("maxOutputTokens", 8192)
-    if type(output_limit) is not int or not 1 <= output_limit <= 262144:
-        raise StructuredFailure("model_config")
-    headers = {"Content-Type": "application/json"}
-    if anthropic:
-        url = base + ("/messages" if parsed.path.rstrip("/").endswith("/v1") else "/v1/messages")
-        headers.update({"x-api-key": str(model["key"]), "anthropic-version": "2023-06-01"})
-        body = {"model": model["model"], "max_tokens": output_limit,
-                "system": "\n\n".join(row["content"] for row in messages if row["role"] == "system"),
-                "messages": [row for row in messages if row["role"] != "system"]}
-    else:
-        url = base + "/chat/completions"
-        headers["Authorization"] = "Bearer " + str(model["key"])
-        reasoning = model.get("reasoning") is True
-        output_key = ("max_completion_tokens" if reasoning and model.get("thinkingFormat") == "openai"
-                      else "max_tokens")
-        body = {"model": model["model"], "messages": messages, "stream": False,
-                output_key: output_limit}
-        # Planning uses the declared low-effort mapping, never a model-name
-        # guess or a disable request. Unknown contracts keep provider defaults.
-        levels = model.get("thinkingLevelMap")
-        effort = levels.get("low") if isinstance(levels, dict) else None
-        if (reasoning and model.get("supportsReasoningEffort") is True
-                and model.get("thinkingFormat") in {"openai", "zai"}
-                and type(effort) is str and effort in {"minimal", "low", "medium", "high", "xhigh", "max"}):
-            body["reasoning_effort"] = effort
-    request = urllib.request.Request(url, json.dumps(body, ensure_ascii=False).encode("utf-8"),
-                                     headers=headers, method="POST")
-    try:
-        with urllib.request.build_opener(_NoRedirect()).open(request, timeout=timeout) as response:
-            raw = response.read(MAX_RESPONSE + 1)
-        if len(raw) > MAX_RESPONSE:
-            raise StructuredFailure("response_limit")
-        data = json.loads(raw)
-    except urllib.error.HTTPError as exc:
-        status = exc.code
-        exc.close()
-        raise StructuredFailure("model_http", http_status=status) from None
-    except TimeoutError:
-        raise StructuredFailure("model_timeout") from None
-    except urllib.error.URLError as exc:
-        code = "model_timeout" if isinstance(exc.reason, TimeoutError) else "model_connection"
-        raise StructuredFailure(code) from None
-    except OSError:
-        raise StructuredFailure("model_connection") from None
-    except ValueError:
-        raise StructuredFailure("response_format") from None
-    try:
-        if anthropic:
-            reason = data.get("stop_reason")
-            text = "".join(part["text"] for part in data.get("content", [])
-                           if isinstance(part, dict) and part.get("type") == "text")
-            usage = data.get("usage") or {}
-            tokens = {"input_tokens": int(usage.get("input_tokens") or 0),
-                      "output_tokens": int(usage.get("output_tokens") or 0)}
-            from .runtime_messages import usage as normalize_usage
-            normalized = normalize_usage(usage)
-            if normalized:
-                tokens["input_tokens"] = normalized["input"]
-                if normalized["cacheRead"] or normalized["cacheWrite"]:
-                    tokens.update(cacheRead=normalized["cacheRead"], cacheWrite=normalized["cacheWrite"],
-                                  inputIncludesCache=True)
-            finished = reason == "end_turn"
-        else:
-            choice = data["choices"][0]
-            reason = choice.get("finish_reason")
-            message = choice["message"]
-            text = message.get("content")
-            usage = data.get("usage") or {}
-            tokens = {"input_tokens": int(usage.get("prompt_tokens") or 0),
-                      "output_tokens": int(usage.get("completion_tokens") or 0)}
-            finished = reason == "stop" and not message.get("tool_calls")
-    except (AttributeError, KeyError, TypeError, IndexError, ValueError):
-        raise StructuredFailure("response_format") from None
-    if reason is not None and not isinstance(reason, str):
+    """Use the validated streaming transport for one bounded tool-free plan."""
+    from .harness2_provider import request
+
+    def usage(value):
+        tokens = {"input_tokens": value.get("input", 0), "output_tokens": value.get("output", 0)}
+        if value.get("cacheRead") or value.get("cacheWrite"):
+            tokens.update(cacheRead=value.get("cacheRead", 0), inputIncludesCache=True)
+            if value.get("cacheWrite"):
+                tokens["cacheWrite"] = value["cacheWrite"]
+        if value.get("reasoning"):
+            tokens["reasoning"] = value["reasoning"]
+        if on_usage:
+            on_usage(tokens)
+
+    message, _ = request(model, messages, [], timeout=timeout, on_usage=usage, planning=True)
+    if message.get("tool_calls"):
         raise StructuredFailure("response_format")
-    if on_usage:
-        on_usage(tokens)
-    if reason in {"length", "max_tokens"}:
-        raise StructuredFailure("response_truncated")
-    if not finished or not isinstance(text, str) or not text.strip():
-        raise StructuredFailure("response_empty")
-    return text
+    return message["content"]
 
 
 def new_work_dir(root: Path) -> Path:
@@ -173,15 +88,80 @@ class ExecutionEvents:
 
 
 def execute(prompt: str, cwd: str, session: str, mode: str, terminal: bool,
-            executor: str, *, output=emit) -> int:
+            executor: str = "", *, output=emit, model=None, root="") -> int:
     from . import acp_bridge
     from .harness2_errors import failure_message
 
     class StrictBridge(acp_bridge.AcpBridge):
         stage = "start"
 
+        def _network_allowed(self):
+            return self.access.enabled or os.environ.get(NETWORK_ENV) == "1"
+
+        def _client_capabilities(self):
+            result = super()._client_capabilities()
+            result["_meta"] = {"harness2": {"webfetch": self._network_allowed()}}
+            return result
+
+        def _permission_result(self, params):
+            if (params.get("toolCall") or {}).get("kind") == "fetch" and not self._network_allowed():
+                return {"outcome": {"outcome": "cancelled"}}
+            return super()._permission_result(params)
+
+        @staticmethod
+        def _unwrap(message):
+            error = message.get("error")
+            data = error.get("data") if isinstance(error, dict) else None
+            if isinstance(data, dict) and isinstance(data.get("harness2"), str):
+                raise StructuredFailure(data["harness2"], http_status=data.get("httpStatus"))
+            return acp_bridge.AcpBridge._unwrap(message)
+
+        def start(self):
+            # Only the native peer receives model credentials. They are removed
+            # before the host can create a model-requested terminal process.
+            previous = {key: os.environ.get(key) for key in (MODEL_ENV, ROOT_ENV)}
+            try:
+                if model is not None:
+                    os.environ[MODEL_ENV] = json.dumps(model, ensure_ascii=False)
+                if root:
+                    os.environ[ROOT_ENV] = str(root)
+                super().start()
+            finally:
+                for key, value in previous.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+
+        def _client_request(self, method, params):
+            if method == "fs/list_directory":
+                value = str(params.get("path") or "")
+                path = (self.access.path(self.cwd, value) if self.access.enabled
+                        else acp_bridge._safe_path(self.cwd, value))
+                try:
+                    entries = []
+                    with os.scandir(path) as iterator:
+                        for entry in iterator:
+                            if len(entries) == 500:
+                                return {"entries": entries, "truncated": True}
+                            entries.append({"name": entry.name,
+                                            "directory": entry.is_dir(follow_symlinks=False)})
+                    return {"entries": entries, "truncated": False}
+                except OSError as exc:
+                    raise acp_bridge.BridgeError("Directory listing failed") from exc
+            return super()._client_request(method, params)
+
+        def _update(self, update):
+            if update.get("sessionUpdate") == "harness2_usage":
+                output({"type": "step_finish", "part": {"tokens": update.get("tokens") or {}}})
+                return
+            super()._update(update)
+
         def request(self, method, params):
             self.stage = method
+            if method == "session/prompt" and not self.access.enabled:
+                super().request("session/set_mode", {"sessionId": self.session_id,
+                    "modeId": "readonly" if self.permission == "readonly" else "standard"})
             result = super().request(method, params)
             if (method == "session/prompt"
                     and (not isinstance(result, dict)
@@ -195,7 +175,9 @@ def execute(prompt: str, cwd: str, session: str, mode: str, terminal: bool,
     bridge = None
     failed = False
     try:
-        bridge = StrictBridge([executor, "acp"], cwd, "opencode",
+        native = ([sys.executable, "--harness2-native"] if getattr(sys, "frozen", False)
+                  else [sys.executable, str(Path(__file__).with_name("harness2_native.py"))])
+        bridge = StrictBridge(native, cwd, "harness2",
                               "readonly" if mode == "plan" else "workspace",
                               session, allow_terminal=terminal)
         if bridge.access.enabled:
@@ -255,7 +237,7 @@ def main(argv=None) -> int:
     stage = "prepare"
     try:
         model = json.loads(os.environ.pop(MODEL_ENV, "{}"))
-        executor = os.environ.pop(EXECUTOR_ENV, "")
+        os.environ.pop(EXECUTOR_ENV, None)
         root = os.environ.pop(ROOT_ENV, "")
         continuing = os.environ.pop(CONTINUE_ENV, "") == "1"
         from .harness2_lifecycle import disabled_issue
@@ -263,8 +245,6 @@ def main(argv=None) -> int:
             raise Harness2Error(issue)
         if not args.cwd or not Path(args.cwd).is_dir():
             raise Harness2Error("Google Harness² 工作目录不存在。")
-        if not executor or not Path(executor).is_file():
-            raise Harness2Error("Google Harness² 缺少 OpenCode 执行组件，请点「装上」准备。")
         if not root:
             raise Harness2Error("Google Harness² 缺少会话隔离目录。")
         # Also prepare here so a newly launched bridge is safe when its
@@ -304,12 +284,13 @@ def main(argv=None) -> int:
                             "<harness2_instructions>\n" + refined + "\n</harness2_instructions>\n\n"
                             "用户的原始任务（完整保留）：\n" + prompt)
         stage = "execute"
-        code = execute(final_prompt, args.cwd, args.session, args.mode, args.terminal, executor)
+        code = execute(final_prompt, args.cwd, args.session, args.mode, args.terminal,
+                       model=model, root=root)
         if args.probe and code == 0:
             # A permission transition cannot prove that this process refined.
             if not args.refine or refined_this_turn:
                 emit({"type": "harness2_probe_complete",
-                      "coverage": "refine-v1" if refined_this_turn else "execute-v2",
+                      "coverage": "native-refine-v1" if refined_this_turn else "native-execute-v1",
                       "stages": 7 if refined_this_turn else 0})
         return code
     except Exception as exc:

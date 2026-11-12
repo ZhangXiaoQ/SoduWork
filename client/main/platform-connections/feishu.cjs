@@ -88,6 +88,10 @@ async function request(identity, method, route, body) {
   } catch (_) { throw Error('SoduWork 后台暂时无法连接，请恢复连接后重试'); }
   // Do not expose diagnostic responses that may reflect connection credentials.
   if (!response.ok || data.ok === false) {
+    if (route === '/mcp-servers/upsert' && [404,405].includes(response.status))
+      throw Error('当前 Hub 不支持单条连接更新，请升级 Hub 后再检查连接');
+    if (route === '/mcp-servers/upsert' && response.status === 409)
+      throw Error('连接已在其他位置修改，请刷新后再检查连接');
     throw Error(route.endsWith('/probe')
       ? '飞书工具连接检查未通过，请确认本机 Runner 在线后重试'
       : 'SoduWork 连接设置保存失败，请检查登录状态与连接权限');
@@ -102,30 +106,46 @@ function spec(scope, value) {
     type: 'http', url, headers: { Authorization: 'Bearer ' + value.bearer },
     enabled: true, approved: true, approvedTarget: url, startupTimeoutSeconds: 20 };
 }
-async function register(identity, scope, value, guard = async () => {}) {
+async function register(identity, scope, value, guard = async () => {}, verifyLocal = null) {
   await guard();
   const current = await request(identity, 'GET', '/mcp-servers');
-  const personal = Array.isArray(current.personal) ? current.personal : [];
+  if (!Array.isArray(current.personal) || !Array.isArray(current.company)) throw Error('无法确认现有连接，请刷新后重试');
+  const personal = current.personal;
   const selected = spec(scope, value);
-  if ((current.company || []).some(x => x.name === 'feishu' && x.enabled)) {
+  if (current.company.some(x => String(x.name).toLowerCase() === 'feishu')) {
     throw Error('已有公司飞书连接，请在连接器设置中使用公司连接');
   }
-  if (personal.some(x => x.name === 'feishu' && x.id !== selected.id)) {
-    throw Error('已有其他个人飞书连接，请先在连接器设置中检查');
+  const named = personal.filter(x => String(x.name).toLowerCase() === 'feishu');
+  const exact = personal.find(x => x.id === selected.id);
+  if ((exact && exact.name !== 'feishu') || named.length > 1) throw Error('飞书登记已变化，请刷新连接器列表');
+  const existing = named[0];
+  if (existing && existing.id !== selected.id) {
+    const conflict = Object.assign(Error('已有同名个人连接。可管理原连接并更名，然后点击检查连接。'), { conflictId: existing.id });
+    // Only try the stored masked credential on this exact loopback endpoint.
+    // Require both the scoped ID suffix and an authenticated hit on our running proxy.
+    const suffix = String(existing.id).match(/([a-f0-9]{16,32})$/)?.[1];
+    if (!verifyLocal || !suffix || !scope.startsWith(suffix) || existing.type !== 'http' ||
+        !/^http:\/\/127\.0\.0\.1:\d{1,5}\/mcp$/.test(existing.url) || existing.headers?.Authorization !== '••••') throw conflict;
+    await guard();
+    const proof = verifyLocal();
+    try {
+      const checked = await request(identity,'POST','/mcp-servers/probe',{
+        ...selected, id:existing.id, url:proof.url, approvedTarget:proof.url, headers:{Authorization:existing.headers.Authorization}
+      });
+      if (!checked.tools?.length || !proof.confirmed()) throw conflict;
+    } catch { throw conflict; } finally { proof.close(); }
+    selected.id = existing.id;
   }
   // The real Runner performs initialize + tools/list before the connection is enabled.
   await guard();
   const probe = await request(identity, 'POST', '/mcp-servers/probe', selected);
   if (!(probe.tools || []).length) throw Error('飞书未返回可用工具，请检查应用配置');
   await guard();
-  const saved = await request(identity, 'PUT', '/mcp-servers', {
-    servers: [...personal.filter(x => x.id !== selected.id), selected],
-    enabledCompany: current.enabledCompany || [],
-  });
+  const saved = await request(identity, 'POST', '/mcp-servers/upsert', { server:selected, original:existing || null });
   await guard();
-  return { toolCount: probe.tools.length, warning: saved.warning || '' };
+  return { toolCount: probe.tools.length, warning: saved.warning || '', registrationId:selected.id };
 }
-function createProxy(upstream, scope, value, app, identityOf, accessToken) {
+function createProxy(upstream, scope, value, app, identityOf, accessToken, acceptProof) {
   return http.createServer(async (req, res) => {
     try {
       const active = await identityOf(app);
@@ -135,7 +155,7 @@ function createProxy(upstream, scope, value, app, identityOf, accessToken) {
       if (got.length !== expected.length || !crypto.timingSafeEqual(got, expected)) {
         res.writeHead(401); return res.end();
       }
-      if (req.url !== '/mcp' || !['GET', 'POST', 'DELETE'].includes(req.method)) {
+      if (!['GET', 'POST', 'DELETE'].includes(req.method) || (req.url !== '/mcp' && !acceptProof?.(req.url))) {
         res.writeHead(404); return res.end();
       }
       let length = 0;
@@ -195,8 +215,19 @@ async function startService(app, identity, scope, value, safeStorage, identityOf
   await guard();
   const child = runtime.execute(plan.command, plan.args, { cwd: plan.cwd, env: plan.env, timeout: 0 });
   child.completion.catch(() => {});
+  let challenge = null, boundPort;
+  const verifyLocal = () => {
+    const proof = { path:'/mcp/' + crypto.randomUUID(), seen:false };
+    challenge = proof;
+    return { url:'http://127.0.0.1:' + boundPort + proof.path, confirmed:() => proof.seen,
+      close:() => { if (challenge === proof) challenge = null; } };
+  };
   const proxy = createProxy(upstream, scope, value, app, identityOf,
-    () => ensureToken(app, scope, value, safeStorage, identityOf, active));
+    () => ensureToken(app, scope, value, safeStorage, identityOf, active), path => {
+      if (!challenge || challenge.path !== path) return false;
+      challenge.seen = true;
+      return true;
+    });
   let stopFailed = false;
   const stop = () => {
     for (const action of [() => child.cancel(), () => proxy.closeAllConnections(), () => proxy.close()]) {
@@ -206,10 +237,10 @@ async function startService(app, identity, scope, value, safeStorage, identityOf
   active.addEventListener('abort', stop, { once: true });
   let result;
   try {
-    try { value.port = await listen(proxy, value.port || 0); }
+    try { boundPort = await listen(proxy, value.port || 0); }
     catch (error) {
       if (error.code !== 'EADDRINUSE') throw error;
-      value.port = await listen(proxy);
+      boundPort = await listen(proxy);
     }
     let ready = false;
     for (let i = 0; i < 80; i++) {
@@ -222,13 +253,17 @@ async function startService(app, identity, scope, value, safeStorage, identityOf
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     if (!ready) throw Error('飞书服务启动超时');
-    result = await register(identity, scope, value, guard);
+    // Token refresh reloads credential storage during the probe. The address
+    // belongs to this listening socket even if storage still has the old port.
+    result = await register(identity, scope, {...value,port:boundPort}, guard, verifyLocal);
     await guard();
+    value.port = boundPort;
+    lifecycle.bindRegistration(app, scope, result.registrationId, spec(scope,value).url);
     save(app, scope, value, safeStorage);
   } catch (error) {
     ctl.abort(); active.removeEventListener('abort', stop); stop(); throw error;
   }
-  const handle = { connected: !result.warning, ...result, port: value.port,
+  const handle = { connected: !result.warning, ...result, verifyLocal, port: boundPort,
     close() { ctl.abort(); active.removeEventListener('abort', stop); stop(); handle.connected = false;
       if (stopFailed) throw Error('飞书本机运行程序停止失败，请重试断开');
       if (servers.get(scope) === handle) servers.delete(scope); } };
@@ -316,28 +351,29 @@ async function restore(app, identity, scope, safeStorage, identityOf, signal) {
   await sameOwner(app, scope, identityOf, signal);
   const result = await start(app, identity, scope, value, safeStorage, identityOf, signal);
   if (result.warning) {
-    const checked = await register(identity, scope, value, () => sameOwner(app, scope, identityOf, signal));
+    const checked = await register(identity, scope, {...value,port:result.port}, () => sameOwner(app, scope, identityOf, signal), result.verifyLocal);
     Object.assign(result, checked, { connected: !checked.warning });
   }
   return { connected: result.connected, account: value.name || '飞书用户', description: result.warning };
 }
 
-async function disableRegistration(identity, scope, guard = async () => {}) {
+async function disableRegistration(identity, scope, guard = async () => {}, binding) {
   await guard();
   const current = await request(identity, 'GET', '/mcp-servers');
-  const id = registrationId(scope);
-  const row = (current.personal || []).find(item => item.id === id);
+  const id = binding?.id || registrationId(scope);
+  if (!Array.isArray(current.personal)) throw Error('无法确认现有连接，请刷新后重试');
+  const row = current.personal.find(item => item.id === id);
   if (!row) return;
-  if (row.name !== 'feishu') throw Error('本机飞书注册记录已变化，请检查连接器设置');
+  if (row.name !== 'feishu' || (binding && row.url !== binding.url)) throw Error('本机飞书注册记录已变化，请检查连接器设置');
   if (row.enabled === false) return;
   await guard();
   const result = await request(identity, 'PATCH', '/mcp-servers/selection',
     { changes: [{ kind: 'personal', id, enabled: false }] });
   await guard();
-  if ((result.personal || []).some(item => item.id === id && item.enabled !== false))
+  if (!Array.isArray(result.personal) || result.personal.some(item => item.id === id && item.enabled !== false))
     throw Error('本机授权已清理，后台飞书连接仍未停用，请重试断开');
 }
 function closeScope(scope) { servers.get(scope)?.close(); }
 
 function closeAll() { for (const server of [...servers.values()]) server.close(); }
-module.exports = { verifyCredentials, read, save, connect, restore, closeAll, closeScope, disableRegistration, register, createProxy, ensureToken };
+module.exports = { verifyCredentials, read, save, connect, restore, closeAll, closeScope, registrationId, disableRegistration, register, createProxy, ensureToken };

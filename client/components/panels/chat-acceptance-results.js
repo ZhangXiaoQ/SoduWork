@@ -87,11 +87,28 @@
         const pending = new Map(pendingApprovals(entry).map(row => [row.id, row]));
         const results = operationResults(entry);
         const ids = new Set([...pending.keys(), ...results.keys()]);
+        const taskId = String(entry.taskId || '');
+        const outputIndices = taskId ? messages.reduce((indices, message, messageIndex) => {
+          if (message?.role === 'assistant' && String(message.taskId || '') === taskId &&
+              message.taskOutputKey && message.done !== false &&
+              (!Array.isArray(message.blocks) || message.blocks.some(block => block?.kind === 'text' && block.done !== false))) indices.push(messageIndex);
+          return indices;
+        }, []) : [];
         for (const id of ids) {
           const key = JSON.stringify([entry.taskId, id]);
+          const approval = entry.trace.approvals?.find(row => row.id === id);
+          const me = String(global.__teamCap?.meId || '').trim();
+          const direct = String(id || '').startsWith('direct:');
+          // Pool reviews need an explicit assignment (or reviewer field) from
+          // the server. Only direct reviews may fall back to the creator; a
+          // namesake pool task must not gain a self-review position by guesswork.
+          const reviewer = String(approval?.assignment?.userId || entry.task?.reviewerUserId ||
+            (direct ? entry.task?.createdBy : '') || '').trim();
+          const executor = String(entry.task?.assigneeUserId || entry.task?.executorUserId ||
+            entry.task?.executionContext?.assigneeUserId || (direct ? entry.task?.createdBy : '') || '').trim();
+          const samePerson = Boolean(me && reviewer && executor && me === reviewer && me === executor);
           let anchor = approvalAnchors.get(key);
           if (!anchor) {
-            const approval = entry.trace.approvals?.find(row => row.id === id);
             // Approval creation is immutable; resolution and task updates must not move its slot.
             const at = timestamp(approval?.createdAt) || timestamp(approval?.gate?.createdAt) ||
               timestamp(approval?.myDecision?.at) || timestamp(approval?.resolvedAt);
@@ -106,6 +123,27 @@
           const matched = anchor.messageKey ? messages.findIndex(message => message.taskOutputKey === anchor.messageKey) : -1;
           let index = matched >= 0 ? matched + 1 : messages.findIndex((_, at) => owner(at) > anchor.after);
           if (index < 0) index = messages.length;
+          /*
+           * A review gate can be created before its executor publishes the
+           * native task output. This is common when the executor and reviewer
+           * are the same person: the approval timestamp then points before
+           * the answer, so a timestamp-only anchor renders the card above the
+           * delivery. For an explicitly self-assigned review only, prefer the
+           * first completed output for this task when no matching output
+           * already precedes the slot. The task output key is retained by the
+           * renderer anchor, so the corrected slot remains stable while
+           * history pages and streaming snapshots are reconciled.
+           */
+          if (samePerson && outputIndices.length && !outputIndices.some(outputIndex => outputIndex < index)) {
+            const outputIndex = outputIndices.find(outputIndex => outputIndex >= index);
+            if (outputIndex !== undefined) {
+              const output = messages[outputIndex];
+              const outputKey = String(output?.taskOutputKey || '');
+              anchor = { ...anchor, after: owner(outputIndex), messageKey: outputKey };
+              approvalAnchors.set(key, anchor);
+              index = outputIndex + 1;
+            }
+          }
           if (index < start || (matched < 0 && index === 0 && owner(0) > anchor.after + 1)) continue;
           const body = results.has(id) ? operationHtml(entry, id, results.get(id)) : global.TaskTraceApproval.html(entry.trace.approvals, {
             variant: 'task', taskId: entry.taskId, taskTitle: entry.task?.title,

@@ -333,6 +333,11 @@ async def dispatch(tid, body, client, session, *, actor=None):
     try:
         if handoff:
             files, extra = await conversation_handoffs.dispatch_inputs(session, handoff, extra)
+        # Content reads can retain the personal Runner policy lock in this
+        # transaction. Release preparation locks before transport authorization
+        # acquires its own lock; the durable attempt above still fences retries.
+        # The transport rechecks current ownership and policy before sending.
+        await session.commit()
         r = await _aio.to_thread(ai_exec.dispatch_sync, ctx, t, files, picked, extra)
     except Exception as error:  # noqa: BLE001
         await _fail("dispatch", "Runner 启动 Agent 失败：" + str(error), 502)
@@ -363,7 +368,7 @@ async def dispatch(tid, body, client, session, *, actor=None):
                            "tags": len(getattr(t, "tags", None) or []),
                            "progress": len(_prog), "comments": len(extra.get("comments") or []),
                            "files": [f[0] for f in files][:r.get("files", 0)],
-                           "brief": extra["brief"].strip()[:300]}}, actor=who)
+                           "brief": "" if handoff and handoff.options.get("contentRef") else extra["brief"].strip()[:300]}}, actor=who)
     from ..services import execution_sessions as _es
     await _es.record_dispatch(session, t, r)   # Persist the execution at dispatch so routing does not depend on event details alone.
     await audit.log(session, me, "task.ai_dispatch", "task", tid, t.title,

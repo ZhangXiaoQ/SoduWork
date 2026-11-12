@@ -23,6 +23,7 @@ const APPS_FAV_KEY = 'soduwork-apps-favorites';
 let _appsRenderSeq = 0;
 let _appsCache = null; /* Cache all local and remote applications; search filters every section. */
 let _appsSettingsSeq = 0;
+let _appsImportSeq = 0;
 const _appsUi = { query: '' };
 
 function appKeyOf(item) {
@@ -321,7 +322,7 @@ function appsCardHtml(app, index, recommended, conversation) {
     '<div class="appsx-cover">' + (cover ? '<img src="' + escapeAppsHtml(cover) + '" alt="" loading="lazy" referrerpolicy="no-referrer">' : '<span>' + APPS_GLYPH + '</span>') +
     '</div><div class="appsx-cover-info"><div class="appsx-cover-copy"><div class="appsx-cover-meta"><span class="appsx-app-ico' + (customIcon ? ' has-img' : '') + '">' + (customIcon || APPS_GLYPH) + '</span>' +
     '<span class="appsx-card-txt"><span class="appsx-card-headline"><b data-user-content>' + escapeAppsHtml(app.title) + '</b>' + appVersionTagHtml(app) + '</span></span></div>' +
-    '<p class="appsx-cover-desc" data-user-content>' + escapeAppsHtml(app.desc || '打开即用工作界面') + '</p></div>' +
+    '<p class="appsx-cover-desc"' + (app.desc ? ' data-user-content' : '') + '>' + escapeAppsHtml(app.desc || '打开即用工作界面') + '</p></div>' +
     '<div class="appsx-cover-actions"><div class="appsx-cover-tools">' + favorite +
     (!needsSync ? '<button class="appsx-act appsx-set" type="button" title="即用设置" aria-label="即用设置">' + APPS_ICONS.gear + '</button>' : '') + '</div>' +
     '<button class="appsx-card-open" type="button" aria-label="打开即用">打开即用</button></div></div></div>';
@@ -329,7 +330,7 @@ function appsCardHtml(app, index, recommended, conversation) {
     (conversation ? 'data-chat-app="' + escapeAppsHtml(key) + '"' : 'data-app-index="' + index + '"') + ' role="button" tabindex="0" title="' + (needsSync ? (app.item.updateAvailable ? '升级并打开即用' : '添加并打开即用') : '打开即用') + '">' +
     '<span class="appsx-app-ico' + (customIcon ? ' has-img' : '') + '">' + (customIcon || APPS_GLYPH) + '</span>' +
     '<span class="appsx-card-txt"><span class="appsx-card-headline"><b data-user-content>' + escapeAppsHtml(app.title) + '</b>' + appVersionTagHtml(app) + '</span>' +
-    '<small class="appsx-card-description">' + appSourceTagHtml(app) + '<span class="appsx-description-text" data-user-content>' + (app.desc ? escapeAppsHtml(app.desc) : '打开即用工作界面') + '</span></small></span>' +
+    '<small class="appsx-card-description">' + appSourceTagHtml(app) + '<span class="appsx-description-text"' + (app.desc ? ' data-user-content' : '') + '>' + (app.desc ? escapeAppsHtml(app.desc) : '打开即用工作界面') + '</span></small></span>' +
     (needsSync ? '<span class="appsx-card-add" aria-hidden="true">' + APPS_ICONS.plus + '</span>' : '') +
     '<span class="appsx-card-acts">' +
     (!needsSync ? '<button class="appsx-act appsx-set" type="button" title="即用设置" aria-label="即用设置">' + APPS_ICONS.gear + '</button>' : '') +
@@ -428,13 +429,14 @@ async function openAppSettings(app) {
     '<section class="appsx-settings-info" aria-label="即用信息"><span class="appsx-settings-icon" role="img" aria-label="即用图标">' + icon + '</span>' +
     '<div class="appsx-settings-copy"><b class="appsx-settings-name" data-user-content>' + escapeAppsHtml(app.title) + '</b>' +
     '<span class="appsx-settings-version">' + escapeAppsHtml(version ? '版本 v' + version : '版本未知') + '</span>' +
-    '<p class="appsx-settings-description" data-user-content>' + escapeAppsHtml(app.desc || app.item.description || '暂无描述') + '</p></div></section>' +
+    '<p class="appsx-settings-description"' + (app.desc || app.item.description ? ' data-user-content' : '') + '>' + escapeAppsHtml(app.desc || app.item.description || '暂无描述') + '</p></div></section>' +
     '<label class="appsx-developer-field"><span>开发者</span>' +
-    (app.item.personal && !app.item.builtIn ? '<input id="appsSetDeveloper" type="text" maxlength="120" value="' + escapeAppsHtml(app.item.authorName || '') + '" placeholder="填写开发者或工作室名称">' : '<b data-user-content>' + escapeAppsHtml(app.item.authorName || '未填写') + '</b>') + '</label>' +
+    (app.item.personal && !app.item.builtIn ? '<input id="appsSetDeveloper" type="text" maxlength="120" value="' + escapeAppsHtml(app.item.authorName || '') + '" placeholder="填写开发者或工作室名称">' : '<b' + (app.item.authorName ? ' data-user-content' : '') + '>' + escapeAppsHtml(app.item.authorName || '未填写') + '</b>') + '</label>' +
     '<label class="appsx-developer-field"><span>即用分类</span>' +
     (app.item.personal && !app.item.builtIn ? '<select id="appsSetCategory">' + APPS_CREATE_CATEGORIES.map(row => '<option value="' + row.id + '"' + (row.id === (app.item.appCategory || 'other') ? ' selected' : '') + '>' + row.title + '</option>').join('') + '</select>' : '<b>' + (APPS_CREATE_CATEGORIES.find(row => row.id === app.item.appCategory)?.title || '其他') + '</b>') + '</label>' +
     (setup.preferences.length ? fields.render(setup, app.item.setupConfig || {}, escapeAppsHtml) : '') +
     declared.html +
+    (window.soduWorkAPI?.workPreview?.appCache ? '<section class="appsx-cache"><div><b>临时缓存</b><small id="appsCacheSize" role="status">正在计算缓存大小…</small><small>保留登录信息、业务数据和文件</small></div><button class="btn-mini" id="appsCacheClear" type="button">清理缓存</button></section>' : '') +
     '<p class="appsx-settings-error" id="appsSetError" role="alert" hidden></p>' +
     '</div>' +
     '<footer class="appsx-modal-foot"><button class="appsx-remove" id="appsSetRemove" type="button">移除即用</button><span class="push"></span>' +
@@ -445,6 +447,32 @@ async function openAppSettings(app) {
   function showError(message) {
     const target = modal.querySelector('#appsSetError'); target.hidden = false; target.textContent = message;
     target.scrollIntoView({ block: 'nearest' });
+  }
+  const cacheButton = modal.querySelector('#appsCacheClear');
+  if (cacheButton) {
+    const scope = window.SoduWorkAPI?.taskStorageKey?.('ops');
+    const current = () => ticket === _appsSettingsSeq && scope === window.SoduWorkAPI?.taskStorageKey?.('ops');
+    const cacheStatus = modal.querySelector('#appsCacheSize');
+    let cacheRequest = 0;
+    const updateCache = async action => {
+      const request = ++cacheRequest;
+      cacheButton.disabled = true;
+      if (action === 'clear') cacheStatus.textContent = '正在清理缓存…';
+      try {
+        const result = await window.soduWorkAPI.workPreview.appCache({ pluginId: key, action });
+        if (!current() || request !== cacheRequest) return;
+        if (!result?.ok) throw Error(result?.reason || '缓存操作失败，请重试');
+        cacheStatus.textContent = (action === 'clear' ? '已清理，当前缓存：' : '当前缓存：') + (result.bytes / 1048576).toFixed(2) + ' MB';
+        if (result.shared) {
+          const note = document.createElement('small'); note.textContent = '网页资源缓存由当前工作区的应用共用';
+          if (!cacheStatus.parentElement.querySelector('[data-cache-shared]')) { note.setAttribute('data-cache-shared', ''); cacheStatus.parentElement.append(note); }
+        }
+      } catch (error) {
+        if (current() && request === cacheRequest) cacheStatus.textContent = error.message;
+      } finally { if (current() && request === cacheRequest) cacheButton.disabled = false; }
+    };
+    cacheButton.addEventListener('click', () => { void updateCache('clear'); });
+    void updateCache('stats');
   }
   modal.querySelector('#appsSetClose').addEventListener('click', closeAppSettings);
   modal.querySelector('#appsSetEdit')?.addEventListener('click',async function() {
@@ -553,10 +581,11 @@ function closeAppSettings() {
   if (box) { box.classList.remove('show'); const input = box.querySelector('#appsSetUkey'); if (input) input.value = ''; }
 }
 
-/* Core app-open chain (shared by apps-page cards and composer-page recommendation rows):
-   sync-install first when not installed/pending upgrade, then open the workspace in a
-   standalone window. */
-async function openAppFromItem(item) {
+/* Shared app-open chain: synchronize installation/updates, then use the existing
+   native runtime in a standalone window or the administrator's sidebar slot. */
+async function openAppFromItem(item, options = {}) {
+  const current = () => !options.isCurrent || options.isCurrent();
+  if (!current()) return null;
   if (!item || !window.PluginUIHost || typeof window.PluginUIHost.openContribution !== 'function') {
     throw Error('即用页面暂时不可用，请刷新即用目录后重试');
   }
@@ -570,14 +599,15 @@ async function openAppFromItem(item) {
     }
     const result = await window.SoduWorkAPI.setEnterprisePluginInstalled(item.pluginId, true, item.versionId);
     if (result && result.ok === false) throw Error(result.reason || result.error || '即用同步失败');
+    if (!current()) return null;
     _appsCache = await loadAppsCatalog();
+    if (!current()) return null;
     const body = document.getElementById('appsBody');
     if (body && _appsCache) renderAppsInto(body, _appsCache);
     const latest = (_appsCache || []).find(candidate => appKeyOf(candidate.item) === key && candidate.item.installed);
-    await window.PluginUIHost.openContribution(latest ? latest.row : navRow, { item: latest ? latest.item : item, detached: true });
-    return;
+    return window.PluginUIHost.openContribution(latest ? latest.row : navRow, { ...options, item: latest ? latest.item : item, detached: !options.embedded });
   }
-  await window.PluginUIHost.openContribution(navRow, { item, detached: true });
+  return window.PluginUIHost.openContribution(navRow, { ...options, item, detached: !options.embedded });
 }
 
 async function openAppsCard(app, card) {
@@ -630,16 +660,56 @@ async function installAppPackage() {
     sayAppsMessage('安装器暂不可用，请更新客户端后重试');
     return;
   }
-  await window.SoduWorkPluginMakerUtils.choosePackage(SoduWorkAPI, {
-    local: function (body, preview) { confirmAppInstall(body, preview); },
+  const ticket = ++_appsImportSeq;
+  const layer = appsInstallModal();
+  const current = () => ticket === _appsImportSeq && !layer.hidden;
+  layer.hidden = false;
+  layer.setAttribute('aria-busy', 'true');
+  layer.querySelector('#appsModalTitle').textContent = '安装即用';
+  layer.querySelector('#appsModalSub').textContent = '正在准备应用包…';
+  const loading = document.createElement('div');
+  loading.setAttribute('role', 'status'); loading.setAttribute('aria-live', 'polite');
+  const note = document.createElement('p'); note.className = 'apps-modal-note'; note.textContent = '正在读取并检查应用包…';
+  const progress = document.createElement('progress'); progress.setAttribute('aria-label', '正在读取应用包');
+  loading.append(note, progress);
+  layer.querySelector('#appsModalBody').replaceChildren(loading);
+  const cancel = document.createElement('button'); cancel.className = 'btn-mini'; cancel.id = 'appsModalCancel'; cancel.textContent = '取消';
+  layer.querySelector('#appsModalFoot').replaceChildren(cancel);
+  layer.querySelector('#appsModalCancel').onclick = closeAppsModal;
+  layer.querySelector('#appsModalCancel').focus();
+  // Let the pending state paint before opening the picker or reading bytes.
+  await new Promise(resolve => setTimeout(resolve, 0));
+  if (!current()) return;
+  const complete = (body, preview, reason) => {
+    if (!current()) return;
+    if (preview?.ok === false) reason = (preview.checks || []).filter(row => row.ok === false).map(row => row.label).join('；') || '应用包检查未通过';
+    confirmAppInstall(body, preview, reason);
+  };
+  const failed = error => {
+    if (!current()) return;
+    layer.removeAttribute('aria-busy');
+    layer.querySelector('#appsModalSub').textContent = '应用包未能读取';
+    const message = document.createElement('p'); message.className = 'apps-modal-error'; message.setAttribute('role', 'alert');
+    message.textContent = String(error?.message || error);
+    layer.querySelector('#appsModalBody').replaceChildren(message);
+    const cancel = document.createElement('button'); cancel.className = 'btn-mini'; cancel.id = 'appsModalCancel'; cancel.textContent = '取消';
+    const space = document.createElement('span'); space.className = 'push';
+    const retry = document.createElement('button'); retry.className = 'btn-mini'; retry.id = 'appsModalRetry'; retry.textContent = '重新选择';
+    layer.querySelector('#appsModalFoot').replaceChildren(cancel, space, retry);
+    layer.querySelector('#appsModalCancel').onclick = closeAppsModal;
+    layer.querySelector('#appsModalRetry').onclick = installAppPackage;
+  };
+  try { await window.SoduWorkPluginMakerUtils.choosePackage(SoduWorkAPI, {
+    local: function (body, preview) { complete(body, preview); },
     archive: function (file, preview) {
       const draft = preview && preview.personalDraft;
       if (preview && preview.sourceKind === 'personal' && draft && !(preview.capabilities?.adapterBlockers || []).length) {
-        confirmAppInstall(draft, preview);
-      } else confirmAppInstall(null, preview, '这个包不是本地即用格式，请从「插件」页安装');
+        complete(draft, preview);
+      } else complete(null, preview, '这个包不是本地即用格式，请从「插件」页安装');
     },
-    error: function (error) { sayAppsMessage('即用包预检没有通过：' + String(error && error.message || error)); },
-  });
+    error: failed,
+    cancel: function () { if (current()) closeAppsModal(); },
+  }); } catch (error) { failed(error); }
 }
 
 /* Creation choices only prepare a draft in the existing application development conversation. */
@@ -754,12 +824,7 @@ function closeAppsCreateDialog() {
   if (mask) mask.classList.remove('show');
 }
 
-function confirmAppInstall(body, preview, blockedReason) {
-  const rawManifest = (preview && preview.manifest) || {};
-  const manifest = window.SoduWorkPluginLocales?.present(rawManifest, window.SoduWorkI18n?.getLocale?.() || navigator.language) || rawManifest;
-  const name = String(manifest.name || (body && body.name) || '未命名即用');
-  const version = String(manifest.version || (body && body.version) || '0.0.0');
-  const description = String(manifest.description || (body && body.description) || '');
+function appsInstallModal() {
   let layer = document.getElementById('appsModalLayer');
   if (!layer) {
     layer = document.createElement('div');
@@ -771,7 +836,19 @@ function confirmAppInstall(body, preview, blockedReason) {
       '<footer id="appsModalFoot"></footer></div>';
     document.body.appendChild(layer);
     layer.addEventListener('mousedown', function (event) { if (event.target === layer) closeAppsModal(); });
+    layer.addEventListener('keydown', function (event) { if (event.key === 'Escape') { event.stopPropagation(); closeAppsModal(); } });
   }
+  return layer;
+}
+
+function confirmAppInstall(body, preview, blockedReason) {
+  const rawManifest = (preview && preview.manifest) || {};
+  const manifest = window.SoduWorkPluginLocales?.present(rawManifest, window.SoduWorkI18n?.getLocale?.() || navigator.language) || rawManifest;
+  const name = String(manifest.name || (body && body.name) || '未命名即用');
+  const version = String(manifest.version || (body && body.version) || '0.0.0');
+  const description = String(manifest.description || (body && body.description) || '');
+  const layer = appsInstallModal();
+  layer.removeAttribute('aria-busy');
   layer.hidden = false;
   layer.querySelector('#appsModalTitle').textContent = '安装即用';
   layer.querySelector('#appsModalSub').textContent = rawManifest.jiyong?.storage?.location === 'cloud'
@@ -779,7 +856,7 @@ function confirmAppInstall(body, preview, blockedReason) {
     : '检查已完成 · 仅保存到本机 · 免审核免提交';
   layer.querySelector('#appsModalBody').innerHTML =
     '<div class="apps-install-head"><span class="appsx-app-ico big">' + APPS_GLYPH + '</span>' +
-    '<div><b data-user-content>' + escapeAppsHtml(name) + '</b><p data-user-content>' + escapeAppsHtml(description || '没有说明') + '</p>' +
+    '<div><b' + (manifest.name || body?.name ? ' data-user-content' : '') + '>' + escapeAppsHtml(name) + '</b><p' + (description ? ' data-user-content' : '') + '>' + escapeAppsHtml(description || '没有说明') + '</p>' +
     '<em>v' + escapeAppsHtml(version) + (blockedReason ? '' : ' · 界面即用 · 桥接能力按声明放行') + '</em></div></div>' +
     (blockedReason ? '<p class="apps-modal-error">' + escapeAppsHtml(blockedReason) + '</p>' : '') +
     '<p class="apps-modal-note">即用界面将在隔离承载中打开；需要的对话/通知能力按即用清单声明授权。</p>';
@@ -790,15 +867,18 @@ function confirmAppInstall(body, preview, blockedReason) {
   foot.querySelector('#appsModalCancel').addEventListener('click', closeAppsModal);
   const installBtn = foot.querySelector('#appsModalInstall');
   if (installBtn) installBtn.addEventListener('click', async function () {
+    const ticket = _appsImportSeq;
     this.disabled = true;
     this.textContent = '正在安装…';
     try {
       const result = await SoduWorkAPI.createPluginDraft(body);
       if (!result || result.ok === false || !result.plugin) throw Error(result?.reason || result?.error || '即用没有安装成功');
-      layer.hidden = true;
+      if (ticket !== _appsImportSeq) { renderAppsCatalog(true); return; }
+      closeAppsModal();
       sayAppsMessage('即用「' + result.plugin.name + '」已安装，侧边栏与即用页都可以打开');
       renderAppsCatalog(true);
     } catch (error) {
+      if (ticket !== _appsImportSeq) return;
       this.disabled = false;
       this.textContent = '安装到本机';
       sayAppsMessage('即用没有安装成功：' + String(error && error.message || error));
@@ -807,6 +887,7 @@ function confirmAppInstall(body, preview, blockedReason) {
 }
 
 function closeAppsModal() {
+  ++_appsImportSeq;
   const layer = document.getElementById('appsModalLayer');
   if (layer) layer.hidden = true;
 }

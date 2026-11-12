@@ -77,6 +77,8 @@ if (typeof electron === 'string') {
       // Production loads this helper before the renderer; the legacy workbench
       // fixture predates its extraction and otherwise renders fallback badges.
       await js(read('components/panels/chat-message-plugins.js') + '\nvoid 0;');
+      await js(read('components/panels/agent-brand.js') + '\nvoid 0;');
+      await js(read('core/requirement-session-context.js') + '\nvoid 0;');
       for (const script of scripts) await js(script + '\nvoid 0;');
       await js('SoduWorkI18n.setLocale("zh-CN");NativeChat.enter("","footer",{adapterId:"pi"});');
       await until('Boolean(document.querySelector(".nmsg.ai .ntext"))');
@@ -316,6 +318,46 @@ if (typeof electron === 'string') {
       await expectFooters(['恢复前的已完成部分。\n\n续接后的最终结果。']);
       assert.equal(await js('document.querySelector(".nmsg.ai time").dateTime'), new Date(completedAt + 10000).toISOString());
       results.push('A real Pi accumulator continuation projection retains its final footer when an earlier completed tool maps to the same visible assistant index');
+
+      for (const runtime of require('../main/agent-runtime/runtime-catalog').runtimes()) {
+        const projected = require('../main/pi-session/event-stream').create(), saved = [];
+        const taskMessages = require('../main/conversation/task-message-stream.cjs').create(projected.state, row => saved.push(row));
+        const full = '我会先查看工作目录，再创作并核验散文文件。';
+        const handle = { taskMessageStreaming: true,
+          appendTaskMessage(role, text) { projected.push({ type: 'message_end', message: { role, content: text } }); },
+          appendTaskRuntimeEvent(item, taskId) {
+            if (item.kind === 'task-stream-end') taskMessages.finish(item.streamPrefix);
+            else taskMessages.apply(item, taskId);
+          }, appendTaskTool(event) { projected.push(event); }, taskExecutionChanged() {} };
+        const turn = require('../main/pi-session/controlled-task-turn').create({ task: { id: 'stream-task' },
+          spec: { mode: 'dispatch', context: {}, agentId: 'runner:device:' + runtime.id }, scope: {},
+          request: async (route, body) => body ? { ref: 'stream-ref' } : { ref: 'stream-ref', engine: runtime.id, status: 'done', seq: 6,
+            items: [{ seq: 1, kind: 'say', text: '开始检查材料。' },
+              { seq: 2, kind: 'do', callId: 'read', tool: 'read', args: { path: 'fixture.md' } },
+              { seq: 3, kind: 'out', callId: 'read', tool: 'read', text: 'Fixture material' },
+              ...['我会', '先查看工作目录，再创作并核', '验散文文件。'].map((text, index) =>
+                ({ seq: 4 + index, kind: 'say', text, delta: true, streamId: 'answer' }))] } });
+        await turn.execute(handle, '写冬天主题散文', []);
+        snapshot = { ...projected.snapshot(), status: 'idle', execution: { running: false } };
+        await js('window.fixtureTask=' + JSON.stringify({ id: 'stream-task', title: '写冬天主题散文', status: 'in_progress',
+          executionContext: { agent: { id: 'runner:device:' + runtime.id } },
+          workRouting: { conversationTurn: { conversationId: 'footer', executor: 'dispatch', state: 'completed' } } }) +
+          ';SoduWorkAPI.getTask=async()=>fixtureTask;NativeChat.bindTask("stream-task",fixtureTask.title,{persist:false,taskMeta:fixtureTask});void 0;');
+        await publish(); await expectFooters([full]);
+        await until('document.querySelector("#nchatRuntimeName").textContent===' + JSON.stringify(runtime.displayName));
+        assert.equal(await js('NativeChat.sessionInfo().adapterId'), 'pi');
+        assert.equal(saved.length, 1); assert.equal(saved[0].sourceAgent.agentId, runtime.id);
+        for (const expanded of [true, false]) {
+          if (await js('Boolean(document.querySelector("[data-turn-toggle]"))')) {
+            const current = await js('document.querySelector("[data-turn-toggle]").getAttribute("aria-expanded")==="true"');
+            if (current !== expanded) await click('[data-turn-toggle]');
+          }
+          await expectFooters([full]);
+          assert.equal(await js('Array.from(document.querySelectorAll(".nmsg.ai .ntext")).some(node=>node.textContent===' + JSON.stringify('验散文文件。') + ')'), false);
+        }
+      }
+      results.push('Every registered runtime retains the complete controlled answer and one copy payload with process records expanded or collapsed');
+      results.push('The production NativeChat requirement binding shows every assigned runtime while preserving the original local archive identity');
 
       snapshot.messages = [{ role: 'user', text: 'Today dated prompt', sentAt: Date.now() }, { role: 'assistant', done: true,
         completedAt: Date.now(), blocks: [{ kind: 'text', text: 'Today dated answer' }] }];

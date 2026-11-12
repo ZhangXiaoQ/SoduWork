@@ -36,6 +36,25 @@ class BuildTests(unittest.TestCase):
                 self.assertRaisesRegex(ValueError, 'reviewed mobile'):
             build.android(self.ctx | {'component': 'client'}, self.root, self.root)
 
+    def test_public_macos_build_requires_developer_id_and_notarization(self):
+        with self.assertRaisesRegex(ValueError, 'SODUWORK_MAC_SIGN_IDENTITY'):
+            build.configure_macos_signing({})
+        with self.assertRaisesRegex(ValueError, 'cannot skip notarization'):
+            build.configure_macos_signing({
+                'SODUWORK_MAC_SIGN_IDENTITY': 'Developer ID Application: SoduWork (TEAM123)',
+                'SODUWORK_MAC_SKIP_NOTARIZE': 'true',
+            })
+        env = {'SODUWORK_MAC_SIGN_IDENTITY': 'Developer ID Application: SoduWork (TEAM123)'}
+        self.assertIs(build.configure_macos_signing(env), env)
+        self.assertEqual(env['SODUWORK_MAC_RELEASE'], '1')
+        self.assertEqual(env['SODUWORK_MAC_REAL_KEYCHAIN'], '1')
+
+    def test_validation_macos_build_keeps_ad_hoc_signing_isolated(self):
+        env = {}
+        self.assertIs(build.configure_macos_signing(env, validation=True), env)
+        self.assertNotIn('SODUWORK_MAC_RELEASE', env)
+        self.assertNotIn('SODUWORK_MAC_REAL_KEYCHAIN', env)
+
     def test_postgres_refuses_non_fixture_databases_before_running_commands(self):
         for url in ['postgresql+asyncpg://user:fixture@db.example.test/soduwork_ci',
                     'postgresql+asyncpg://user:fixture@127.0.0.1/production']:

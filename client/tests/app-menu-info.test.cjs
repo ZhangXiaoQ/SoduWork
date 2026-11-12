@@ -74,38 +74,29 @@ test('quit defaults to continuing work and requires an explicit confirmation res
   assert.deepEqual(f.exits, []);
 });
 
-function isolatedProfile(t, app) {
-  const folder = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'soduwork-menu-profile-'));
-  t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
-  app.getPath = () => folder;
-  require('../main/hub-endpoint.cjs').initialize(app, {});
-}
-
-test('renderer and native help follow the current installation Hub without crossing profiles', async t => {
+test('renderer and native help follow the current installation Hub without crossing profiles', async () => {
   const endpoint = require('../main/hub-endpoint.cjs'), urls = [];
   const f = fixture({ shell: { openExternal: async url => urls.push(url) } });
   const other = fixture(), requester = f.owner();
   f.app.isPackaged = other.app.isPackaged = true;
-  isolatedProfile(t, f.app); isolatedProfile(t, other.app);
-  assert.equal(endpoint.prepare(f.app, 'https://tenant-a.invalid:9443').ok, true);
-  assert.equal(endpoint.prepare(other.app, 'https://tenant-b.invalid').ok, true);
+  endpoint.initialize(f.app, {}, { hubOrigin: 'https://tenant-a.invalid:9443' });
+  endpoint.initialize(other.app, {}, { hubOrigin: 'https://tenant-b.invalid' });
   assert.equal(f.handlers.get('app-info')(requester.event).website, 'https://tenant-a.invalid:9443');
   await f.controller.nativeCommand('website', requester.window);
-  assert.equal(endpoint.prepare(f.app, 'http://127.0.0.1:8765').ok, true);
+  endpoint.initialize(f.app, {}, { hubOrigin: 'http://127.0.0.1:8765' });
   await f.controller.nativeCommand('website', requester.window);
   assert.deepEqual(urls, ['https://tenant-a.invalid:9443', 'http://127.0.0.1:8765']);
   assert.equal(appInfo(other.app).website, 'https://tenant-b.invalid');
 });
 
-test('a Hub switch during release history loading does not return the retired website', async t => {
+test('a Hub switch during release history loading does not return the retired website', async () => {
   let finish;
   const endpoint = require('../main/hub-endpoint.cjs');
   const f = fixture({ releaseNotes: { list: () => new Promise(resolve => { finish = resolve; }) } });
   f.app.isPackaged = true;
-  isolatedProfile(t, f.app);
-  assert.equal(endpoint.prepare(f.app, 'https://tenant-before.invalid').ok, true);
+  endpoint.initialize(f.app, {}, { hubOrigin: 'https://tenant-before.invalid' });
   const request = f.handlers.get('app-info')(f.owner().event);
-  assert.equal(endpoint.prepare(f.app, 'https://tenant-after.invalid:9443').ok, true);
+  endpoint.initialize(f.app, {}, { hubOrigin: 'https://tenant-after.invalid:9443' });
   finish({ releases: [] });
   assert.equal((await request).website, 'https://tenant-after.invalid:9443');
 });

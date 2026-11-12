@@ -17,6 +17,35 @@ const job = (id, revision = 1, actor = identity()) => ({ id: id + ':' + revision
   ownerKey: accountScopeKey(actor), clientId: actor.clientId, body: { sourceSessionId: id,
     sourceEpoch: 'epoch', sourceRevision: revision, snapshotComplete: true, messages: [] } });
 
+test('metadata-only upgrade retains an old queued body until its local recovery copy is durable', async t => {
+  const store = createWorker(root(t)), actor = identity(), queued = job('old-body');
+  queued.body.messages = [{ id: 'old-message', position: 0, role: 'user', text: 'sole queued content' }];
+  await store.enqueue(queued);
+  let durable = false, sends = 0;
+  const sync = synchronize({ app: {}, store, metadataOnly: true, identityOf: () => actor,
+    preserveLegacyOutbox: async value => {
+      assert.equal(value.body.messages[0].text, 'sole queued content');
+      if (!durable) throw Error('Local disk unavailable');
+    }, fetch: async (_actor, _url, options) => {
+      assert.equal(durable, true); sends++;
+      const body = JSON.parse(options.body);
+      assert.deepEqual(body.messages, []);
+      assert.equal(body.storageMode, 'endpoint');
+      assert.equal(body.snapshotComplete, false);
+      return reply({ ok: true, conversationId: 'old-body', sourceRevision: body.sourceRevision });
+    } });
+  try {
+    assert.equal((await sync.flush()).pending, 1);
+    assert.equal(sends, 0);
+    assert.equal((await store.jobs())[0].body.messages[0].text, 'sole queued content');
+    durable = true;
+    assert.equal((await sync.flush()).pending, 0);
+    assert.equal(sends, 1);
+    assert.equal(sync.bind({ ...handle('read-only'), localReplica: true }, actor), null);
+    assert.equal((await store.jobs()).length, 0);
+  } finally { await sync.close(); }
+});
+
 test('101 offline sources survive worker restart and each receive an exact ACK', async t => {
   const file = root(t), actor = identity(); let online = false;
   const sent = [];

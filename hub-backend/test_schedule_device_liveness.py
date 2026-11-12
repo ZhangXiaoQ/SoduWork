@@ -283,6 +283,35 @@ class ScheduleDeviceLivenessTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sum(bool(value) for value in results), 1)
         self.assertEqual((await self.read_run()).state, "failed")
 
+    async def test_legacy_expiry_preserves_edited_calendar_summary_and_retry(self):
+        for index, changes in enumerate(({}, {"end_date": "2030-01-31"},
+                                         {"every": "monthly", "month_days": [31]},
+                                         {"every": "weekly", "weekdays": [1, 3]})):
+            with self.subTest(changes=changes):
+                run_id = "legacy-expiry-" + str(index)
+                await self.add_run(run_id, age=liveness.ACCEPT_TIMEOUT_SECONDS + 30 - index,
+                                   receipt={"timing": {"every": "daily"}})
+                async with self.sessions() as session:
+                    schedule = await session.get(models.AiSchedule, "plan")
+                    schedule.every, schedule.weekdays, schedule.month_days = "daily", [], []
+                    schedule.start_date, schedule.end_date = None, None
+                    for field, value in changes.items():
+                        setattr(schedule, field, value)
+                    schedule.last_error = "Current configuration status"
+                    schedule.retry_count, schedule.next_retry_at = 0, None
+                    await session.commit()
+                    run = await session.get(models.AiScheduleRun, run_id)
+                    self.assertTrue(await liveness.expire_run(session, run, now=self.now))
+                    await session.commit()
+                    await session.refresh(schedule)
+                    self.assertEqual(run.state, "failed")
+                    if changes:
+                        self.assertEqual(schedule.last_error, "Current configuration status")
+                    else:
+                        self.assertIn("执行端未在规定时间内接收", schedule.last_error)
+                    self.assertEqual(schedule.retry_count, 0)
+                    self.assertIsNone(schedule.next_retry_at)
+
     async def test_scoped_expiry_selects_oldest_expired_native_not_cloud_or_other_accounts(self):
         await self.add_run("oldest", age=7200)
         await self.add_run("next", age=3600)

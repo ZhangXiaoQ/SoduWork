@@ -27,6 +27,8 @@ _DIR = Path(__file__).resolve().parent.parent.parent / "downloads"
 _DISPLAY_NAME = "SoduWork-Setup.exe"
 _LEGACY_FILENAME = "soduwork.exe"
 _VERSIONED_PACKAGE = re.compile(r"^SoduWork-(\d+)\.(\d+)\.(\d+)-Setup\.exe$")
+_MOBILE_DISPLAY_NAME = "SoduWork-Mobile.apk"
+
 
 # Public Linux downloads from the release channel.
 _LINUX_FORMAT_SUFFIXES = (("deb", ".deb"), ("rpm", ".rpm"), ("tar.gz", ".tar.gz"))
@@ -143,6 +145,8 @@ async def client_release_download(release_id: str, session=Depends(get_session))
 
 def _release_media_type(artifact_name: str) -> str:
     lowered = artifact_name.lower()
+    if lowered.endswith(".apk"):
+        return "application/vnd.android.package-archive"
     if lowered.endswith(".deb"):
         return "application/vnd.debian.binary-package"
     if lowered.endswith(".rpm"):
@@ -321,6 +325,27 @@ async def client_download(session=Depends(get_session)):
         media_type="application/octet-stream",
         filename=_DISPLAY_NAME,
     )
+
+
+@router.get("/mobile/info")
+async def mobile_info():
+    """Keep existing metadata callers working without advertising excluded mobile artifacts."""
+    return {
+        "available": False,
+        "filename": _MOBILE_DISPLAY_NAME,
+        "version": "",
+        "webUrl": "",
+    }
+
+
+@router.get("/mobile/android")
+async def mobile_android_download():
+    raise HTTPException(status_code=404, detail="移动端安装包未在此服务发布")
+
+
+@router.get("/mobile/android/{filename}")
+async def mobile_android_version_download(filename: str):
+    raise HTTPException(status_code=404, detail="移动端安装包未在此服务发布")
 
 
 # Standalone Runner installation.

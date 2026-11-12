@@ -327,13 +327,13 @@ test('rework reference files stay outside the delivery material list', async () 
   assert.match(html, /data-rq-file-id="delivery"/);
 });
 
-test('需求资料、过程证据、交付物和返修资料分组折叠展示，多交付物同时提供自动压缩包', async () => {
+test('material groups preserve filenames and supporting files do not trigger automatic archives', async () => {
   const f = fixture({listAttachments: async () => [
     {id: 'input', filename: '需求说明.md', role: 'input', size: 120},
     {id: 'evidence', filename: '验收截图.png', role: 'verification', size: 240},
     {id: 'output-a', filename: 'index.html', role: 'output', sourceRef: 'conversation:current', size: 320},
-    {id: 'output-b', filename: 'style.css', role: 'output', sourceRef: 'conversation:current', size: 180},
-    {id: 'output-c', filename: 'app.js', role: 'output', sourceRef: 'conversation:current', size: 460},
+    {id: 'output-b', filename: 'style.css', role: 'output', category: 'supporting', sourceRef: 'conversation:current', size: 180},
+    {id: 'output-c', filename: 'app.js', role: 'output', category: 'supporting', sourceRef: 'conversation:current', size: 460},
     {id: 'rework', filename: '返修说明.md', role: 'rework_input', size: 90},
   ]});
   await f.api.open('material-groups');
@@ -344,11 +344,10 @@ test('需求资料、过程证据、交付物和返修资料分组折叠展示�
     assert.doesNotMatch(match[0], /\bopen(?:\s|=|>)/, group + ' group is collapsed by default');
     assert.match(html, new RegExp(label));
   }
-  assert.match(html, /data-rq-bundle-download/);
-  assert.match(html, /Requirement material-groups\.zip/);
+  assert.doesNotMatch(html, /data-rq-bundle-download/);
   assert.doesNotMatch(html, /自动压缩包\.zip/);
-  assert.doesNotMatch(html, /data-rq-file-id="output-[abc]"/);
-  assert.match(html, /交付物 · 1 份/);
+  for (const id of ['a', 'b', 'c']) assert.ok(html.includes('data-rq-file-id="output-' + id + '"'));
+  assert.match(html, /交付物 · 3 份/);
 });
 
 test('history is escaped and read-only; trace opens lazily and unmounts on collapse', async () => {
@@ -1010,16 +1009,31 @@ test('background refresh arriving after editing starts cannot replace the form',
   assert.notEqual(f.active().querySelector('[data-rq-confirm]').hidden,false);
 });
 
-for (const count of [1,2]) test('requirement delivery shows one file or one archive at threshold '+count,async()=>{
+for (const count of [1,2,3,20]) test('requirement delivery preserves files and adds an archive only above two finals: '+count,async()=>{
   const f=fixture({listAttachments:async()=>[
     ...Array.from({length:count},(_,i)=>({id:'final-'+i,filename:'final-'+i+'.md',role:'output',sourceRef:'conversation:done',createdAt:10,evidenceMeta:{round:2}})),
     {id:'proof',filename:'proof.png',role:'verification',sourceRef:'verification:later',createdAt:20}
   ]});
   await f.api.open('threshold');const html=f.active().querySelector('#rqAttachments').innerHTML;
-  assert.equal(html.includes('data-rq-bundle-download'),count===2);
-  assert.equal(html.includes('data-rq-file-id="final-0"'),count===1);
+  assert.equal(html.includes('data-rq-bundle-download'),count>2);
+  for (let i=0;i<count;i++) assert.ok(html.includes('data-rq-file-id="final-'+i+'"'));
   assert.ok(html.includes('data-rq-file-id="proof"'));
   assert.ok(!html.includes('历史轮次'));
+});
+
+test('stored Runner archives keep the same name as chat and never hide individual deliverables',async()=>{
+  const f=fixture({listAttachments:async()=>[
+    {id:'archive',filename:'完整产出-fixed.zip',role:'output',category:'primary'},
+    {id:'final',filename:'Original-title.md',role:'output',category:'primary'},
+    {id:'proof',filename:'verify.json',role:'output',category:'evidence'}
+  ]});
+  await f.api.open('same-names');
+  const html=f.active().querySelector('#rqAttachments').innerHTML;
+  assert.match(html,/完整产出-fixed\.zip/);assert.match(html,/Original-title\.md/);
+  assert.doesNotMatch(html,/data-rq-bundle-download|Requirement same-names\.zip/);
+  const output=html.split('data-rq-material-group="output"')[1];
+  assert.doesNotMatch(output,/verify\.json/);
+  assert.ok(output.indexOf('完整产出-fixed.zip')<output.indexOf('Original-title.md'));
 });
 
 test('archive downloads pin the displayed immutable delivery and reject a changed file set',async()=>{

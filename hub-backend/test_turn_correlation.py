@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from test_handoff_target_diagnostics import TargetDiagnosticsTests as _Base
 from app import db, models
-from app.automation_models import ExecutionEvent, ExecutionSession
+from app.automation_models import ExecutionEvent, ExecutionSession, RunnerNode
 from app.services import ai_local, execution_sessions, im_execution, local_base, local_ctx, local_stream, turn_correlation
 from runner_main import Runner
 from sqlalchemy import select
@@ -163,6 +163,8 @@ class HubCorrelationTests(unittest.IsolatedAsyncioTestCase):
         task_id, ref = self.prefix + "-task", self.prefix + "-ref"
         runner = SimpleNamespace(id=self.prefix + "-runner", client_id=self.client_id, org_id="", host="Fixture")
         async with db.SessionLocal() as session:
+            # Live read-through resolves identity from the durable Runner registry.
+            session.add(RunnerNode(id=runner.id, client_id=self.client_id, auth_state="active"))
             session.add(models.Task(id=task_id, title="Bound output", owner_client_id=self.client_id, status="doing"))
             session.add(models.TaskEvent(task_id=task_id, kind="ai.dispatched", actor="fixture", detail={"ref":ref,"runnerId":runner.id}))
             await session.commit()
@@ -180,8 +182,9 @@ class HubCorrelationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(events[1].detail["turnState"], "done")
             self.assertEqual(events[1].kind, "turn-end")
             task = await session.get(models.Task, task_id)
-            await execution_sessions.ingest_live_snapshot(session, task, ref, {"ok":True,"runnerId":runner.id,
+            live = await execution_sessions.ingest_live_snapshot(session, task, ref, {"ok":True,"runnerId":runner.id,
                 "round":4,"status":"running","admissionKey":"comment:read-through","turnCorrelationVersion":1,"items":[]})
+            self.assertIsNotNone(live)
             self.assertEqual(row.metadata_["admissionKey"], "comment:read-through")
             await execution_sessions.ingest_runner_snapshots(session, runner, [{"ref":ref,"taskId":task_id,"round":5,"status":"running","items":[]}])
             self.assertNotIn("admissionKey", row.metadata_, "an old Runner must not inherit a previous turn identity")

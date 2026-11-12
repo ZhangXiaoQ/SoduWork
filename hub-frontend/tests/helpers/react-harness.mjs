@@ -1,5 +1,6 @@
 import * as selectPopover from '../../src/select-popover.js'
 import * as orgOptions from '../../src/org-options.js'
+import * as enlargeTheme from '../../src/enlarge-theme.js'
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import React from 'react'
@@ -63,7 +64,8 @@ export async function createComponentHarness(file, { dependencies = {}, exportNa
   // has no DOM, so list refs are inert unless the test supplies its own adapter.
   const viewportHost = { useViewportHeight: () => () => {} }
   const imports = { './i18n.js': localeHost, '../i18n.js': localeHost, './dialog-focus.js': dialogFocus, './select-popover.js': selectPopover, './org-options.js': orgOptions, '../org-options.js': orgOptions,
-    '../viewport-height.js': viewportHost, './polling.js': polling, '../polling.js': polling, 'react-dom': { createPortal: (children) => children }, 'react/jsx-runtime': jsxRuntime, ...dependencies, react: hooks }
+    '../viewport-height.js': viewportHost, './polling.js': polling, '../polling.js': polling, './enlarge-theme.js': enlargeTheme, '../enlarge-theme.js': enlargeTheme,
+    'react-dom': { createPortal: (children) => children }, 'react/jsx-runtime': jsxRuntime, ...dependencies, react: hooks }
   const module = { exports: {} }
   new Function('require', 'module', 'exports', code)((name) => {
     assert.ok(name in imports, `unknown test dependency: ${name}`)

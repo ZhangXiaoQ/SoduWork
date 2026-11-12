@@ -14,7 +14,7 @@ from . import plugin_resources
 
 PREFIX = "references/plugin-package/"
 METADATA = {
-    "plugin.json", "workflow.json", "soduwork/workflow.json",
+    "plugin.json", "workflow.json", "soduwork/workflow.json", "soduwork/workflow.json",
     ".mcp.json", "mcp.json", ".app.json", "plugin-signature.json",
     "signature.json", "hooks/hooks.json",
 }
@@ -33,7 +33,7 @@ def build(parsed: dict) -> dict:
             relative = name[len(root):]
             # Control/configuration files are not runtime resources. In particular,
             # never copy MCP headers/env or automatically register imported hooks.
-            if (relative in excluded or relative.startswith(("soduwork/",))
+            if (relative in excluded or relative.startswith(("soduwork/", "soduwork/"))
                     or any(part.startswith(".") for part in relative.split("/"))):
                 continue
             kind = ("script" if "/scripts/" in "/" + relative
@@ -95,6 +95,19 @@ def for_version(version) -> dict:
     if parsed["checksum"] != version.checksum:
         raise ValueError("插件原始包校验失败，禁止加载被修改的资源")
     return parsed["resourceBundle"]
+
+
+def cache_tag(version) -> str:
+    import hashlib
+    import json
+    try:
+        stat = os.stat(str(version.package_path or ""))
+    except OSError as exc:
+        raise ValueError("插件原始包缺失，请重新发布完整版本") from exc
+    fingerprint = json.dumps([version.id, version.checksum, version.manifest,
+                              stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns],
+                             sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return '"' + hashlib.sha256(fingerprint.encode()).hexdigest() + '"'
 
 
 def ui_for_version(version) -> dict:

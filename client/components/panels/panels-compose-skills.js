@@ -48,6 +48,9 @@
     let loading = opts.loading !== false;
     let loadMessage = String(opts.loadMessage || '正在加载团队 Skill…');
     let loadError = '';
+    let positionFrame = null;
+    let observingPosition = false;
+    let sizeObserver = null;
 
     const tags = document.createElement('div');
     tags.className = 'cp-skill-tags';
@@ -63,6 +66,66 @@
     input.setAttribute('aria-expanded', 'false');
     host.appendChild(tags);
     host.appendChild(menu);
+
+    function positionMenu() {
+      if (!menu.classList.contains('show')) return;
+      if (host.isConnected === false) { close(); return; }
+      const rect = host.getBoundingClientRect?.();
+      if (!rect || !Number.isFinite(rect.left)) return;
+      const viewport = global.visualViewport;
+      const margin = 8, gap = 8;
+      const left = (viewport?.offsetLeft || 0) + margin;
+      const top = (viewport?.offsetTop || 0) + margin;
+      const right = left + (viewport?.width || global.innerWidth) - margin * 2;
+      const bottom = top + (viewport?.height || global.innerHeight) - margin * 2;
+      const width = Math.max(0, Math.min(460, Math.max(180, rect.width - 32), right - left));
+      const above = Math.max(0, Math.min(rect.top, bottom) - top - gap);
+      const below = Math.max(0, bottom - Math.max(rect.bottom, top) - gap);
+      const desired = Math.min(360, menu.scrollHeight + 2);
+      const useAbove = below < desired && above > below;
+      const available = useAbove ? above : below;
+      // A tall composer can occupy the entire viewport. Keep its menu usable
+      // within the visible area instead of creating a zero-height popup.
+      const height = Math.min(desired, available >= 80 ? available : Math.max(0, bottom - top));
+      const anchorTop = useAbove ? rect.top - gap - height : rect.bottom + gap;
+      menu.style.left = Math.max(left, Math.min(rect.left + 16, right - width)) + 'px';
+      menu.style.top = Math.max(top, Math.min(anchorTop, bottom - height)) + 'px';
+      menu.style.width = width + 'px';
+      menu.style.maxHeight = height + 'px';
+    }
+
+    function schedulePosition(event) {
+      if (event?.target?.nodeType && menu.contains?.(event.target)) return;
+      if (positionFrame !== null) return;
+      if (typeof global.requestAnimationFrame !== 'function') { positionMenu(); return; }
+      positionFrame = global.requestAnimationFrame(() => { positionFrame = null; positionMenu(); });
+    }
+
+    function watchPosition() {
+      positionMenu();
+      if (observingPosition) return;
+      observingPosition = true;
+      global.addEventListener?.('resize', schedulePosition);
+      global.addEventListener?.('scroll', schedulePosition, true);
+      global.visualViewport?.addEventListener('resize', schedulePosition);
+      global.visualViewport?.addEventListener('scroll', schedulePosition);
+      if (typeof global.ResizeObserver === 'function') {
+        sizeObserver = new global.ResizeObserver(schedulePosition);
+        sizeObserver.observe(host);
+      }
+    }
+
+    function stopPositioning() {
+      observingPosition = false;
+      global.removeEventListener?.('resize', schedulePosition);
+      global.removeEventListener?.('scroll', schedulePosition, true);
+      global.visualViewport?.removeEventListener('resize', schedulePosition);
+      global.visualViewport?.removeEventListener('scroll', schedulePosition);
+      sizeObserver?.disconnect();
+      sizeObserver = null;
+      if (positionFrame !== null) global.cancelAnimationFrame?.(positionFrame);
+      positionFrame = null;
+    }
 
     function ranked(query) {
       const q = String(query || '').toLowerCase();
@@ -94,6 +157,7 @@
 
     function close() {
       match = null;
+      stopPositioning();
       menu.classList.remove('show');
       menu.innerHTML = '';
       menuItems = [];
@@ -102,7 +166,8 @@
     }
 
     function paintMenu() {
-      if (!match) { close(); return; }
+      // Late catalog updates must not rearm a picker whose composer was removed.
+      if (!match || host.isConnected === false) { close(); return; }
       const scrollTop = menu.scrollTop;
       const rows = menuItems = loading || loadError ? [] : ranked(match.query);
       active = navigation.normalize(rows, active, item => item.selectable);
@@ -138,6 +203,7 @@
         if (active >= 0) input.setAttribute('aria-activedescendant', 'cpSkillOption' + active);
       }
       menu.classList.add('show');
+      watchPosition();
       menu.scrollTop = scrollTop;
       input.setAttribute('aria-expanded', 'true');
     }

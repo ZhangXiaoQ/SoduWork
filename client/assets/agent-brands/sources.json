@@ -1,0 +1,77 @@
+{
+  "$meta": {
+    "schema": 1,
+    "registeredAt": "2026-10-20",
+    "provenanceStatus": "unverified",
+    "pattern": "对齐同仓库 client/assets/connector-brands/sources.json 的登记模式",
+    "policy": "本目录图标用于产品界面中展示用户已连接的第三方 Agent/模型品牌。品牌标识（logo/商标）的版权归各权利人；界面展示不表示官方合作或背书。",
+    "outstandingWork": "既有 7 项来源未完成核证；新增 Google 标识已记录素材地址，许可与品牌使用范围仍待核证。公开发布（含开源快照、官网物料、对外交付包）之前，必须逐项完成：1) 确认素材来源与许可；2) 核对权利人品牌使用规范；3) 无法核证的替换为自行绘制图形或取得权利人授权。在此之前，本目录不得进入任何公开分发范围。",
+    "reviewEvidence": "2026-10-20 合规审计（ScanCode 素材扫描 + 人工检查）确认本目录此前无任何来源记录，本文件为补登记：只记录可观察到的事实与待办，不虚构来源或许可。"
+  },
+  "kimi": {
+    "file": "kimi.png",
+    "product": "Kimi Code",
+    "source": "https://raw.githubusercontent.com/MoonshotAI/kimi-code/fc3b521b8b68468268bb4cfe7f45008ce08b2b99/apps/vscode/webview-ui/public/kimi-logo.png",
+    "retrievedAt": "2026-11-02",
+    "license": "MIT; see kimi-LICENSE.txt",
+    "rightsNote": "Unmodified official repository asset, used to identify the connected runtime. Trademarks belong to Moonshot AI; no endorsement is implied."
+  },
+  "harness2": {
+    "file": "harness2.svg",
+    "product": "Google（Google Research Harness² 入口）",
+    "artworkOrigin": "source-recorded-rights-unverified",
+    "source": "https://fonts.gstatic.com/s/i/productlogos/googleg/v6/24px.svg",
+    "retrievedAt": "2026-10-20",
+    "observed": "SVG 注释记录素材地址和获取日期，保留 Google G 的原始路径与四色。",
+    "rightsNote": "来源记录不等于取得商标或美术作品授权；公开分发前须核对 Google 品牌规范及素材使用许可，不表示 Google 官方合作或背书。"
+  },
+  "chatgpt": {
+    "file": "chatgpt.svg",
+    "product": "OpenAI ChatGPT",
+    "artworkOrigin": "unverified",
+    "observed": "24×24 viewBox，内嵌 <style> 类（.chatgpt-mark，#202123），非 simple-icons 集合风格（无来源登记可比对）。",
+    "rightsNote": "来源未登记。疑似取自官方品牌资料，未经核证不得作为依据。公开分发前须核对 OpenAI 品牌规范（openai.com/brand）并确认许可，或替换为自行绘制图形。"
+  },
+  "claude": {
+    "file": "claude.png",
+    "product": "Anthropic Claude",
+    "artworkOrigin": "unverified",
+    "observed": "位图（PNG），来源、分辨率与取材时间未登记。",
+    "rightsNote": "来源未登记。公开分发前须核对 Anthropic 品牌规范并确认许可，或替换为自行绘制图形。"
+  },
+  "deepseek": {
+    "file": "deepseek.svg",
+    "product": "DeepSeek",
+    "artworkOrigin": "unverified",
+    "observed": "50×50 viewBox，带 xlink 与转换工具痕迹，疑似由官网/公开素材转换生成，待核证。",
+    "rightsNote": "来源未登记。公开分发前须核对 DeepSeek 品牌规范并确认许可，或替换为自行绘制图形。"
+  },
+  "openai": {
+    "file": "openai.svg",
+    "product": "（文件名与内容不符，存疑）",
+    "artworkOrigin": "unverified",
+    "observed": "文件名为 openai.svg，但内容为蓝色圆形图标（#0080F7 实心圆底 + 内部图形），与 OpenAI 官方标志（黑色花形结环）不符，疑为其他产品图标误命名。",
+    "rightsNote": "存在疑似错标：文件名指向 OpenAI 而图形特征与之不符。须人工确认真实品牌后改名或替换；在此之前不得在任何对外物料中使用本文件。"
+  },
+  "opencode": {
+    "file": "opencode.svg",
+    "product": "opencode（开源 Agent 项目）",
+    "artworkOrigin": "unverified",
+    "observed": "512×512 嵌套 SVG，疑似项目官方仓库导出，其 logo 许可以上游仓库声明为准，未核证。",
+    "rightsNote": "来源未登记。公开分发前须核对上游仓库许可证对 logo 的适用范围（代码 MIT 不必然覆盖美术资产），或替换。"
+  },
+  "pi": {
+    "file": "pi.svg",
+    "product": "pi（@earendil-works/pi-coding-agent，本产品 MIT 依赖）",
+    "artworkOrigin": "unverified",
+    "observed": "800×800，内嵌 <style>，疑似 pi 项目标识；使用范围应与该依赖的引进边界一致。",
+    "rightsNote": "来源未登记。pi 以 MIT 引进（见 third-party/manifest.json），但 logo 美术作品是否随许可授予使用权未核证；公开分发前须确认。"
+  },
+  "qwen": {
+    "file": "qwen.png",
+    "product": "Qwen（通义千问）",
+    "artworkOrigin": "unverified",
+    "observed": "位图（PNG），来源、分辨率与取材时间未登记。",
+    "rightsNote": "来源未登记。公开分发前须核对阿里云 Qwen 品牌规范并确认许可，或替换为自行绘制图形。"
+  }
+}

@@ -271,17 +271,98 @@
     bindTabs(panel);
     bindFilters(panel);
     selectTab(activeTab);
-    archiveProjects = (projectStore()?.get().archivedProjects || []).slice()
-      .sort((a, b) => Number(b.archivedAt || 0) - Number(a.archivedAt || 0));
-    const epoch = ++renderEpoch, scope = stateKey;
-    let got;
-    try { got = await api()?.archivedHistory?.() || { ok: true, chats: [] }; }
-    catch (error) { got = { ok: false, reason: String(error?.message || error), chats: [] }; }
     projectStore();
-    if (epoch !== renderEpoch || scope !== stateKey) return;
-    archiveChats = got.ok ? (got.chats || []).slice() : [];
-    if (!got.ok) message(got.reason || '读取归档历史失败', true);
-    renderFiltered();
+    const epoch = ++renderEpoch, scope = stateKey;
+    const sessionApi = api();
+    const current = () => { projectStore(); return epoch === renderEpoch && scope === stateKey; };
+    let localRows = [], remoteRows = [], catalog = null;
+    function paint() {
+      if (!current()) return;
+      const records = new Map((catalog?.items || []).map(item => [item.id, item]));
+      const rows = new Map();
+      for (const row of [...remoteRows, ...localRows]) {
+        const canonical = global.WorkspaceSidebarState?.localHistoryId?.(row.id) || row.id;
+        const record = records.get(canonical);
+        if (record && (record.deleted || !record.archived)) continue;
+        rows.set(record?.id || row.id, { ...row, id: record?.id || row.id });
+      }
+      archiveChats = [...rows.values()];
+      archiveProjects = (projectStore()?.get().archivedProjects || []).slice()
+        .sort((a, b) => Number(b.archivedAt || 0) - Number(a.archivedAt || 0));
+      renderFiltered();
+    }
+    async function readLocal(refresh) {
+      let after = null, restarts = 0;
+      let rows = [];
+      const cursors = new Set();
+      while (true) {
+        const got = await sessionApi.history({ source: 'local', archived: true, limit: 200, after,
+          ...(catalog ? { workspace: catalog.workspace, catalogRevision: catalog.revision } : {}),
+          refresh: refresh && !after });
+        if (!current()) return;
+        if (got?.localCatalog && global.WorkspaceSidebarState?.localHistoryRevision?.(got.localCatalog.workspace) > got.localCatalog.revision)
+          return;
+        if (!got?.ok || !global.WorkspaceSidebarState?.setLocalHistory(got.localCatalog, got.chats || []))
+          throw Error(got?.reason || '读取归档历史失败');
+        // A later page may include a newer inventory with records before the
+        // cursor. Restart that traversal instead of claiming it is complete.
+        // Bound retries so continuous writes cannot keep the panel loading.
+        if (after && catalog?.revision !== got.localCatalog.revision) {
+          catalog = got.localCatalog;
+          if (++restarts > 2) { paint(); throw Error('读取归档历史失败'); }
+          after = null; rows = []; cursors.clear();
+          continue;
+        }
+        // A refresh with unchanged inventory only updates the visible page's
+        // decorations. Avoid reading every archived page a second time.
+        if (refresh && !after && restarts === 0 && catalog?.revision === got.localCatalog.revision) {
+          const latest = new Map((got.chats || []).map(row => [row.id, row]));
+          localRows = localRows.map(row => latest.get(row.id) || row);
+          paint(); return;
+        }
+        if (Array.isArray(got.localCatalog.items)) catalog = got.localCatalog;
+        rows.push(...(got.chats || []));
+        // Keep the existing complete-archive search contract, but render only
+        // the first page and completed inventory instead of rebuilding per page.
+        if (!after || !got.next) { localRows = rows; paint(); }
+        after = got.next;
+        if (after) {
+          const cursor = JSON.stringify(after);
+          if (cursors.has(cursor)) throw Error('读取归档历史失败');
+          cursors.add(cursor);
+        }
+        if (!after) break;
+      }
+    }
+    // Local archives render independently of account requests or expired credentials.
+    const local = sessionApi?.localHistorySupported === true
+      ? readLocal(false).then(() => current() && readLocal(true)).catch(error => {
+        if (current()) message(error.message || '读取归档历史失败', true);
+      }) : Promise.resolve();
+    async function readAccount() {
+      const separate = sessionApi?.localHistorySupported === true;
+      let after = null;
+      const rows = [], cursors = new Set();
+      do {
+        const got = separate
+          ? await sessionApi.history({ source: 'account', archived: true, limit: 200, after })
+          : await sessionApi?.archivedHistory?.();
+        if (!current()) return;
+        if (got && !got.ok) throw Error(got.reason || '读取归档历史失败');
+        rows.push(...(got?.chats || []));
+        if (!after || !got?.next) { remoteRows = rows; paint(); }
+        after = separate ? got?.next : null;
+        if (after) {
+          const cursor = JSON.stringify(after);
+          if (cursors.has(cursor)) throw Error('读取归档历史失败');
+          cursors.add(cursor);
+        }
+      } while (after);
+    }
+    const remote = readAccount().catch(error => {
+      if (current()) message(error.message || '读取归档历史失败', true);
+    });
+    await Promise.all([local, remote]);
   }
   function openArchiveHistory() {
     const panel = document.getElementById('archivePanel');

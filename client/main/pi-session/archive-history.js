@@ -27,7 +27,7 @@ async function mapLimit(items, visit) {
 }
 
 async function readSummary(file, stat, project) {
-  let header, firstMessage = '', name, count = 0, activity, workOwner, initialized = false;
+  let header, firstMessage = '', name, count = 0, activity, workOwner, initialized = false, movedCwd = '';
   const bindings = [];
   const usedHarnesses = new Set();
   const input = fs.createReadStream(file, { encoding: 'utf8' });
@@ -45,6 +45,12 @@ async function readSummary(file, stat, project) {
       if (entry.type === 'session_info') name = typeof entry.name === 'string' ? entry.name.trim() : '';
       if (entry.type === 'custom' && entry.customType === 'soduwork.work-entry' && entry.data?.version === 1 &&
           typeof entry.data.owner === 'string') workOwner = entry.data.owner;
+      // An explicit workspace move (「换个文件夹继续」) supersedes the session header's
+      // original directory; later moves win.
+      if (entry.type === 'custom' && entry.customType === 'soduwork.workspace.moved' &&
+          entry.data?.version === 1 && typeof entry.data.cwd === 'string' && entry.data.cwd) {
+        movedCwd = entry.data.cwd;
+      }
       // Permission metadata indicates an initialized runtime even if no message was sent before exit.
       if (entry.type === 'custom' && entry.customType === 'soduwork.access.policy') initialized = true;
       if (entry.type === 'custom' && entry.customType === 'soduwork.task.binding') bindings.push(entry);
@@ -70,7 +76,8 @@ async function readSummary(file, stat, project) {
   if (!header) return null;
   const headerTime = Date.parse(header.timestamp);
   return project({
-    id: header.id, path: file, cwd: typeof header.cwd === 'string' ? header.cwd : '',
+    id: header.id, path: file,
+    cwd: movedCwd || (typeof header.cwd === 'string' ? header.cwd : ''),
     name, firstMessage: firstMessage || '(no messages)', messageCount: count, usedHarnesses: [...usedHarnesses],
     ...(workOwner ? { workOwner, workOnly: count === 0 && !initialized } : {}),
     createdAt: Number.isFinite(headerTime) ? headerTime : stat.birthtimeMs,
@@ -92,19 +99,31 @@ function createArchiveHistory({ root, project, read = readSummary }) {
     if (old && old.row && byId.get(old.row.id) === file) byId.delete(old.row.id);
     files.delete(file);
   }
-  async function load(file, base) {
+  const namedFor = (file, id) => path.basename(file) === id + '.jsonl' || path.basename(file).endsWith('_' + id + '.jsonl');
+  function unsafeArchive() {
+    return Object.assign(Error('会话存档路径不受信任，无法确认会话是否存在'), { code: 'HISTORY_ARCHIVE_UNSAFE' });
+  }
+  function requireTarget(row, candidate, wanted) {
+    if (candidate && (!row || row.id !== wanted))
+      throw Object.assign(Error('会话存档已损坏或标识不一致，请检查本地存储后重试'), { code: 'HISTORY_ARCHIVE_INVALID' });
+    return row;
+  }
+  async function load(file, base, strictId = '') {
     if (pending.has(file)) {
-      await pending.get(file);
-      return load(file, base);
+      try { await pending.get(file); } catch (error) { if (strictId) throw error; }
+      return load(file, base, strictId);
     }
     const work = (async () => {
       try {
+        const candidate = strictId && (namedFor(file, strictId) || files.get(file)?.row?.id === strictId);
         const safe = await safeFile(file, base);
-        if (!safe) { forget(file); return null; }
+        if (!safe) { if (strictId) throw unsafeArchive(); forget(file); return null; }
         const version = revision(safe.stat);
         const cached = files.get(file);
-        if (cached && cached.target === safe.target && cached.version === version) return cached.row;
+        if (cached && cached.target === safe.target && cached.version === version)
+          return requireTarget(cached.row, candidate, strictId);
         const row = await read(safe.target, safe.stat, project);
+        requireTarget(row, candidate, strictId);
         // A live append during parsing must not mark a partial projection as current.
         const after = await safeFile(file, base);
         forget(file);
@@ -114,8 +133,10 @@ function createArchiveHistory({ root, project, read = readSummary }) {
         }
         return row;
       } catch (error) {
-        forget(file);
-        if (['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM'].includes(error.code)) return null;
+        // Keep the last verified identity on strict failures so a later retry
+        // cannot reinterpret an unreadable renamed archive as an unrelated row.
+        if (!strictId || error.code === 'ENOENT') forget(file);
+        if ((strictId ? ['ENOENT'] : ['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM']).includes(error.code)) return null;
         throw error;
       }
     })();
@@ -123,36 +144,39 @@ function createArchiveHistory({ root, project, read = readSummary }) {
     try { return await work; } finally { pending.delete(file); }
   }
 
-  async function refresh() {
-    if (refreshing) return refreshing;
+  async function refresh(strictId = '') {
+    if (!strictId && refreshing) return refreshing;
     const work = (async () => {
       let base, folders;
       try {
         base = await fs.promises.realpath(root);
         folders = await fs.promises.readdir(path.join(root, 'sessions'), { withFileTypes: true });
       } catch (error) {
-        if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error;
+        if (!(strictId ? ['ENOENT'] : ['ENOENT', 'ENOTDIR']).includes(error.code)) throw error;
         files.clear(); byId.clear(); return [];
       }
       const groups = await mapLimit(folders.filter(entry => entry.isDirectory() || entry.isSymbolicLink()), async entry => {
         const directory = path.join(root, 'sessions', entry.name);
         try {
-          if (!inside(base, await fs.promises.realpath(directory))) return [];
+          if (!inside(base, await fs.promises.realpath(directory))) {
+            if (strictId) throw unsafeArchive();
+            return [];
+          }
           return (await fs.promises.readdir(directory, { withFileTypes: true }))
             .filter(item => (item.isFile() || item.isSymbolicLink()) && item.name.endsWith('.jsonl'))
             .map(item => path.join(directory, item.name));
         } catch (error) {
-          if (['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM'].includes(error.code)) return [];
+          if ((strictId ? ['ENOENT'] : ['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM']).includes(error.code)) return [];
           throw error;
         }
       });
       const paths = groups.flat(), seen = new Set(paths);
       for (const file of files.keys()) if (!seen.has(file)) forget(file);
-      const rows = await mapLimit(paths, file => load(file, base));
+      const rows = await mapLimit(paths, file => load(file, base, strictId));
       return rows.filter(Boolean).sort((a, b) => Number(b.at) - Number(a.at));
     })();
-    refreshing = work;
-    try { return await work; } finally { refreshing = null; }
+    if (!strictId) refreshing = work;
+    try { return await work; } finally { if (refreshing === work) refreshing = null; }
   }
 
   // A click can arrive before the sidebar's initial full projection has
@@ -161,13 +185,13 @@ function createArchiveHistory({ root, project, read = readSummary }) {
   // megabytes), which leaves the chat screen showing its opening skeleton for
   // a long time. Pi puts the session id in the archive filename, so first do
   // a cheap filename-only lookup and parse just the requested transcript.
-  async function locateById(wanted, base) {
+  async function locateById(wanted, base, strict = false) {
     const sessionsRoot = path.join(base, 'sessions');
     let folders;
     try {
       folders = await fs.promises.readdir(sessionsRoot, { withFileTypes: true });
     } catch (error) {
-      if (['ENOENT', 'ENOTDIR'].includes(error.code)) return null;
+      if ((strict ? ['ENOENT'] : ['ENOENT', 'ENOTDIR']).includes(error.code)) return null;
       throw error;
     }
     const exact = wanted + '.jsonl';
@@ -177,22 +201,28 @@ function createArchiveHistory({ root, project, read = readSummary }) {
       async entry => {
         const directory = path.join(sessionsRoot, entry.name);
         try {
-          if (!inside(base, await fs.promises.realpath(directory))) return null;
+          if (!inside(base, await fs.promises.realpath(directory))) {
+            if (strict) throw unsafeArchive();
+            return null;
+          }
           const names = await fs.promises.readdir(directory, { withFileTypes: true });
           const match = names.find(item => (item.isFile() || item.isSymbolicLink()) &&
             (item.name === exact || item.name.endsWith(suffix)));
           return match ? path.join(directory, match.name) : null;
         } catch (error) {
-          if (['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM'].includes(error.code)) return null;
+          if ((strict ? ['ENOENT'] : ['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM']).includes(error.code)) return null;
           throw error;
         }
       },
     );
     return groups.find(Boolean) || null;
   }
-  async function find(id) {
+  async function find(id, { strict = false } = {}) {
     const wanted = String(id || '').trim();
     if (!wanted) return null;
+    // A destructive caller needs a verified absence, not the sidebar's tolerant
+    // omission of unreadable/invalid rows. Non-target malformed JSON stays hidden.
+    const strictId = strict ? wanted : '';
     // Retry discovery once if an indexed archive was moved/deleted externally.
     // A live Pi session can append while the directory scan is reading it. In
     // that case load() deliberately avoids caching the moving projection; use
@@ -204,16 +234,16 @@ function createArchiveHistory({ root, project, read = readSummary }) {
       if (!file && !attempt) {
         try {
           const base = await fs.promises.realpath(root);
-          const direct = await locateById(wanted, base);
+          const direct = await locateById(wanted, base, strict);
           if (direct) {
-            const row = await load(direct, base);
+            const row = await load(direct, base, strictId);
             if (row && row.id === wanted) return row;
           }
         } catch (error) {
-          if (!['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM'].includes(error.code)) throw error;
+          if (!(strict ? ['ENOENT'] : ['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM']).includes(error.code)) throw error;
         }
       }
-      if (attempt) refreshed = await refresh();
+      if (attempt) refreshed = await refresh(strictId);
       if (!file) {
         const direct = Array.isArray(refreshed)
           ? refreshed.find((row) => row && row.id === wanted)
@@ -223,10 +253,10 @@ function createArchiveHistory({ root, project, read = readSummary }) {
       }
       try {
         // Even a cache hit revalidates the real path, revision and identity.
-        const row = await load(file, await fs.promises.realpath(root));
+        const row = await load(file, await fs.promises.realpath(root), strictId);
         if (row && row.id === wanted) return row;
       } catch (error) {
-        if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error;
+        if (!(strict ? ['ENOENT'] : ['ENOENT', 'ENOTDIR']).includes(error.code)) throw error;
         forget(file);
       }
     }

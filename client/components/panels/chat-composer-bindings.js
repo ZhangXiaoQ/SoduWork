@@ -138,10 +138,9 @@ function _mount() {
             '<div class="nbar">' +
               '<div class="nbar-left">' +
                 '<button type="button" class="nmeta" id="nchatMeta" title="查看上下文用量" aria-label="查看上下文用量"></button>' +
-                '<button class="nwd" id="nchatWd" title="AI 就在这个文件夹里干活 · 点击打开">' +
+                '<span class="nwd" id="nchatWd" title="工作位置">' +
                   '<svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8' +
-                    'a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span>…</span></button>' +
-                '<button class="nwd ghost" id="nchatWdPick" title="换一个文件夹">换</button>' +
+                    'a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span>…</span></span>' +
                 '<button class="nmode" id="nchatMode" title="只读＝只让它看，不许写文件、不许跑命令">' +
                   '<span></span></button>' +
               '</div>' +
@@ -391,6 +390,10 @@ function _bind(el) {
       state: () => ({ ref: ctx._ref, adapterId: ctx._snap?.adapterId || ctx._sessionOptions.adapterId || 'pi', displayName: ctx._snap?.displayName || ctx._sessionOptions.displayName, model: ctx._model,
         mode: ctx._mode, accessPolicy: ctx._snap?.accessPolicy, nextAccessPolicy: ctx._snap?.nextAccessPolicy, accessControl: ctx._snap?.accessControl || ctx._sessionOptions.accessControl,
         selection: ctx._snap && ctx._snap.modelSelection, thinking: ctx._snap && ctx._snap.thinking,
+        taskRuntime: ctx._activeCollabTaskId && !(ctx._sessionOptions.acceptanceSession || ctx._sessionOptions.acceptanceExecutionSession) &&
+          global.RequirementSessionContext?.executionRuntime(ctx._collabTasks?.get(ctx._activeCollabTaskId)?.task ||
+            (ctx._collaborationTask?.id === ctx._activeCollabTaskId ? ctx._collaborationTask : null),
+          ctx._sessionId, ctx._snap?.execution?.taskExecutions),
         cloudHandoff: ctx._snap?.cloudHandoff, busy: ctx._runtimeBusy(), runtimeSwitching: ctx._snap?.runtimeSwitching,
         recoveryRequired: ctx._snap?.execution?.recoveryRequired, recoveryReason: ctx._snap?.statusText, ...draftControls.state() }),
       say: message => { if (typeof petSay === 'function') petSay(message); },
@@ -472,12 +475,6 @@ function _bind(el) {
         return;
       }
       ctx._proposalAction(event);
-    });
-    el.querySelector('#nchatWd').addEventListener('click', () => {
-      const api = ctx._api();
-      if (!api) return;
-      if (ctx._ref && typeof api.openSessionWorkdir === 'function') api.openSessionWorkdir(ctx._ref);
-      else api.openWorkdir();
     });
     ctx._paintBar();
     if (global.ChatChrome) ChatChrome.bind(el, () => ({ ref: ctx._ref, snapshot: ctx._snap }));

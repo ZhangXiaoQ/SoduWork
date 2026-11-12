@@ -1,0 +1,26 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self'">
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:transparent;font:14px 'Segoe UI',sans-serif}
+body{display:grid;place-items:center}
+button{border:0;padding:0;width:60px;height:72px;background:transparent;border-radius:16px;cursor:pointer;-webkit-app-region:no-drag}
+button:focus-visible{outline:2px solid #2563eb;outline-offset:-2px}
+img{width:58px;height:58px;object-fit:contain;pointer-events:none;-webkit-user-drag:none}
+p{display:none;color:#71717a;font-size:14px}
+body.loading button{display:none}body.loading p{display:block}
+</style></head><body>
+<button type="button" aria-label="打开应用对话" title="打开应用对话"><img src="icon.png" alt=""></button><p role="status">正在打开…</p>
+<script>
+const api=window.soduWorkAPI.workPreview,button=document.querySelector('button');
+function locale(value){const english=!String(value).startsWith('zh');button.title=english?'Open app conversation':'打开应用对话';button.setAttribute('aria-label',button.title);document.querySelector('p').textContent=english?'Opening…':'正在打开…';}
+locale(navigator.language);
+let drag;
+button.onpointerdown=event=>{if(event.button!==0)return;drag={id:event.pointerId,x:event.screenX,y:event.screenY,moved:false};button.setPointerCapture(event.pointerId);};
+button.onpointermove=event=>{if(!drag)return;if(Math.hypot(event.screenX-drag.x,event.screenY-drag.y)>5)drag.moved=true;if(drag.moved)void api.composerSetMode({railScreenY:event.screenY,railArrival:false});};
+button.onpointerup=()=>{if(drag?.moved){button.dataset.dragged='true';}drag=null;};
+button.onpointercancel=()=>{drag=null;};
+button.onclick=()=>{if(button.dataset.dragged){delete button.dataset.dragged;return;}document.body.classList.add('loading');void api.composerSetMode({expanded:true}).then(result=>{if(!result?.ok)document.body.classList.remove('loading');}).catch(()=>{document.body.classList.remove('loading');});};
+void api.composerHello().then(result=>locale(result.locale||navigator.language));
+window.soduWorkAPI.onLocaleChange?.(locale);
+</script></body></html>

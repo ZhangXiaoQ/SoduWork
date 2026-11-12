@@ -1,4 +1,4 @@
-/* SoduWork H5 SDK v1.6.0. Works in native app pages and authorized iframes.
+/* SoduWork H5 SDK v1.7.0. Works in native app pages and authorized iframes.
  * Parent: configure({allowedFrameOrigins:['https://business.example']}).
  * Child: configure({parentOrigin:'https://shell.example'}).
  * await soduWorkApp.chat.send({text:'...', requestId:crypto.randomUUID()}); */
@@ -6,7 +6,7 @@
   'use strict';
   if (global.soduWorkApp) return;
   const channel = 'soduwork.app/v1', native = global.soduWorkAppBridge;
-  const methods = new Set(['ai.generate', 'context.get', 'user.getCurrent', 'notifications.list', 'library.list', 'library.read', 'conversations.list', 'conversations.messages', 'directory.list', 'composer.mention', 'composer.send', 'composer.insertText', 'composer.expand', 'composer.collapse', 'settings.get', 'settings.update', 'automation.create', 'data.apps', 'data.get', 'data.list', 'data.batch', 'data.assetPut', 'data.assetGet', 'mcp.connect',
+  const methods = new Set(['files.pickLocal','files.copyLocal','files.begin','files.append','files.finish','files.cancel','files.getUrl','ai.generate', 'context.get', 'user.getCurrent', 'notifications.list', 'library.list', 'library.read', 'conversations.list', 'conversations.messages', 'directory.list', 'composer.mention', 'composer.send', 'composer.insertText', 'composer.expand', 'composer.collapse', 'settings.get', 'settings.update', 'automation.create', 'data.apps', 'data.get', 'data.list', 'data.batch', 'data.assetPut', 'data.assetGet', 'mcp.connect',
     'attachments.pick','attachments.begin','attachments.append','attachments.finish','attachments.release','attachments.check']);
   const origins = new Set([location.origin]), pending = new Map();
   const listeners = new Set(), dataListeners = new Set();
@@ -42,7 +42,7 @@
     const data = event.data;
     if (!data || data.channel !== channel || typeof data.id !== 'string' || !/^[A-Za-z0-9-]{1,80}$/.test(data.id)) return;
     if (event.source === global.parent && event.source !== global && event.origin === parentOrigin) {
-      if(data.type==='data-changed'){if(['identity','notifications','conversations','library'].includes(data.topic))dataListeners.forEach(fn=>{try{fn({topic:data.topic});}catch(_){}});return;}
+      if(data.type==='data-changed'){if(['identity','notifications','conversations','library','content'].includes(data.topic))dataListeners.forEach(fn=>{try{fn({topic:data.topic,...(data.topic==='content'?{spaceId:data.spaceId,topicId:data.topicId}:{})});}catch(_){}});return;}
       if (data.type === 'settled') { listeners.forEach(callback => { try { callback({ state: 'settled' }); } catch (_) {} }); return; }
       if (data.type !== 'response') return;
       const row = pending.get(data.id); if (!row) return;
@@ -75,9 +75,9 @@
     });
   }
   native?.events?.onDataChanged?.(value=>{
-    if(!['identity','notifications','conversations','library'].includes(value?.topic))return;
-    dataListeners.forEach(fn=>{try{fn({topic:value.topic});}catch(_){}});
-    document.querySelectorAll('iframe').forEach(frame=>{try{const source=new URL(frame.src,location.href).origin;if(origins.has(source))frame.contentWindow.postMessage({channel,type:'data-changed',id:'data',topic:value.topic},source);}catch(_){}});
+    if(!['identity','notifications','conversations','library','content'].includes(value?.topic))return;
+    dataListeners.forEach(fn=>{try{fn({topic:value.topic,...(value.topic==='content'?{spaceId:value.spaceId,topicId:value.topicId}:{})});}catch(_){}});
+    document.querySelectorAll('iframe').forEach(frame=>{try{const source=new URL(frame.src,location.href).origin;if(origins.has(source))frame.contentWindow.postMessage({channel,type:'data-changed',id:'data',topic:value.topic,...(value.topic==='content'?{spaceId:value.spaceId,topicId:value.topicId}:{})},source);}catch(_){}});
   });
   native?.events?.onTurnSettled(settled);
   async function importFile(file, options = {}) {
@@ -99,7 +99,27 @@
       return result.item;
     } catch (error) { await invoke('attachments.release', {ids:[started.id]}).catch(() => {}); throw error; }
   }
-  global.soduWorkApp = Object.freeze({ version: '1.6.0', configure, request: invoke, createRequestId: id,
+  async function saveLocalFile(file, options = {}) {
+    if(!file || typeof file.slice!=='function')throw Error('请选择有效文件');
+    const begin=await invoke('files.begin',{projectId:options.projectId,name:file.name||options.name||'image',type:file.type||'application/octet-stream',size:file.size});
+    if(!begin?.ok)throw Object.assign(Error(begin?.reason||'文件保存未开始'),{code:begin?.code});
+    if(!/^upload_[a-f0-9]{32}$/.test(begin.id||'') || !Number.isSafeInteger(begin.chunkBytes) || begin.chunkBytes<1 || begin.chunkBytes>512*1024)throw Error('文件上传回执无效');
+    try {
+      for(let offset=0;offset<file.size;offset+=begin.chunkBytes){
+        if(options.signal?.aborted)throw Error('文件保存已取消');
+        const data=new Uint8Array(await file.slice(offset,offset+begin.chunkBytes).arrayBuffer());
+        const receipt=await invoke('files.append',{id:begin.id,offset,data});
+        if(!receipt?.ok || receipt.offset!==offset+data.length)throw Error(receipt?.reason||'文件分块未确认');
+        options.onProgress?.({loaded:receipt.offset,total:file.size});
+        await new Promise(resolve=>setTimeout(resolve,0));
+      }
+      const result=await invoke('files.finish',{id:begin.id});
+      if(!result?.ok||!result.file?.url)throw Error(result?.reason||'文件保存未完成');
+      return result;
+    } catch(error){try{await invoke('files.cancel',{id:begin.id});}catch(_){}throw error;}
+  }
+  global.soduWorkApp = Object.freeze({ version: '1.7.0', configure, request: invoke, createRequestId: id,
+    files:Object.freeze({pickLocal:()=>invoke('files.pickLocal',{}),copyLocal:options=>invoke('files.copyLocal',options),importFile:saveLocalFile,getUrl:options=>invoke('files.getUrl',options)}),
     ai: Object.freeze({generate: options => invoke('ai.generate', {...options, requestId: options?.requestId || id()})}),
     data: Object.freeze({ apps: () => invoke('data.apps',{}), get: options => invoke('data.get', options), list: options => invoke('data.list', options), batch: options => invoke('data.batch', options), assetPut: options => invoke('data.assetPut',options), assetGet: options => invoke('data.assetGet',options) }),
     mcp: Object.freeze({connect:options => invoke('mcp.connect',options)}),

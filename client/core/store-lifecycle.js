@@ -3,6 +3,9 @@
 (function (global) {
   'use strict';
   const LS_CFG = 'soduwork_work_cfg_v5', LS_CFG_PENDING = LS_CFG + '_sync_pending';
+  const LS_CFG_LOCALE = LS_CFG + '_locale', LS_CFG_LOCALE_EXPLICIT = LS_CFG_LOCALE + '_explicit';
+  const LS_CFG_LOCALE_SOURCE = LS_CFG_LOCALE + '_source';
+  const SUPPORTED_LOCALES = new Set(['zh-CN', 'en-US', 'ja-JP', 'ko-KR']);
   const CFG_SERVER_OWNED = ['modelProviders'];
   const stripServerOwned = value => {
     if (value && typeof value === 'object') CFG_SERVER_OWNED.forEach(key => { delete value[key]; });
@@ -11,6 +14,29 @@
   function safeParseCfg(raw) {
     try { const value = JSON.parse(raw || '{}'); return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; }
     catch (_) { return {}; }
+  }
+  function normalizeLocale(value) {
+    const locale = String(value || '').trim();
+    const registry = global.SoduWorkI18n?.LOCALES;
+    return (registry && Object.prototype.hasOwnProperty.call(registry, locale)) || SUPPORTED_LOCALES.has(locale) ? locale : '';
+  }
+  function localLocaleIntent() {
+    try {
+      const mirror = normalizeLocale(global.localStorage.getItem(LS_CFG_LOCALE));
+      if (!mirror) return '';
+      if (global.localStorage.getItem(LS_CFG_LOCALE_EXPLICIT) === '1') return mirror;
+      if (global.localStorage.getItem(LS_CFG_LOCALE_SOURCE) === 'hub') return '';
+      // Preserve preferences written by versions without the explicit marker,
+      // while a fresh profile with only the renderer mirror still accepts Hub.
+      const raw = global.localStorage.getItem(LS_CFG);
+      const stored = safeParseCfg(raw);
+      if (Object.prototype.hasOwnProperty.call(stored, 'locale')) {
+        return normalizeLocale(stored.locale) === mirror ? mirror : '';
+      }
+      // Older clients only persisted the mirror. A non-default mirror is a
+      // recoverable local preference, while a fresh profile starts at en-US.
+      return mirror === 'en-US' ? '' : mirror;
+    } catch (_) { return ''; }
   }
   function cfgSyncPending() {
     try { return global.localStorage.getItem(LS_CFG_PENDING) === '1'; } catch (_) { return true; }
@@ -40,6 +66,7 @@
       _hydratePromise: null, _configPromise: null, _startupPromise: null,
       _reconnectPromise: null, _heartbeatPromise: null, _waitingHeartbeat: false,
       _snapshotEvents: null, _cfgSyncWarned: false,
+      _localLocaleIntent: '',
       _reportTaskSyncError(id, error, message) {
         emit('soduwork-task-sync-error', { id, error });
         if (typeof global.petSay === 'function') global.petSay(message, 6000);
@@ -68,6 +95,7 @@
         this._waitingHeartbeat = false; this._hydratePromise = null; this._configPromise = null;
         this._reconnectPromise = null; this._heartbeatPromise = null; this._snapshotEvents = null; this._startupPromise = null;
         this._tasks.length = 0; this._shadow = Object.create(null); this._clearIncomingTasks();
+        this._localLocaleIntent = '';
         if (this._wsOff) { try { this._wsOff(); } catch (_) {} this._wsOff = null; }
         this._setTaskSource('loading', '', { environmentChanged: true });
         emit('soduwork-work-task-change', { type: 'tasks.environment', all: true }); hooks.render();
@@ -123,10 +151,19 @@
         const previous = { ...this._cfg };
         // An earlier config GET must not overwrite a newer administrator action.
         ++this._cfgRevision;
-        stripServerOwned(patch); Object.assign(this._cfg, patch);
-        if (patch.locale) global.SoduWorkI18n?.setLocale(patch.locale, { persist: false });
+        const incoming = stripServerOwned({ ...patch });
+        // Refresh the local intent because the user may have changed locale
+        // after startup while a Hub push was still in flight.
+        this._localLocaleIntent = localLocaleIntent();
+        if (incoming.locale && this._localLocaleIntent &&
+            normalizeLocale(incoming.locale) !== this._localLocaleIntent) delete incoming.locale;
+        Object.assign(this._cfg, incoming);
+        if (incoming.locale && !this._localLocaleIntent) {
+          try { global.localStorage.setItem(LS_CFG_LOCALE_SOURCE, 'hub'); } catch (_) {}
+        }
+        if (incoming.locale) global.SoduWorkI18n?.setLocale(incoming.locale, { persist: false });
         global.localStorage.setItem(LS_CFG, JSON.stringify(this._cfg)); global.WinSync?.pushCfg();
-        hooks.configEffects(patch, previous); global.petSay?.('管理员更新了设置～');
+        hooks.configEffects(incoming, previous); global.petSay?.('管理员更新了设置～');
       },
       initLocal() {
         if (!this._localReady) {
@@ -135,17 +172,43 @@
         }
         return { tasks: this._tasks, cfg: this._cfg };
       },
+      _reconcileLocalLocale() {
+        const locale = localLocaleIntent();
+        this._localLocaleIntent = locale;
+        const stored = safeParseCfg(global.localStorage.getItem(LS_CFG));
+        // A recovered mirror also needs syncing when it matches the in-memory
+        // default: that default is not evidence of a persisted local choice.
+        if (!locale || (normalizeLocale(this._cfg.locale) === locale &&
+            normalizeLocale(stored.locale) === locale)) return false;
+        ++this._cfgRevision;
+        this._cfg.locale = locale;
+        try {
+          global.localStorage.setItem(LS_CFG, JSON.stringify(stripServerOwned(Object.assign({}, this._cfg))));
+          cfgSyncMark();
+        } catch (_) {}
+        global.SoduWorkI18n?.setLocale(locale, { persist: false, broadcast: false });
+        return true;
+      },
       _loadConfig(revision) {
         if (this._configPromise || !api()?.getConfig) return;
         const epoch = this._taskEpoch, key = scope();
         const job = Promise.resolve().then(() => api().getConfig()).then(apiCfg => {
           if (!current(epoch, key)) return;
+          this._localLocaleIntent = localLocaleIntent();
           if (cfgSyncPending()) this._syncCfgToHub();
           else if (this._cfgRevision === revision && apiCfg && Object.keys(apiCfg).length) {
             const previous = JSON.stringify(this._cfg);
-            stripServerOwned(apiCfg);
-            Object.assign(this._cfg, apiCfg);
-            if (apiCfg.locale) global.SoduWorkI18n?.setLocale(apiCfg.locale, { persist: false });
+            const incoming = stripServerOwned({ ...apiCfg });
+            // A locale selected on this device is a local preference. Hub may
+            // still expose an older per-device default, so keep the local value
+            // while accepting unrelated remote configuration fields.
+            if (this._localLocaleIntent && incoming.locale &&
+              normalizeLocale(incoming.locale) !== this._localLocaleIntent) delete incoming.locale;
+            Object.assign(this._cfg, incoming);
+            if (incoming.locale && !this._localLocaleIntent) {
+              try { global.localStorage.setItem(LS_CFG_LOCALE_SOURCE, 'hub'); } catch (_) {}
+            }
+            if (incoming.locale) global.SoduWorkI18n?.setLocale(incoming.locale, { persist: false });
             global.localStorage.setItem(LS_CFG, JSON.stringify(stripServerOwned(this._cfg)));
             if (previous !== JSON.stringify(this._cfg)) emit('soduwork-config-hydrated', { configChanged: true });
           }
@@ -155,6 +218,7 @@
       },
       hydrate(force, startedCfgRevision) {
         this.initLocal();
+        this._reconcileLocalLocale();
         if (this._waitingHeartbeat) return Promise.resolve({ online: false, waitingHeartbeat: true });
         if (this._hydratePromise) return this._hydratePromise;
         if (this._remoteReady && !force) return Promise.resolve({ online: true, unchanged: true });

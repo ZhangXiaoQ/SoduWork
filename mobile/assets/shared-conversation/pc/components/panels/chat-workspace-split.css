@@ -1,7 +1,0 @@
-/* Layout feedback lives on the divider; document content stays mounted. */
-.nchat.ncw-snap-ready .ncw-resize::after{content:attr(data-snap-label);position:absolute;top:calc(50% - 54px);left:50%;translate:-50% 0;white-space:nowrap;pointer-events:none;padding:8px 12px;border:1px solid color-mix(in srgb,var(--accent) 24%,var(--line));border-radius:10px;background:var(--bg-0);color:var(--ink-2);font:500 14.5px/1.4 var(--font-ui);box-shadow:0 4px 16px color-mix(in srgb,var(--ink-1) 8%,transparent)}
-.nchat.ncw-snap-ready .ncw-resize>span{background:var(--accent-soft);border-color:var(--accent)}
-.nchat.ncw-maximized [data-wb-maximize]{display:inline-flex;align-items:center;justify-content:center;gap:6px;width:auto;min-width:30px;flex:none;padding-inline:10px;color:var(--ink-2);background:var(--bg-1)}
-.nchat.ncw-maximized [data-wb-maximize]>span{white-space:nowrap;font:500 14.5px/1.4 var(--font-ui)}
-.nchat [data-wb-maximize]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-@media(max-width:960px){.nchat.ncw-open.ncw-maximized .ncw{width:100%;inset:0}}

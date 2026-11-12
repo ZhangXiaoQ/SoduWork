@@ -27,10 +27,9 @@ async function fixture(deferredTarget = '1.2.13', options = {}) {
   const packageInfo = require('../package.json');
   const priorDistribution = packageInfo.soduworkDistribution;
   const priorChannel = packageInfo.soduworkUpdateChannel;
-  if (options.channel) {
-    packageInfo.soduworkUpdateChannel = options.channel;
-    packageInfo.soduworkDistribution = require('../main/distribution.cjs').getProfile();
-  }
+  if (options.channel) packageInfo.soduworkUpdateChannel = options.channel;
+  if (options.distribution) packageInfo.soduworkDistribution =
+    require('../main/distribution.cjs').getProfile(options.distribution);
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'soduwork-updater-state-'));
   const appPath = path.join(root, 'app');
   const updateRoot = path.join(root, 'client-updates');
@@ -198,7 +197,7 @@ async function fixture(deferredTarget = '1.2.13', options = {}) {
 test('Windows self-hosted beta downloads, verifies and hands off a newer beta for installation', async () => {
   await withPlatform('win32', async () => {
     let launches = 0;
-    const ctx = await fixture('other', { download: true,
+    const ctx = await fixture('other', { distribution: 'self-hosted', download: true,
       currentVersion: '1.13.11-beta.532', version: '1.13.11-beta.533', channel: 'beta',
       minVersion: '1.13.11-beta.532', artifactName: 'SoduWork-1.13.11-beta.533-Setup.exe',
       launchHelper: async () => { launches++; },

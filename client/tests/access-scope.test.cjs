@@ -97,7 +97,15 @@ test('query executor bypasses shell startup and refuses writable-workspace execu
 });
 
 test('real Pi directory search skips credentials, external links and inherited ripgrep configuration', { timeout: 30000 }, async t => {
+  // The production safe-query executor uses PATH, not the SDK's private tool cache.
+  // A missing executable intentionally asks for approval; fail before creating a
+  // session instead of leaving this noninteractive fixture waiting for a person.
+  const trustedProgram = require('../main/access-control/query-execution').trustedProgram;
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-query-search-'));
+  if (!trustedProgram('rg', path.join(root, 'workspace'), policy.canonical, policy.within)) {
+    fs.rmSync(root, { recursive: true, force: true });
+    assert.fail('This real directory-search test requires ripgrep (rg) on PATH; install it before running the suite.');
+  }
   const sdk = await import(require('node:url').pathToFileURL(path.resolve(__dirname, '../node_modules/@earendil-works/pi-coding-agent/dist/index.js')).href);
   const fixture = await require('../e2e/fixtures/access-sdk.cjs').create(root, 'standard', () => {}, { customTools: [sdk.createBashTool(path.join(root, 'workspace'))] });
   t.after(async () => { await fixture.close(); fs.rmSync(root, { recursive: true, force: true }); });

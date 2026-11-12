@@ -89,6 +89,8 @@ async def build_export(session, user):
     ]:
         rows = (await session.execute(select(model).where(predicate))).scalars().all()
         manifest[key] = [_fields(row, fields) for row in rows]
+    from .legal_publications import receipt_details
+    manifest["legalReceipts"] = await receipt_details(session, user.id, include_notices=True)
     total = len(_json(manifest))
     if total > MAX_EXPORT_BYTES:
         raise ValueError("EXPORT_TOO_LARGE")

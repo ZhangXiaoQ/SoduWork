@@ -36,7 +36,7 @@ test('both renderers load the plugin factory before constructing the shared API 
     assert.ok(scripts.indexOf('core/api-work-plugins.js') < scripts.indexOf('api.js'));
   }
   const { window, api } = runtime();
-  for (const name of ['SoduWorkAPI']) assert.equal(window[name], api);
+  for (const name of ['SoduWorkAPI', 'SoduWorkAPI', 'SoduWorkAPI']) assert.equal(window[name], api);
   const replacement = async () => ({ items: [] });
   window.SoduWorkAPI.pluginCatalog = replacement;
   assert.equal(api.pluginCatalog, replacement, 'existing caller patches still affect the one public object');

@@ -20,7 +20,7 @@
   }
   function checked(result, node) {
     if (!isCurrent(node)) throw Error(('账号或服务已切换，请重新打开云端环境'));
-    if (result?.ok === false) throw Error(result.reason || result.message || ('操作没有完成，请重试'));
+    if (result?.ok === false) throw Error(result.reason || result.error || result.message || ('操作没有完成，请重试'));
     return result;
   }
   function failure(node, error) { const box = node.querySelector('[role=alert]'); box.textContent = (error.message || '操作没有完成，请重试'); box.hidden = false; }
@@ -110,9 +110,10 @@
   }
   async function showInstallResult(node, result, setup, onChange, runnerId) {
     const installed = result?.installed !== false && result?.ok !== false;
+    const title = result?.connectionOnly ? '连接信息已保存' : installed ? 'Runner 安装已完成' : '连接测试通过，但 Runner 安装未完成';
     const fallback = setupCommand({ setup }, result?.platform || 'linux');
     node.dataset.created = 'true';
-    node.querySelector('.ce-dialog-body').innerHTML = '<div class="ce-onetime"><span class="ce-onetime-badge">' + (installed ? 'SSH 连接已验证' : '需要手动完成') + '</span><h3>' + (installed ? '云端电脑已接入' : '连接测试通过，但 Runner 安装未完成') + '</h3><p>' + esc(result?.message || (installed ? 'SoduWork 已通过 SSH 完成 Runner 安装，稍后会自动检测在线状态。' : '请在目标电脑终端执行下方命令，完成后回到这里检查连接。')) + '</p>' + (installed || !fallback ? '' : '<div class="ce-command"><pre translate="no"></pre><button type="button" data-ce-copy>复制安装命令</button></div>') + '</div><div class="ce-connection-check"><p data-ce-connection role="status">正在刷新执行机状态…</p><button type="button" data-ce-check>检查连接</button></div><p class="ce-error" role="alert" hidden></p>';
+    node.querySelector('.ce-dialog-body').innerHTML = '<div class="ce-onetime"><span class="ce-onetime-badge">' + (installed ? 'SSH 连接已验证' : '需要手动完成') + '</span><h3>' + title + '</h3><p>' + esc(result?.message || (installed ? 'SoduWork 已通过 SSH 完成 Runner 安装，稍后会自动检测在线状态。' : '请在目标电脑终端执行下方命令，完成后回到这里检查连接。')) + '</p>' + (installed || !fallback ? '' : '<div class="ce-command"><pre translate="no"></pre><button type="button" data-ce-copy>复制安装命令</button></div>') + '</div><div class="ce-connection-check"><p data-ce-connection role="status">正在刷新执行机状态…</p><button type="button" data-ce-check>检查连接</button></div><p class="ce-error" role="alert" hidden></p>';
     translateDialog(node);
     if (!installed && fallback) {
       node.querySelector('pre').textContent = fallback;
@@ -147,7 +148,7 @@
     if (!isCurrent(node)) return;
     if (persisted?.ok === false) throw Error(persisted.reason || persisted.error || ('连接信息保存失败'));
     if (row) {
-      await showInstallResult(node, { installed: true, message: '连接信息已更新，云端会话将自动使用这台电脑。' }, {}, onChange, row.id); return;
+      await showInstallResult(node, { installed: true, connectionOnly: true, message: 'SSH 连接已验证；Runner 是否在线以下方检查结果为准。' }, {}, onChange, row.id); return;
     }
     const name = form.elements.name.value.trim(), hub = form.elements.hub.value.trim(), workRoot = form.elements.workRoot.value.trim();
     progress(node, 'SSH 已连接，正在创建云端环境…');
@@ -208,11 +209,32 @@
   }
   function rotate(row, onChange, service) {
     if (!row?.canManage || row.credential?.canRotate === false) return;
-    const node = dialog('更新接入密钥', row.name || row.id, '<p>请先停止目标电脑上的 Runner，并确认没有运行中的会话。生成后旧密钥立即失效，在目标电脑重新执行接入命令即可恢复连接。</p><details class="ce-advanced"><summary>连接与工作目录</summary><label>SoduWork 服务地址<input name="hub" type="url" value="' + esc(service?.recommendedHub || '') + '" placeholder="留空使用当前服务地址"></label><label>工作目录（可选）<input name="workRoot" maxlength="500" value="' + esc(row.workRoot || '') + '" placeholder="留空使用执行机默认目录"></label><p class="ce-help">新目录会写入接入命令，在目标电脑执行后生效。已有文件会保留在原目录。</p></details><p class="ce-help">完整凭据只显示这一次，关闭窗口后无法恢复。</p>', '生成新密钥', { translateSubtitle: false });
+    const node = dialog('更新接入密钥', row.name || row.id, '<p>请确认目标电脑没有运行中的会话。更新后旧密钥立即失效；已保存 SSH 连接时，客户端会先验证连接，再自动更新并启动 Runner。没有可用 SSH 连接时，将提供一次性接入命令。</p><details class="ce-advanced"><summary>连接与工作目录</summary><label>SoduWork 服务地址<input name="hub" type="url" value="' + esc(service?.recommendedHub || '') + '" placeholder="留空使用当前服务地址"></label><label>工作目录（可选）<input name="workRoot" maxlength="500" value="' + esc(row.workRoot || '') + '" placeholder="留空使用执行机默认目录"></label><p class="ce-help">新目录在 Runner 重新接入后生效。已有文件会保留在原目录。</p></details><p class="ce-help">完整凭据只显示这一次，关闭窗口后无法恢复。</p>', '生成新密钥', { translateSubtitle: false });
     if (!node) return;
     const form = node.querySelector('form');
     form.addEventListener('invalid', event => { const details = event.target.closest('details'); if (details) details.open = true; }, true);
-    form.addEventListener('submit', event => { event.preventDefault(); if (node.dataset.created) { close(); return; } if (!form.reportValidity()) return; void run(node, async () => { const payload = {workRoot: form.elements.workRoot.value.trim()}; if (form.elements.hub.value.trim()) payload.hub = form.elements.hub.value.trim(); const platform = 'linux'; const result = checked(await global.SoduWorkAPI.rotateCloudEnvironmentCredential(row.id, payload), node); showOneTimeCredential(node, result, platform, '新的接入凭据', onChange); onChange?.(); }); });
+    form.addEventListener('submit', event => { event.preventDefault(); if (node.dataset.created) { close(); return; } if (!form.reportValidity()) return; void run(node, async () => {
+      const payload = { workRoot: form.elements.workRoot.value.trim() };
+      if (form.elements.hub.value.trim()) payload.hub = form.elements.hub.value.trim();
+      const platform = 'linux', native = global.soduWorkAPI?.cloudComputer;
+      const hub = global.SoduWorkAPI?.hubConfig?.()?.hub || '';
+      const saved = native?.get ? checked(await native.get({ hub }), node) : null;
+      const automatic = saved?.configured && native?.test && native?.install;
+      // Verify saved SSH access before revoking the existing Runner credential.
+      if (automatic) {
+        progress(node, '正在测试 SSH 连接…');
+        checked(await native.test({ credential: { hub } }), node);
+      }
+      const result = checked(await global.SoduWorkAPI.rotateCloudEnvironmentCredential(row.id, payload), node);
+      if (!automatic) { showOneTimeCredential(node, result, platform, '新的接入凭据', onChange); onChange?.(); return; }
+      progress(node, 'SSH 已连接，正在安装 Runner，可能需要几分钟…');
+      let install;
+      try { install = await native.install({ credential: { hub }, setup: result.setup || {}, platform }); }
+      catch (error) { install = { ok: false, error: error.message }; }
+      if (!isCurrent(node)) return;
+      await showInstallResult(node, { ...install, platform, message: install?.reason || install?.error || install?.message },
+        result.setup || {}, onChange, row.id);
+    }); });
   }
   function agent(setup) {
     const node = dialog('准备云端 Agent', '在目标电脑安装所需 Agent 后，刷新环境状态即可使用。', '<p>请在目标电脑上安装 Node.js 22.19 或更新版本，然后执行：</p><div class="ce-command"><pre translate="no">' + esc(setup?.command || 'npm install -g @earendil-works/pi-coding-agent@0.84.4') + '</pre></div><p class="ce-help">安装完成后重启 Runner，系统会自动重新检测 Agent。</p>', '知道了');

@@ -515,19 +515,21 @@
     if (contribution.source.openMode === 'external') {
       return global.soduWorkAPI.openExternal(url);
     }
-    if (packaged || context && context.detached) {
+    if (context?.isCurrent && !context.isCurrent()) return null;
+    if (packaged || context && (context.detached || context.embedded)) {
       /*
        * Open applications in independent native windows. Reuse workspace preview assertions, URL
        * rules, and bridge declarations; the main process enforces isolation and navigation
        * guards.
        */
       const preview = global.soduWorkAPI && soduWorkAPI.workPreview;
-      if (!preview || typeof preview.showDetached !== 'function') {
+      const open = context?.embedded ? preview?.showEmbedded : preview?.showDetached;
+      if (typeof open !== 'function') {
         throw new Error('当前窗口不支持独立即用窗口');
       }
-      const result = await preview.showDetached({
+      const result = await open({
         /* Derive tabId from application identity so repeated opens focus the existing window and preserve its state. */
-        tabId: 'app-' + String(contribution.pluginId || 'x').replace(/[^a-zA-Z0-9_-]+/g, '-')
+        tabId: (context?.embedded ? 'sidebar-app-' : 'app-') + String(contribution.pluginId || 'x').replace(/[^a-zA-Z0-9_-]+/g, '-')
           + '-' + String(contribution.id || '0').replace(/[^a-zA-Z0-9_-]+/g, '-').slice(0, 60),
         url, label: contribution.title,
         appVersion: String(context?.item?.installedVersion || context?.item?.version || '').trim(),
@@ -535,11 +537,12 @@
         ...(packaged ? { package: { pluginId: contribution.pluginId, contributionId: contribution.id } }
           : { appBridge: previewBridge(contribution, url) }),
         windowSettings: contribution.appWindow,
+        ...(context?.embedded ? { bounds: context.bounds } : {}),
       });
       if (!result || !result.ok) {
         throw new Error((result && result.reason) || '即用窗口没有打开成功');
       }
-      return { detached: true, tabId: result.tabId, url };
+      return { detached: !context?.embedded, embedded: !!context?.embedded, tabId: result.tabId, url };
     }
     let surface = null;
     const handle = mount({ id: 'plugin:' + contribution.pluginId + ':' + contribution.id,

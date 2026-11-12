@@ -44,6 +44,7 @@ let _app = null;
 let _usage = null;
 let _cloudHandoff = null;
 let _accountSync = null;
+let _sharedHistory = null;
 let _deliverySync = null;
 let _sessionOwners = null;
 const { _conf, _saveConf, workDir, _defaultCwd, _newSessionCwd } = createConfiguration(() => _app);
@@ -60,7 +61,8 @@ function _skillDirs(app) {
  * is unavailable instead of enabling bundled capabilities implicitly.
  */
 function _contextSnapshot(handle, snapshot) {
-  return { ...snapshot, ...(handle.requirementContext ? { requirementContext: handle.requirementContext } : {}),
+  const { usageReceipts, ...display } = snapshot || {};
+  return { ...display, ...(handle.requirementContext ? { requirementContext: handle.requirementContext } : {}),
     ...(handle.deliverySync ? { deliverySync: handle.deliverySync } : {}) };
 }
 function _send(win, handle, touched, snapshot, includeSnapshot, presenceSnapshot) {
@@ -142,6 +144,7 @@ function _scheduleRelease(handle) {
 
 function _wire(BrowserWindow, handle) {
   if (!handle || _wired.has(handle)) return;
+  _sharedHistory?.observe(handle, require('../conversation/requirement-context').cachedIdentity(_app));
   const dispose = handle.on((touched, snapshot) => {
     _push(BrowserWindow, handle, touched, snapshot);
     if (handle.detached) _scheduleRelease(handle);
@@ -210,6 +213,7 @@ function _attach(handle, win) {
 
 function _openReply(handle, extra) {
   const reply = require('./open-reply').openReply(_app, handle, extra);
+  if (handle.localReplica === true) return reply;
   const context = require('../conversation/requirement-context').publicContext(_app, handle.sessionId);
   if (context) {
     reply.requirementContext = context;
@@ -275,11 +279,14 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
   else app.on('ready', () => _cloudHandoff.synchronization.start());
   const accountSyncStore = require('../conversation/account-sync-store').createWorker(
     path.join(app.getPath('userData'), 'account-conversations-sync', 'outbox.json'));
+  _sharedHistory = require('../conversation/shared-history.cjs').create({ app, session });
+  session.setReplicaHistory?.(_sharedHistory);
   _accountSync = require('../conversation/account-sync').create({
     app, store: accountSyncStore, identityOf: sendIdentityOf || identityOf,
     localIdentityOf: async () => (sendIdentityOf || identityOf)(app),
     resolveNativeSource: (item, identity) => require('../conversation/account-native-source.cjs').resolve({ app, session, item, identity }),
-    realtime: true,
+    realtime: true, metadataOnly: true,
+    preserveLegacyOutbox: (job, identity) => _sharedHistory.preserveLegacyOutbox(job, identity),
   });
   // Account-conversation WebSocket messages are invalidation hints, but they
   // still need to reach the renderer.  Without this bridge the sync service
@@ -301,7 +308,8 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
       require('../conversation/app-surfaces.cjs').all(BrowserWindow.getAllWindows()).forEach(win => {
         if (win.isDestroyed()) return;
         win.webContents.send('pi-session-event', {
-          kind: 'account-conversation-sync', ref: handle?.ref || '', sessionId: id, presence,
+          kind: Number(presence.lifecycleRevision || 0) > 0 ? 'history-lifecycle' : 'account-conversation-sync',
+          ref: handle?.ref || '', sessionId: id, presence,
         });
       });
     } catch (_) {
@@ -313,13 +321,15 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
   // cloud handoff provider and add the account projection without changing the
   // cloud authority or exposing account sync as a Runner.
   session.setExternalHistory?.({
+    historyEntry(id) { return _cloudHandoff.historyEntry?.(id) || null; },
     async history(options) {
-      const [cloud, account] = await Promise.allSettled([_cloudHandoff.history(options), _accountSync.history()]);
+      const [cloud, account] = await Promise.allSettled([_cloudHandoff.history(options), _accountSync.history(options)]);
       const rows = [];
       if (cloud.status === 'fulfilled') rows.push(...(cloud.value.chats || []));
       if (account.status === 'fulfilled') rows.push(...(account.value.chats || []));
       const seen = new Set();
-      return { ok: true, chats: rows.filter(row => row && row.id && !seen.has(row.id) && seen.add(row.id)) };
+      return { ok: true, chats: rows.filter(row => row && row.id && !seen.has(row.id) && seen.add(row.id)),
+        lifecycle: account.status === 'fulfilled' ? account.value.lifecycle || [] : [] };
     },
     isRemote(id) { return typeof _cloudHandoff.isRemote === 'function' && _cloudHandoff.isRemote(id); },
     forget(id) {
@@ -348,7 +358,8 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
   require('./environment-ipc').install({
     app, ipcMain, session, identityOf, capabilityGrantsOf, _skillDirs, workDir, _saveConf, _conf,
   });
-  require('./history-ipc').install({ app, ipcMain, session, BrowserWindow, dialog, shell, cloudHistory: _cloudHandoff });
+  const historyActions = require('./history-ipc').install({ app, ipcMain, session, BrowserWindow, dialog, shell,
+    cloudHistory: _cloudHandoff, accountHistory: _accountSync, sharedHistory: _sharedHistory });
   require('../conversation/work-conversation-cards').install({ app, ipcMain, session, BrowserWindow,
     identityOf: sendIdentityOf || identityOf,
     newCwd: options => _newSessionCwd(app, 'chat-' + require('node:crypto').randomUUID(), options) });
@@ -356,7 +367,7 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
    * Read fixed-name plugin drafts only from outputs of active registered sessions; never
    * accept renderer-supplied file paths.
    */
-  pluginDraft.installIpc(ipcMain, session);
+  pluginDraft.installIpc(ipcMain, session, app);
   async function openConversation(event, raw, expectedIdentity, automationContext) {
     const preview = require('../work-preview');
     const appRequest = raw?.appRequestId ? preview.appRequestContext(event, raw.appRequestId) : null;
@@ -403,7 +414,52 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
           typeof session.loadSdk === 'function') {
         Promise.resolve(session.loadSdk(app)).catch(() => {});
       }
-      const identity = await identityOf(app);
+      appRequest?.assertActive();
+      // Local history can be read without reconnecting the Hub or resuming an
+      // old account's execution process. Remote originals follow the usual path.
+      // A downloaded source locator is not a native identity. Account and cloud
+      // originals retain their authenticated opening and continuation paths.
+      const resolvedLocal = opts.chatId && !_cloudHandoff.isRemote?.(opts.chatId) && _sharedHistory
+        ? await _sharedHistory.resolve(opts.chatId) : null;
+      const local = resolvedLocal && require('../conversation/shared-history.cjs').isLocalIdentity(resolvedLocal, opts.chatId)
+        ? resolvedLocal : null;
+      const openLocalHistory = async () => {
+        const captured = historyAccess.actor(app);
+        if (local) {
+          if (local.deleted) return { ok: false, notFound: true, reason: '这条会话已经不存在了' };
+          const old = session.findBySessionId(local.id);
+          if (old?.inFlight?.()) return { ok: false, reason: '这条会话还在执行，完成或停止后再操作' };
+          if (old && await old.close() === false) return { ok: false, reason: '会话仍在关闭，请稍后重试' };
+          const projection = await _sharedHistory.open(local.id);
+          if (projection) {
+            const handle = session.attachView(projection);
+            if (captured.identity && captured.owner) _sessionOwners?.bind(handle, captured.identity);
+            if (event) _attach(handle, require('../conversation/app-surfaces.cjs').forSender(BrowserWindow, event.sender));
+            else _detach(handle);
+            _wire(BrowserWindow, handle);
+            return _openReply(handle, { resumed: true, attached: true, localReplica: true });
+          }
+        }
+        return { ok: false, notFound: true, reason: '这条会话已经不存在了' };
+      };
+      let nativeLocal = false;
+      if (local) {
+        let executable = true;
+        try { historyAccess.assertOwner(app, opts.chatId, historyAccess.actor(app), local); }
+        catch (_) { executable = false; }
+        if (local.deleted || local.cached || !executable) return await openLocalHistory();
+        // Canonical local identity wins over stale renderer projection flags.
+        nativeLocal = true;
+        Object.assign(opts, { adapterId: local.adapterId || 'pi',
+          accountConversation: false, accountProjection: false });
+      }
+      let identity;
+      try { identity = await identityOf(app); }
+      catch (error) {
+        if (local && !automationContext && !expectedIdentity) return await openLocalHistory();
+        throw error;
+      }
+      if (!identity && local && !automationContext && !expectedIdentity) return await openLocalHistory();
       appRequest?.assertActive();
       if (!identity) return { ok: false, reason: '这台电脑还没连上 SoduWork 后台（先打开桌宠登录一次）' };
       historyAccess.assertCurrent(app, requestActor, identity);
@@ -420,12 +476,55 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
       if (expectedIdentity && (!openingConnection || openingConnection !== connectionOf(expectedIdentity))) {
         return { ok: false, reason: '连接环境已切换，本次自动化未启动' };
       }
-      if (opts.chatId && !session.findBySessionId(opts.chatId) &&
+      const selectNativeSource = async native => {
+        await assertHistoryCurrent();
+        // A previously attached account projection may have hidden an archive
+        // while local history was unavailable. Retire only that passive view;
+        // an existing execution runtime must be reattached below, never closed.
+        const views = new Set([opts.chatId, native.id].map(id => session.findBySessionId(id)));
+        for (const view of views) {
+          if (view?.adapterId !== 'account-sync') continue;
+          if (view.inFlight?.()) throw Error('这条会话还在执行，完成或停止后再操作');
+          if (!await closeFailedOpen(view)) throw Error('会话仍在关闭，请稍后重试');
+          await assertHistoryCurrent();
+        }
+        nativeLocal = true;
+        Object.assign(opts, { chatId: native.id, adapterId: native.adapterId || 'pi',
+          accountConversation: false, accountProjection: false });
+      };
+      const selectedLive = opts.chatId && session.findBySessionId(opts.chatId);
+      if (opts.chatId && (!selectedLive || selectedLive.adapterId === 'account-sync') &&
           typeof _accountSync !== 'undefined' && _accountSync?.isAccountConversation?.(opts.chatId)) {
         const item = await _accountSync.row(opts.chatId);
+        await assertHistoryCurrent();
+        if (item?.deleted) return { ok: false, notFound: true, reason: '这条会话已经不存在了' };
         const native = await require('../conversation/account-native-source.cjs').resolve({ app, session, item, identity });
         await assertHistoryCurrent();
-        if (native) opts.chatId = native.id;
+        if (native) await selectNativeSource(native);
+      }
+      // Resolve account aliases before choosing a live handle or native archive.
+      // A source alias may already equal the native ID after an earlier lookup;
+      // equality is not evidence that this conversation must stay read-only.
+      if (opts.chatId && !nativeLocal && (!selectedLive || selectedLive.adapterId === 'account-sync') &&
+          typeof _accountSync !== 'undefined' && typeof _accountSync?.openProjection === 'function') {
+        const projection = await _accountSync.openProjection(opts.chatId).catch(() => null);
+        if (projection) {
+          await assertHistoryCurrent();
+          const item = projection.historyRow?.();
+          if (item?.deleted) return { ok: false, notFound: true, reason: '这条会话已经不存在了' };
+          const native = await require('../conversation/account-native-source.cjs').resolve({
+            app, session, item, identity });
+          await assertHistoryCurrent();
+          if (native) await selectNativeSource(native);
+          else if (!session.findBySessionId(opts.chatId)) {
+            const handle = session.attachView(projection);
+            _sessionOwners?.bind(handle, identity, { connection: true });
+            if (event) _attach(handle, require('../conversation/app-surfaces.cjs').forSender(BrowserWindow, event.sender));
+            else _detach(handle);
+            _wire(BrowserWindow, handle);
+            return _openReply(handle, { resumed: true, attached: true, accountConversation: true });
+          }
+        }
       }
       // Start the SDK/model work while local capability policy and Skill
       // discovery are being resolved. `prewarm` shares model-config's pending
@@ -441,6 +540,9 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
         const live = session.findBySessionId(opts.chatId);
         if (live) {
           try {
+          // Reattaching a requirement projection must recheck Hub ownership;
+          // an existing local view is not authority for remote access.
+          await _cloudHandoff.refreshTaskExecution?.(opts.chatId, true);
           // A live handle is already attached to this device and must keep the
           // strict memory binding check. Archived history is different: the
           // device session can be in the middle of renewal, so checking its
@@ -475,8 +577,7 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
           ].map((item) => String(item || '').trim()).filter(Boolean));
           if (!opts.requireTaskBinding || !requestedTaskId || boundTaskIds.has(requestedTaskId)) {
             await assertHistoryCurrent();
-            appRequest?.assertActive();
-            require('./app-mcp-grant.cjs').bind(live, event?.sender, appPluginId, app, { identityOf: sendIdentityOf || identityOf, assertActive: appRequest?.assertActive });
+            require('./app-mcp-grant.cjs').bind(live, event?.sender, appPluginId, app, { identityOf: sendIdentityOf || identityOf });
             _bindUsage(live, identity, live.usageAgentKey || opts.adapterId || 'pi');
             if (event) _attach(live, require('../conversation/app-surfaces.cjs').forSender(BrowserWindow, event.sender));
             else _detach(live);
@@ -491,29 +592,15 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
           }
         }
       }
-      // Keep the archived/cloud reopen path usable while the optional account
-      // projection is still being installed (and for isolated IPC harnesses
-      // that do not provide that optional service).
-      if (opts.chatId && typeof _accountSync !== 'undefined' &&
-          typeof _accountSync?.openProjection === 'function') {
-        const projection = await _accountSync.openProjection(opts.chatId).catch(() => null);
-        if (projection) {
-          await assertHistoryCurrent();
-          // A restored sidebar can open before account history finishes loading.
-          // Resolve the authenticated projection metadata before attaching a view.
-          const native = await require('../conversation/account-native-source.cjs').resolve({
-            app, session, item: projection.historyRow?.(), identity });
-          await assertHistoryCurrent();
-          if (native && native.id !== opts.chatId) {
-            return openConversation(event, { ...opts, chatId: native.id }, identity, automationContext);
-          }
-          const handle = session.attachView(projection);
-          _sessionOwners?.bind(handle, identity, { connection: true });
-          if (event) _attach(handle, require('../conversation/app-surfaces.cjs').forSender(BrowserWindow, event.sender));
-          else _detach(handle);
-          _wire(BrowserWindow, handle);
-          return _openReply(handle, { resumed: true, attached: true, accountConversation: true });
-        }
+      // Account projections are read-only views and are not registered Agent
+      // adapters. Never pass a stale projection row to session.open: that
+      // would turn a recoverable history miss into an adapter-not-registered
+      // error page. The sidebar can refresh the authenticated directory and
+      // retry the projection without creating a duplicate local session.
+      if (opts.chatId && (String(opts.adapterId || '').toLowerCase() === 'account-sync' ||
+          opts.accountConversation === true || opts.accountProjection === true)) {
+        return { ok: false, notFound: true,
+          reason: '账号会话暂时无法读取，请刷新历史后重试' };
       }
       if (opts.chatId && typeof _cloudHandoff.reopen === 'function') {
         const remote = await _cloudHandoff.reopen(opts.chatId,
@@ -587,6 +674,11 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
         delete opts.accessDraftId; delete opts.accessConsentId;
       }
       if (resume?.adapterId && !work.first) opts.adapterId = resume.adapterId;
+      if (resume && (String(opts.adapterId || '').toLowerCase() === 'account-sync' ||
+          resume.accountConversation === true || resume.accountProjection === true)) {
+        return { ok: false, notFound: true,
+          reason: '账号会话暂时无法读取，请刷新历史后重试' };
+      }
       // History links can omit the Agent or carry a stale composer choice.
       // Resolve the archived identity first, then warm only its actual runtime.
       if (resume && String(opts.adapterId || 'pi') === 'pi' && typeof session.prewarm === 'function') {
@@ -600,7 +692,11 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
           throw Error('原会话工作目录不可用，请在来源电脑恢复目录后重试');
         });
       }
-      const cwd = resume ? require('./resume-cwd')(app, resume, _defaultCwd) : _newSessionCwd(app, ref, opts);
+      // Existing conversations keep their persisted directory. A missing local
+      // directory retains the established recovery fallback; new drafts choose.
+      const cwd = resume
+        ? require('./resume-cwd')(app, resume, _defaultCwd)
+        : _newSessionCwd(app, ref, opts);
       const permitted = await workOpening.applyPolicy({ app, event, options: opts, resume, work, cwd,
         automationContext, accessConsent, BrowserWindow, confirmFullAccess });
       if (!permitted.ok) { await capabilityPromise.catch(() => {}); return permitted; }
@@ -627,7 +723,7 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
         };
       }
       const memoryContext = await memoryContextPromise;
-      const spec = sessionSpec.build(opts, resolved, {
+      const spec = sessionSpec.build({ ...opts, cwd }, resolved, {
         cwd,
         readOnly: (_conf().mode || 'full') === 'readonly',
       });
@@ -768,8 +864,7 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
         require('../conversation/requirement-context').assertOwner(app, opened.session, identity);
         accessConsent?.assertValid();
         await assertHistoryCurrent();
-        appRequest?.assertActive();
-        require('./app-mcp-grant.cjs').bind(opened.session, event?.sender, appPluginId, app, { identityOf: sendIdentityOf || identityOf, assertActive: appRequest?.assertActive });
+        require('./app-mcp-grant.cjs').bind(opened.session, event?.sender, appPluginId, app, { identityOf: sendIdentityOf || identityOf });
         _bindUsage(opened.session, identity, opts.adapterId || 'pi');
         if (event) _attach(opened.session, require('../conversation/app-surfaces.cjs').forSender(BrowserWindow, event.sender));
         else _detach(opened.session);
@@ -844,6 +939,13 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
     let selectedSkills;
     try { selectedSkills = skillTurn.names(rawOptions?.skills); }
     catch (error) { return skillTurn.failure(error); }
+    let pluginInputs = [];
+    try {
+      const rows = Array.isArray(rawOptions?.plugins) ? rawOptions.plugins : [];
+      if (rows.some(row => row?.inputValues && typeof row.inputValues === 'object')) {
+        pluginInputs = require('./plugin-context').inputSelections(rows, rows.map(row => row?.pluginId));
+      }
+    } catch (error) { return { ok: false, reason: error.message }; }
     let currentIdentity;
     try {
       // Memory ownership requires the current account's signed session. Device
@@ -956,6 +1058,7 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
         executor: taskTurn.executor, controlled: taskTurn.controlled,
         ...(typeof taskTurn.modelName === 'string' ? { modelName: taskTurn.modelName } : {}) } : {}),
       pluginIds,
+      pluginInputs,
       ...(clearPluginSelection ? { clearPluginSelection: true } : {}),
       skills: selectedSkills,
       sentAt: Number.isFinite(rawOptions?.sentAt) && rawOptions.sentAt > 0 ? Math.min(rawOptions.sentAt, Date.now()) : Date.now(),
@@ -965,9 +1068,12 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
         .replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64),
     };
     if (typeof authorizeAI === 'function') {
-      // Admission runs when the queued turn executes, including personal models.
+      // Pi can attribute personal funding per call. Other runtimes retain the
+      // strict account gate until they provide equally reliable usage receipts.
+      const agent = s.adapterId || 'pi';
+      const modelMode = require('../agent-runtime/runtime-catalog').runtime(agent)?.modelMode;
       sendOptions.beforeTurn = require('../conversation/quota-admission.cjs').beforeTurn(
-        authorizeAI, currentIdentity, sendOptions.beforeTurn);
+        authorizeAI, currentIdentity, sendOptions.beforeTurn, { agent, modelMode, controlled: Boolean(sendOptions.controlled) });
     }
     let workflowTurn;
     try {
@@ -1056,6 +1162,9 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
     if (!s) return { ok: false, reason: '\u4f1a\u8bdd\u4e0d\u5728\u4e86' };
     const win = BrowserWindow.fromWebContents(event.sender);
     const attached = _uiWindow.request(s, win, options);
+    if (s.localReplica) {
+      return Promise.resolve(s.loadHistory?.(options || {})).then(() => ({ ok: true, snapshot: _contextSnapshot(s, s.snapshot()) }));
+    }
     const raw = attached ? _uiWindow.snapshot(s) :
       (typeof s.uiSnapshot === 'function' ? s.uiSnapshot(options || {}) : s.snapshot());
     const snapshot = _contextSnapshot(s, raw);
@@ -1127,10 +1236,13 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
     sync: () => _accountSync.flush(),
   });
   let accountingQuitReady = false;
+  const contentMigration = require('../conversation/content-migration.cjs').create({
+    app, identityOf: sendIdentityOf || identityOf });
+  contentMigration.start();
   let persistenceClose = null;
   const disposePersistence = () => {
     if (!persistenceClose) persistenceClose = Promise.allSettled([
-      _accountSync.close(), _usage?.persist?.(),
+      contentMigration.close(), _accountSync.close(), _sharedHistory?.close(), _usage?.persist?.(),
     ]).then(results => {
       if (results.some(result => result.status === 'rejected'))
         console.warn('[conversation] Pending local data could not be saved before exit');
@@ -1159,6 +1271,10 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
   });
   return {
     dispose: disposePersistence,
+    history: require('./local-history-remote.cjs').create({ app, session, history: _sharedHistory,
+      accountHistory: _accountSync,
+      identityOf: sendIdentityOf || identityOf,
+      action: historyActions.localAction }),
     open: (options, identity) => openConversation(null, options, identity),
     ...require('../access-control/automation-access').service(app, openConversation),
     async send(ref, text, files, options) {

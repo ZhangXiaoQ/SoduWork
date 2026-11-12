@@ -228,3 +228,37 @@ html[data-window-titlebar="overlay"] .pui-layer.waz-plugin-surface{
 
 .waz-clock-selects{display:flex;align-items:center;gap:6px;min-width:0}
 .waz-clock-selects select{flex:1;min-width:0;font-variant-numeric:tabular-nums}
+.waz-field select.fwd-select-native{display:none!important}
+.waz-clock-selects .fwd-select{flex:1;min-width:0}
+.waz-field .fwd-select-trigger{height:37px;min-height:37px;border-radius:9px;font:inherit;font-variant-numeric:tabular-nums}
+.waz-custom-rule-field textarea{min-height:104px;max-height:260px;font-family:var(--font-mono,monospace);line-height:1.65;overflow-wrap:anywhere}
+.waz-custom-rule-field small{white-space:normal;line-height:1.5}
+.waz-timezone:has([data-custom-preview]){flex-wrap:wrap}
+.waz-timezone>[data-custom-preview]{white-space:normal;overflow-wrap:anywhere}
+.waz-timing-range{
+  display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0 10px;
+  margin:1px 0 10px;padding:10px;border:1px solid var(--line-2);border-radius:10px;background:var(--bg-1)
+}
+.waz-timing-range .waz-field{margin-bottom:0}
+.waz-range-hint{grid-column:1 / -1;margin-top:2px;color:var(--ink-3);font-size:max(var(--font-min-readable, 14.5px), 12px);line-height:1.45}
+.waz-choice-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px}
+.waz-choice-grid label{
+  position:relative;display:flex;align-items:center;justify-content:center;min-height:34px;
+  border:1px solid var(--line);border-radius:8px;background:var(--bg-0);color:var(--ink-3);cursor:pointer;
+  transition:border-color .14s ease,background-color .14s ease,color .14s ease,box-shadow .14s ease
+}
+.waz-choice-grid label:hover{border-color:color-mix(in srgb,var(--accent) 42%,var(--line));color:var(--ink-2)}
+.waz-choice-grid input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+.waz-choice-grid label:has(input:checked){border-color:color-mix(in srgb,var(--accent) 48%,var(--line));background:var(--accent-soft);color:var(--accent);font-weight:620}
+.waz-choice-grid label:has(input:focus-visible){outline:2px solid color-mix(in srgb,var(--accent) 38%,transparent);outline-offset:2px}
+.waz-month-grid{grid-template-columns:repeat(7,minmax(0,1fr))}
+.waz-month-grid label{min-height:31px;font-variant-numeric:tabular-nums}
+.waz-month-policy{margin-top:8px}
+.waz-month-policy input{margin-top:2px;accent-color:var(--accent)}
+@media(max-width:680px){
+  .waz-timing-range{grid-template-columns:1fr}
+  .waz-range-hint{grid-column:auto}
+  .waz-choice-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .waz-month-grid{grid-template-columns:repeat(7,minmax(0,1fr))}
+}
+@media(prefers-reduced-motion:reduce){.waz-choice-grid label{transition:none}}

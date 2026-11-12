@@ -38,13 +38,13 @@ test('后台分类、上架状态和作者真实驱动客户端市场', () => {
       },
       {
         pluginId: 'declared', name: '文稿助手', description: '生成专业文稿',
-        sourceKind: 'personal', listed: true, declaredCategory: 'office',
+        sourceKind: 'soduwork', listed: true, declaredCategory: 'office',
         marketPolicy: { configured: false, category: 'general', installation: 'available' },
         capabilities: { hasWorkflow: false, executionMode: 'direct', skills: [], mcpServers: [] },
       },
       {
         pluginId: 'hidden', name: '已下架插件', description: '不应展示',
-        sourceKind: 'personal', listed: false,
+        sourceKind: 'soduwork', listed: false,
         marketPolicy: { configured: true, category: 'general', installation: 'not_available' },
         capabilities: { hasWorkflow: false, executionMode: 'direct', skills: [], mcpServers: [] },
       },

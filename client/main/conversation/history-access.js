@@ -1,7 +1,7 @@
 'use strict';
 
-// Local archives survive device account changes. Their persisted owner, never
-// the device or the presence of a live runtime, determines who may read them.
+// Execution ownership remains account-bound. Local transcript reads and local
+// replica management use the device workspace instead of the creating account.
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -112,16 +112,30 @@ function assertOwner(app, id, captured = actor(app), row = {}, options = {}) {
     const migrated = bindLegacyOwner(app, id, captured);
     if (migrated?.owner) owners.push(migrated.owner);
   }
-  if (!owners.length || owners.some(owner => !owner || (owner !== captured.owner &&
+  if (!owners.length) {
+    const error = Error('无法确认这条会话属于当前账号，请切回原账号');
+    error.code = 'HISTORY_OWNER_MISSING';
+    throw error;
+  }
+  if (owners.some(owner => !owner || (owner !== captured.owner &&
       !runtime.scopeMatches(owner, captured.identity, captured.candidates))))
     throw Error('无法确认这条会话属于当前账号，请切回原账号');
+}
+function assertReadable(app, id, captured = actor(app), row = {}) {
+  if (!id || typeof id !== 'string' || id.length > 512 || (row.id || row.sessionId) !== id)
+    throw Error('会话标识无效');
+  // Callers resolve rows through trusted local indexes, never renderer-supplied
+  // paths. A downloaded replica is local data, not a remote permission grant.
+  if (row.localReplica === true) return;
+  if (row.remoteProjection === true || row.accountProjection === true || row.accountConversation === true ||
+      row.adapterId === 'account-sync' || row.sourceClientId || row.cloud === true)
+    return assertOwner(app, id, captured, row);
 }
 function visible(app, rows, identity) {
   const captured = actor(app, identity);
   return rows.filter(row => {
     try {
-      const options = isOwnerlessNativeArchive(row) ? { allowLegacy: true } : {};
-      assertOwner(app, row.sessionId || row.id, captured, row, options);
+      assertReadable(app, row.sessionId || row.id, captured, row);
       return true;
     }
     catch (_) { return false; }
@@ -132,4 +146,4 @@ function assertCurrent(app, captured, identity) {
   if (!captured.owner || current.owner !== captured.owner)
     throw Error('账号已切换，请在当前账号重新打开会话');
 }
-module.exports = { actor, assertOwner, assertCurrent, visible, isOwnerlessNativeArchive };
+module.exports = { actor, assertOwner, assertReadable, assertCurrent, visible, isOwnerlessNativeArchive };

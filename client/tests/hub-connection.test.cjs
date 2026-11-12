@@ -13,6 +13,27 @@ function fixture(seed = {}, bridge = {}, storage, internal = true, clock = { set
 }
 const legacy = 'http://192.0.2.10:8989';
 const unassigned = 'https://unassigned-legacy-hub.invalid';
+for (const id of ['self-hosted']) test(`${id} renderer uses bundled Hub from its first request and rejects another fixed Hub`, async () => {
+  const profile = require('../main/distribution.cjs').getProfile(id);
+  const enrollments = [];
+  const bridge = { distributionInfo: () => profile,
+    getHubConnection: async () => ({ hub: profile.hubOrigin, editable: false }),
+    deviceAuthBootstrap: async payload => { enrollments.push(payload); return { ok: true, stored: true,
+      clientId: id + '-device', session: id + '-session', user: { id: id + '-user' }, expiresIn: 1800 }; } };
+  const f = fixture({ soduwork_work_hub_url: 'https://other.invalid' }, bridge, undefined, false);
+  assert.equal(f.api.hubBase(), profile.hubOrigin);
+  assert.equal(f.api.hubConfig().editable, false);
+  assert.throws(() => f.api.setHubEnvironment('production', 'https://other.invalid'), /固定/);
+  await f.api.registerClient();
+  await f.api.myModels();
+  assert.equal(enrollments[0].hub, profile.hubOrigin);
+  assert.ok(f.requests.length > 0);
+  assert.ok(f.requests.every(row => row.url.startsWith(profile.hubOrigin + '/')));
+  bridge.getHubConnection = async () => ({ hub: 'https://other.invalid', editable: false });
+  const invalid = fixture({}, bridge, undefined, false);
+  await assert.rejects(invalid.api.clientAuthPolicy(), /配置无效/);
+  assert.equal(invalid.requests.length, 0);
+});
 for (const [name, seed, expected, bridge] of [
   ['fresh', {}, 'http://127.0.0.1:18989'],
   ['local-code fresh', {}, 'http://127.0.0.1:18989', { runtimeForm: () => 'local-code' }],

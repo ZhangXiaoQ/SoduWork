@@ -23,11 +23,11 @@ function create({ beforeRetry } = {}) {
     return failed ? { id: failed.item.id, taskId: failed.item.options.taskId || '', available: true,
       requiresModelChange: failed.modelUnavailable, failedModelName: failed.failedModelName } : null;
   }
-  function take(id) {
+  function take(id, admit) {
     if (!failed || id !== failed.item.id) return null;
-    const { item, goalMode, authExpired } = failed; failed = null;
+    const { item, goalMode, authExpired } = failed;
     const originalBeforeTurn = item.options.modelRecovery ? item.options.recoveryBeforeTurn : item.options.beforeTurn;
-    return { text: PROMPT, attachments: [], options: { ...item.options,
+    const payload = { text: PROMPT, attachments: [], options: { ...item.options,
       retry: true, modelRecovery: true, continuing: true, goalMode,
       recoveryBeforeTurn: originalBeforeTurn,
       beforeTurn: async function (...args) {
@@ -36,6 +36,10 @@ function create({ beforeRetry } = {}) {
         await originalBeforeTurn?.apply(this, args);
       },
     } };
+    // Queue rejection or a synchronous admission error must keep recovery available.
+    if (admit && !admit(payload)) return null;
+    failed = null;
+    return payload;
   }
   return { remember, view, take, clear: () => { failed = null; } };
 }

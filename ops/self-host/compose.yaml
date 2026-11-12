@@ -25,15 +25,15 @@ services:
     ports:
       - "127.0.0.1:${SODUWORK_HTTP_PORT:?Run python ops/self-host/deploy.py up}:8989"
     environment:
-      DATABASE_URL: "postgresql+asyncpg://soduwork:${SODUWORK_DB_PASSWORD:?Run python ops/self-host/deploy.py up}@db:5432/soduwork"
+      DATABASE_URL: "postgresql+asyncpg://soduwork:${SODUWORK_DB_PASSWORD:?Run python deploy.py up}@db:5432/soduwork"
       JIYONG_DATABASE_URL: ${JIYONG_DATABASE_URL:-}
       JIYONG_ASSET_DIR: /srv/runtime/jiyong-assets
       ADMIN_USER: admin
-      ADMIN_PASS: ${SODUWORK_ADMIN_PASSWORD:?Run python ops/self-host/deploy.py up}
-      AUTH_SECRET: ${SODUWORK_AUTH_SECRET:?Run python ops/self-host/deploy.py up}
-      CONNECTOR_OAUTH_KEY: ${SODUWORK_OAUTH_KEY:?Run python ops/self-host/deploy.py up}
-      HUB_PUBLIC_URL: ${SODUWORK_PUBLIC_URL:?Run python ops/self-host/deploy.py up}
-      CORS_ORIGINS: "${SODUWORK_PUBLIC_URL:?Run python ops/self-host/deploy.py up},null"
+      ADMIN_PASS: ${SODUWORK_ADMIN_PASSWORD:?Run python deploy.py up}
+      AUTH_SECRET: ${SODUWORK_AUTH_SECRET:?Run python deploy.py up}
+      CONNECTOR_OAUTH_KEY: ${SODUWORK_OAUTH_KEY:?Run python deploy.py up}
+      HUB_PUBLIC_URL: ${SODUWORK_PUBLIC_URL:?Run python deploy.py up}
+      CORS_ORIGINS: "${SODUWORK_PUBLIC_URL:?Run python deploy.py up},null"
       SODUWORK_ENV: production
       DEVICE_AUTH_COMPAT: "false"
       DB_MIGRATION_MODE: auto

@@ -260,7 +260,7 @@ test('failed existing-task binding never submits the requirement after opening i
 });
 
 test('saved canonical Agent and model reach each native substrate through the actual enqueue controller', async () => {
-  for (const cli of ['pi', 'opencode', 'qwen', 'codex-harness', 'dsh', 'codex', 'claude']) {
+  for (const cli of [...new Set([...require('../main/agent-runtime/runtime-catalog').runtimes().map(row => row.id), 'claude'])]) {
     const model = cli === 'claude' ? '' : cli === 'codex' ? 'gpt-5.3-codex' : 'company-selected';
     const task = { id: cli, title: 'Saved task', status: 'todo', executionContext: {
       agent: { id: 'local:' + cli, cli }, model, runner: { mode: 'local' }, strategy: 'direct' } };
@@ -276,7 +276,7 @@ test('saved canonical Agent and model reach each native substrate through the ac
 });
 
 test('saved remote substrate retains machine, model, repository and reasoning on controlled HTTP dispatch', async () => {
-  for (const cli of ['pi', 'opencode', 'qwen', 'codex-harness', 'dsh', 'codex', 'claude']) {
+  for (const cli of [...new Set([...require('../main/agent-runtime/runtime-catalog').runtimes().map(row => row.id), 'claude'])]) {
     const id = 'runner:machine-1:' + cli;
     const task = { id: cli, title: 'Remote task', status: 'todo', executionContext: {
       agent: { id, cli }, model: cli === 'claude' ? '' : 'selected-model', reasoningEffort: cli === 'codex' ? 'high' : '',

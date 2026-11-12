@@ -13,6 +13,7 @@ export default function MailSettings() {
   useLocale()
   const [form, setForm] = useState(EMPTY)
   const [legal, setLegal] = useState({ operatorName: '', contactEmail: '' })
+  const [canEditLegal, setCanEditLegal] = useState(false)
   const [recipient, setRecipient] = useState('')
   const [deliveries, setDeliveries] = useState([])
   const [error, setError] = useState('')
@@ -43,7 +44,7 @@ export default function MailSettings() {
   useEffect(() => {
     let live = true
     api.accountLegal().then(terms => {
-      if (live) setLegal({ operatorName: terms.operatorName || '', contactEmail: terms.contactEmail || '' })
+      if (live) { setLegal({ operatorName: terms.operatorName || '', contactEmail: terms.contactEmail || '' }); setCanEditLegal(terms.canEdit !== false) }
     }).catch(e => live && setError(e.message)).finally(() => live && setLegalLoading(false))
     const stamp = ++deliveryRevision.current
     api.mailDeliveries().then(history => {
@@ -87,6 +88,7 @@ export default function MailSettings() {
     } catch (e) { if (stamp === deliveryRevision.current) setDeliveryError(e.message) }
   }
   async function saveLegal() {
+    if (!canEditLegal || legalLoading || busy) return
     setBusy('legal'); setError('')
     try {
       const next = await api.saveAccountLegal(legal)
@@ -131,7 +133,7 @@ export default function MailSettings() {
         <div className="mail-history">{deliveries.length ? deliveries.slice(0, 8).map(row => <article key={row.id}><div><b>{row.recipient}</b><span>{STATES[row.state] || row.state}</span></div><small>{ERRORS[row.errorCode] ? ERRORS[row.errorCode] : row.createdAt ? new Date(row.createdAt).toLocaleString() : '—'}</small></article>) : <p className="muted">{tx('暂无发送记录')}</p>}</div>
       </div>
     </div>
-    <div className="mail-card mail-legal"><div><h4>{tx('协议与运营信息')}</h4><p>{tx('填写真实运营主体与隐私联系邮箱，将展示在用户协议和隐私政策中。')}</p></div><div className="mail-fields"><label><span>{tx('运营主体名称')}</span><input className="f-in" value={legal.operatorName} disabled={!!busy || legalLoading} maxLength="120" onChange={e => setLegal(old => ({ ...old, operatorName: e.target.value }))} /></label><label><span>{tx('隐私联系邮箱')}</span><input className="f-in" type="email" value={legal.contactEmail} disabled={!!busy || legalLoading} onChange={e => setLegal(old => ({ ...old, contactEmail: e.target.value }))} /></label></div><footer className="mail-card-actions"><span className="muted">{tx('授权码与验证码不会显示在发送记录中。')}</span><button className="btn btn-primary" disabled={!!busy || legalLoading || !legal.operatorName.trim() || !legal.contactEmail.trim()} onClick={saveLegal}>{tx('保存运营信息')}</button></footer></div>
+    <div className="mail-card mail-legal"><div><h4>{tx('协议与运营信息')}</h4><p>{tx('已发布的正文保持不变。运营信息变更后，请在协议管理中更新草稿并重新发布。')}</p></div><div className="mail-fields"><label><span>{tx('运营主体名称')}</span><input className="f-in" value={legal.operatorName} disabled={!!busy || legalLoading || !canEditLegal} maxLength="120" onChange={e => setLegal(old => ({ ...old, operatorName: e.target.value }))} /></label><label><span>{tx('隐私联系邮箱')}</span><input className="f-in" type="email" value={legal.contactEmail} disabled={!!busy || legalLoading || !canEditLegal} onChange={e => setLegal(old => ({ ...old, contactEmail: e.target.value }))} /></label></div><footer className="mail-card-actions"><span className="muted">{tx('授权码与验证码不会显示在发送记录中。')}</span><button className="btn btn-primary" disabled={!!busy || legalLoading || !canEditLegal || !legal.operatorName.trim() || !legal.contactEmail.trim()} onClick={saveLegal}>{tx('保存运营信息')}</button></footer></div>
     {(privacyRequests !== null || privacyError) && <div className="mail-card mail-legal"><div className="mail-card-heading"><div><h4>{tx('个人数据处理请求')}</h4><p>{tx('查看导出与注销处理进度；清理失败后可重新排队。')}</p></div><button className="btn btn-ghost xs" disabled={!!busy} onClick={() => privacyRefresh()}>{tx('刷新处理状态')}</button></div>
       {privacyError && <p className="mail-error" role="alert">{privacyError}</p>}
       <div className="mail-history">{privacyRequests?.length ? privacyRequests.map(row => <article key={row.id}><div><b>{row.kind === 'deletion' ? tx('账号注销') : tx('数据导出')} · {row.id.slice(0, 8)}</b><span>{PRIVACY_STATES[row.status] || row.status}</span></div><small>{row.errorCode || (row.createdAt ? new Date(row.createdAt).toLocaleString() : '')}</small>{row.kind === 'deletion' && row.status === 'failed' && <button className="btn btn-ghost xs" disabled={!!busy} onClick={() => privacyRefresh(row.id)}>{tx('重新处理')}</button>}</article>) : <p className="muted">{tx('暂无个人数据处理请求')}</p>}</div></div>}

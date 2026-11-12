@@ -119,6 +119,8 @@ async def prepare(session, schedule, client, repo, run_id, adapter, personal):
     if repo:
         instruction += '\n\n工程：' + str(repo.name or '')
     instruction += '\n\n自动化触发时间：' + schedules.format_trigger_time(schedule, run.started_at)
+    from .schedule_instruction import for_run
+    instruction = for_run(instruction)
     capabilities = clean_required_capabilities(schedule.required_capabilities)
     # Older focused workers call this helper with an empty ``personal`` value
     # instead of going through schedules.run_one(). Derive the persisted lock
@@ -141,6 +143,8 @@ async def prepare(session, schedule, client, repo, run_id, adapter, personal):
         # requirement record.
         envelope['repoId'] = str(getattr(repo, 'id', '') or '')
         envelope['projectId'] = str(getattr(repo, 'project_id', '') or '')
+    from . import schedule_content
+    envelope = await schedule_content.save(session, client, run, envelope)
     run.receipt = {**existing, 'executionMode': PROTOCOL, 'conversationTitle': conversation_title,
                    'conversationInput': envelope, 'phase': 'device'}
     await session.flush()
@@ -221,6 +225,8 @@ async def claim(session, client, run_id, instance):
                 'conversationId': receipt['conversationId']}
     if receipt.get('worker') != instance and float(receipt.get('leaseUntil') or 0) > now:
         return {'ok': False, 'busy': True}
+    from . import schedule_content
+    envelope = await schedule_content.load(session, client, run, dict(receipt.get('conversationInput') or {}))
     previous_worker = str(receipt.get('worker') or '')
     if previous_worker and previous_worker != instance:
         # Preserve the handoff edge so the original worker can publish the
@@ -232,7 +238,7 @@ async def claim(session, client, run_id, instance):
     receipt.update(worker=instance, leaseUntil=now + RESERVATION_LEASE_SECONDS)
     run.receipt = receipt
     await session.commit()
-    return {'ok': True, 'input': dict(receipt.get('conversationInput') or {}),
+    return {'ok': True, 'input': envelope,
             'trigger': run.trigger,
             'conversationId': receipt.get('conversationId', '')}
 

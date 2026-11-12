@@ -11,6 +11,17 @@ const ACCEPTANCE_PROMPT_LIMIT = 50000;
 const COMPACTION_MARK = '\n[Some content omitted to fit the acceptance context budget. Read the bound attachments and reject anything you cannot verify.]\n';
 const MANUAL_ONLY = '本轮没有可自动核验的交付物，请使用手动验收确认实际结果';
 
+function references(context) {
+  // Hub normalizes legacy AI outputs before assigning the input role. Original
+  // requirement material is needed for comparison, unlike optional run evidence.
+  return (Array.isArray(context.optionalAttachments) ? context.optionalAttachments : [])
+    .filter(file => file.role === 'input');
+}
+function referenceKey(context) {
+  return JSON.stringify(references(context).map(file => [String(file.id || file.attachmentId || ''),
+    file.evidenceMeta?.sha256 || '', file.size || 0]).sort((a, b) => a[0].localeCompare(b[0])));
+}
+
 function assertAutomaticReview(context, auto) {
   if (auto && (context.readiness?.requiresHumanConfirmation === true ||
       (context.artifact?.kind === 'manual' && context.artifact?.manifest?.manual === true)))
@@ -147,13 +158,17 @@ async function prepare({ identity, taskId, instruction = '', requested = {}, run
   const render = value => typeof value === 'string' ? value : JSON.stringify(value, null, 2);
   const attachments = Array.isArray(context.attachments) ? context.attachments : [];
   const optionalAttachments = Array.isArray(context.optionalAttachments) ? context.optionalAttachments : [];
+  const referenceAttachments = references(context);
+  const referenceIds = [...new Set(referenceAttachments.map(file => String(file.id || file.attachmentId || '')))];
+  const preparedReferences = referenceKey(context);
   const optionalById = new Map(optionalAttachments.map(file => [String(file.id || file.attachmentId || ''), file]));
   const requestedOptional = Array.isArray(requested.acceptanceAttachmentIds)
     ? [...new Set(requested.acceptanceAttachmentIds.map(String))].filter(Boolean) : [];
   if (requestedOptional.some(id => !optionalById.has(id)))
     throw Error('本次验收过程文件已变化，请回到需求详情重新选择');
-  const selectedIds = [...new Set([...(context.attachmentIds || []).map(String), ...requestedOptional])];
-  const selectedOptional = requestedOptional.map(id => optionalById.get(id)).filter(Boolean);
+  const selectedIds = [...new Set([...(context.attachmentIds || []).map(String), ...referenceIds, ...requestedOptional])];
+  const selectedOptional = requestedOptional.filter(id => !referenceIds.includes(id))
+    .map(id => optionalById.get(id)).filter(Boolean);
   const bundle = context.deliveryBundle;
   if (bundle && (bundle.artifactVersionId !== snapshot.artifactVersionId ||
       !Array.isArray(bundle.attachmentIds) || bundle.attachmentIds.length < 2 ||
@@ -166,11 +181,14 @@ async function prepare({ identity, taskId, instruction = '', requested = {}, run
     const size = Number(file.size) > 0 ? '，' + Number(file.size) + ' bytes' : '';
     return (index + 1) + '. ' + name + (id ? '（附件 ID: ' + id + size + '）' : '');
   });
-  const readableIndex = attachmentIndex.concat(selectedOptional.map((file, index) => {
+  const referenceIndex = referenceAttachments.map((file, index) =>
+    (attachmentIndex.length + index + 1) + '. ' + String(file.filename || file.name || '附件').slice(0, 200) +
+    '（附件 ID: ' + String(file.id || file.attachmentId || '') + '；需求附件，只读参考，不是交付物）');
+  const readableIndex = attachmentIndex.concat(referenceIndex, selectedOptional.map((file, index) => {
     const name = String(file.filename || file.name || '附件').slice(0, 200);
     const id = String(file.id || file.attachmentId || '').trim();
     const size = Number(file.size) > 0 ? '，' + Number(file.size) + ' bytes' : '';
-    return (attachmentIndex.length + index + 1) + '. ' + name + (id ? '（附件 ID: ' + id + size + '；按需选择的过程文件）' : '');
+    return (attachmentIndex.length + referenceIndex.length + index + 1) + '. ' + name + (id ? '（附件 ID: ' + id + size + '；按需选择的过程文件）' : '');
   }));
   let lines = [auto ? '【自动验收】' : '【验收分析】',
     '你是验收助手。请核对已提交的成果是否满足需求，不要重新执行原需求，不要修改原交付物。',
@@ -187,7 +205,8 @@ async function prepare({ identity, taskId, instruction = '', requested = {}, run
     '。请先解压并按包内相对路径核验；上面的原附件 ID 仅用于追溯，不会再逐个附加。过程和验证材料仅在验收人主动选择后提供。');
   if (instruction) lines.push('验收人补充说明：\n' + instruction);
   const result = { acceptanceOnly: true, task, attachmentIds: selectedIds,
-    deliveryBundle: bundle || null, optionalAttachmentIds: requestedOptional,
+    deliveryBundle: bundle || null, referenceAttachmentIds: referenceIds,
+    optionalAttachmentIds: requestedOptional.filter(id => !referenceIds.includes(id)),
     beforeTurn: async () => {
       const currentIdentity = runtime?.identityOf ? await runtime.identityOf() : identity;
       const current = await request(currentIdentity, route + '/acceptance-context');
@@ -197,7 +216,8 @@ async function prepare({ identity, taskId, instruction = '', requested = {}, run
          * invalidate the binding and its artifact access.
          */
         assertExecutionSession(current.task, runtime, currentIdentity);
-      if (key(current) !== key(snapshot)) throw Error('验收版本已变化，请回到需求详情重新发起分析');
+      if (key(current) !== key(snapshot) || referenceKey(current) !== preparedReferences)
+        throw Error('验收版本已变化，请回到需求详情重新发起分析');
       if (current.canDecide !== true) throw Error('本次验收权限已变化，请刷新需求');
       assertAutomaticReview(current, auto);
     } };
@@ -286,6 +306,8 @@ async function prepare({ identity, taskId, instruction = '', requested = {}, run
     displaySummary(task.note || task.description),
     translate('验收标准') + '\n' + displaySummary(criteria.map(c => '- ' + c.label).join('\n')),
     description ? translate('交付成果') + '\n' + displaySummary(description) : '',
+    referenceAttachments.length ? translate('需求附件') + '\n' + displaySummary(referenceAttachments
+      .map(file => '- ' + String(file.filename || file.name || '附件')).join('\n')) : '',
     optionalNames.length ? translate('过程与验证材料') + '\n' + displaySummary(optionalNames.join('\n')) : '',
     context.readiness?.requiresHumanConfirmation ? translate(MANUAL_ONLY) : '',
     instruction ? translate('补充说明') + '\n' + instruction : ''].filter(Boolean).join('\n\n');

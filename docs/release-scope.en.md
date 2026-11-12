@@ -1,10 +1,10 @@
 # First release scope
 
-[Release scope](release-scope.md) · **English** · [Documentation](README.md)
+[简体中文](release-scope.md) · **English** · [Documentation](README.md)
 
 Project copyright is attributed to **MDiRi**. See the root [LICENSE](../LICENSE).
 
-The first release includes the desktop client, Hub, management UI, Runner source, multi-platform source launchers, and generic Docker self-hosting. It retains project-owned office, task, MCP, and capability-authoring guides, generic workflows, isolation checks, and migration tests.
+The public source includes the desktop client, Hub, management UI, Runner source, multi-platform source launchers, and generic Docker self-hosting. It retains project-owned office, task, MCP, and capability-authoring guides, generic workflows, isolation checks, and migration tests.
 
 Excluded from this distribution:
 
@@ -28,8 +28,8 @@ Stop the service and back up the complete data directory before updates. Restore
 
 Desktop installers, native runtimes, third-party models, imported plugins, and container images each need their own provenance, licensing, and runtime validation. Passing the source manifest check does not authorize distribution of those artifacts.
 
-See the [GitHub workflow guide](../.github/RELEASE.md) for source, Client and Hub pipelines. Client and Hub paths run only after the distribution scope, third-party evidence and upgrade baselines pass preflight. Workflow source does not establish publication clearance or a successful hosted run.
+See the [GitHub workflow guide](../.github/RELEASE.md) for source, Client and Hub pipelines. Client and Hub publication requires preflight checks for distribution scope, third-party evidence and the applicable platform acceptance requirements. Desktop upgrades require previous-installer baselines. Workflow source does not establish publication clearance or a successful hosted run.
 
-Initialize a public repository from a verified source ZIP, or squash the reviewed source into the public branch. Private development history, old tags, and previous artifacts are outside scope; do not turn the original development repository public. `tools/export_source.py` exports only the committed tree, checking every file against the manifest. It omits Git history, untracked files, and dependency caches.
+Initialize a public repository from a verified source ZIP, or squash the reviewed source into the public branch. Private development history, old tags, and previous artifacts are outside scope; do not turn the original development repository public. `tools/export_source.py` exports only the current committed tree, generates `tools/distribution/SOURCE-MANIFEST.json` from the archived files, records the source commit, and verifies the resulting ZIP. The manifest is an export artifact and must not be committed to Git. The archive omits Git history, uncommitted changes, untracked files, and dependency caches.
 
 Report only the platforms actually tested. Windows checks do not replace native macOS/Linux validation, and synthetic-data checks do not establish real-model or production acceptance.

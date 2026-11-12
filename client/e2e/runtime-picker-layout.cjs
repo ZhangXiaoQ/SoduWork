@@ -71,7 +71,8 @@ if (typeof electron === 'string') {
         window.runtimeReply=()=>({ok:true,runtimes:layoutRuntimes,availableRuntimes:layoutRuntimes,missing:[{id:'claude',displayName:'Claude'}]});
         soduWorkAPI.conversationSession.runtimes=async()=>runtimeReply();
         soduWorkAPI.conversationSession.conversationRuntimes=async()=>runtimeReply();
-        soduWorkAPI.conversationSession.probe=async id=>({ok:true,version:layoutRuntimes.find(r=>r.id===id)?.version});void 0`);
+        soduWorkAPI.conversationSession.probe=async id=>({ok:true,version:layoutRuntimes.find(r=>r.id===id)?.version});
+        window.dispatchEvent(new Event('agent-runtimes-changed'));void 0`);
       for (const [width, height, zoom] of [[1600,950,1],[900,700,1],[500,760,1.25]]) {
         win.setSize(width,height);win.webContents.setZoomFactor(zoom);await sleep(100);
         await click(trigger);
@@ -92,7 +93,7 @@ if (typeof electron === 'string') {
       await until(`document.querySelector(${JSON.stringify(trigger)}).textContent.includes('Google')`);
       report.checks.push({surface,case:'resize-open-picker-and-select-last-scrolled-runtime'});
       win.setSize(1600,950);await sleep(80);
-      await js('window.layoutRuntimes=layoutRuntimes.slice(0,1);void 0');
+      await js('window.layoutRuntimes=layoutRuntimes.slice(0,1);window.dispatchEvent(new Event("agent-runtimes-changed"));void 0');
       await click(trigger);await until(`document.querySelector(${JSON.stringify(popup)}).querySelectorAll('[data-runtime]').length===1`);
       const single=await geometry(trigger,popup);check(single,1);assert.equal(single.footerVisible,true);
       assert.ok(single.height<160,JSON.stringify(single));

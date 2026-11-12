@@ -95,7 +95,7 @@ async def seed():
         session.add(am.Plugin(
             id=PLUGIN, org_id=ORG, key="marketplace-policy",
             name="企业连接能力", description="验证目录分发策略",
-            enabled=True, source_kind="personal"))
+            enabled=True, source_kind="soduwork"))
         session.add(am.PluginVersion(
             id=VERSION, plugin_id=PLUGIN, version="1.0.0",
             checksum="marketplace-policy-v1",

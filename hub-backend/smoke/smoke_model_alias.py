@@ -114,9 +114,9 @@ async def main():
         check("迁移有一次性标记", await session.get(models.AppSetting, FLAG) is not None)
         check("重复执行不再改数据",
               await catalog._migrate_model_renames(session, [(PID, OLD, NEW)], FLAG) == 0)
-        check("自定义模型名称不被内置别名改写",
-              catalog.canonical_model_name("fixture-coding-model")
-              == "fixture-coding-model")
+        check("产品旧模型名映射为 SoduWork 新名",
+              catalog.canonical_model_name("dev-coding-large-agent-hugengyong")
+              == "dev-coding-large-agent-soduwork")
         await purge(session)
     await engine.dispose()
 

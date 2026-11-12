@@ -51,7 +51,7 @@ async function shot(name) {
 }
 const deadline = setTimeout(() => { console.error('Titlebar modal verification timed out'); app.exit(1); }, 60000);
 app.whenReady().then(async () => {
-  ipcMain.handle('pi-session-history', () => ({ ok: true, chats: [] }));
+  ipcMain.handle('pi-session-history', require('./fixtures/history-ipc.cjs').create(() => ({ ok: true, chats: [] })));
   ipcMain.handle('recent-workspace-get', () => ({ ok: true, dir: '' }));
   ipcMain.handle('app-info', () => ({ version: 'fixture', website: '', releaseHistory: [] }));
   const fixture = path.join(__dirname, 'fixtures/sidebar-projects.html');

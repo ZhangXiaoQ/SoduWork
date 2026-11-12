@@ -1,5 +1,5 @@
 /* Quiet folder hierarchy; all color/type choices follow the active SoduWork theme. */
-.ws-projects{margin:4px 0 3px}
+.ws-projects{margin:18px 0}
 .ws-projects-heading,.ws-project-heading{display:flex;align-items:center;gap:2px;min-width:0}
 .ws-projects-heading>.ws-section-toggle{flex:1;width:auto;justify-content:flex-start}
 .ws-projects-heading>.ws-section-toggle svg{margin-left:0}

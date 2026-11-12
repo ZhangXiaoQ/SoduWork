@@ -4,6 +4,48 @@ const fs = require('node:fs'), path = require('node:path'), vm = require('node:v
 const context = {}; context.window = context;
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../components/panels/work-automation-bindings.js'), 'utf8'), context);
 const B = context.WorkAutomationBindings;
+
+test('activation requires an unconditional instruction outside literal content', () => {
+  const quoted = [
+    '工作内容是 `说明。创建后启用。`', '工作内容是 ``说明。`示例`。创建后启用。``',
+    '工作内容如下：\n~~~text\n创建后启用\n~~~', '工作内容如下：\n````text\n```\n创建后启用\n````',
+    '工作内容如下：\n~~~text\n创建后启用', '工作内容是“说明。创建后启用。',
+    '把标题改为《说明。创建后启用。》', '> 创建后启用',
+  ];
+  const conditional = [
+    '如果审批通过，创建后启用。', 'If approval passes, enable after creation.',
+    '审批通过后，创建后启用。', '审批通过时；创建后启用。', 'Once approved, enable after saving.',
+    'When approved,\nenable after creation.', '创建后启用，如果审批通过。',
+    '请创建后启用？', 'enable after creation?', '例如，创建后启用。',
+  ];
+  for (const text of [...quoted, ...conditional]) {
+    assert.equal(B.resolve({enabled: true}, text, {enabled: false}, {}).enabled, false, text);
+    assert.equal(B.resolve({}, '保存为暂停状态。' + text, {enabled: true}, {}).enabled, false, text);
+  }
+  for (const text of ['如果审批失败，保存为暂停状态。', 'If approval fails, save as paused.']) {
+    assert.equal(B.resolve({}, text, {enabled: true}, {}).enabled, true, text);
+  }
+  for (const text of ['创建后启用。', '保存为暂停状态。Please enable after saving.',
+    '工作内容是“如果通过再执行”。创建后启用。']) {
+    assert.equal(B.resolve({}, text, {enabled: false}, {}).enabled, true, text);
+  }
+});
+
+test('explicit activation directives preserve pause intent and ignore task content', () => {
+  const resolve = (text, enabled, raw = {}) => B.resolve(raw, text, {enabled}, {});
+  const request = '创建测试自动化，名称 AUTO-1110，每天北京时间 23:55 执行，工作内容是“只回复 AUTO-1110-OK”。保存为暂停状态，不立即运行。';
+  assert.equal(resolve(request, true, {enabled: true}).enabled, false);
+  for (const text of ['暂不启用', '创建后不启用', '保存后不要启用', 'Please save as paused.']) {
+    assert.equal(resolve(text, true).enabled, false, text);
+  }
+  assert.equal(resolve('创建后启用', false).enabled, true);
+  for (const text of ['不立即运行', '如果保存为暂停状态会怎样', '不要保存为暂停状态',
+    '工作内容是“保存为暂停状态”。', '工作内容是“示例。创建后启用”。',
+    '名称改为「保存为暂停状态」', '每天23:55执行']) {
+    assert.equal(resolve(text, true).enabled, true, text);
+    assert.equal(resolve(text, false, {enabled: true}).enabled, false, text);
+  }
+});
 const catalogs = {
   methods:[{key:'games',name:'小游戏'},{key:'report',name:'报表'}],
   repos:[{id:'game-repo',name:'游戏工程',projectId:'game-project'},{id:'report-repo',name:'报表'}],
@@ -118,9 +160,10 @@ test('English explicit plugin instructions use the same grounded binding path', 
   const result = run(text,{automationBindings:{method:{action:'select',id:'mini-game',name:'Mini game',evidence:text}}},prior,c);
   assert.equal(result.personalPluginKey,'mini-game');
 });
-test('unsupported monthly schedules cannot silently become daily', () => {
+test('monthly schedules remain monthly and do not create an unsupported binding issue', () => {
   const result = run('每月一号生成报告');
-  assert.equal(result.every,'');assert.match(B.validate(result,catalogs), /月度/);
+  assert.equal(result.every,'monthly');
+  assert.doesNotMatch(B.validate(result,catalogs), /月度|支持/);
 });
 test('hypothetical clearing does not erase existing method or repo', () => {
   for (const text of ['如果不用插件会怎样','如果不关联工程会怎样','if no plugin is available, compare the results']) {

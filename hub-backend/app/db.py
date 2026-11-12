@@ -89,7 +89,7 @@ async def init_db() -> None:
     from . import conversation_handoff_models  # noqa: F401  durable transfer fences
     from . import account_conversation_models  # noqa: F401  cross-device conversation projection
     from . import remote_screen_models  # noqa: F401  read-only screen grants
-    from . import account_models, account_privacy_models, mail_models  # noqa: F401
+    from . import account_models, account_privacy_models, mail_models, legal_models  # noqa: F401
     from . import repository_issue_models  # noqa: F401
     from . import task_notification_models  # noqa: F401
     from . import im_models  # noqa: F401  opt-in IM transport receipts

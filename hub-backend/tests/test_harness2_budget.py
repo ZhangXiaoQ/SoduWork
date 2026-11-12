@@ -58,15 +58,15 @@ class Harness2BudgetTests(unittest.TestCase):
         self.assertEqual(len(self.requests), 7)
         self.assertEqual(len(self.usage), 7)
 
-    def test_normal_seven_stage_turn_has_input_output_and_latency_headroom(self):
+    def test_normal_seven_stage_turn_has_bounded_input_output_and_latency(self):
         self.assertEqual((MAX_PROMPT_BYTES, MAX_REPORTED_TOKENS, MAX_OUTPUT_TOKENS,
-                          MAX_SECONDS, MAX_REQUEST_SECONDS), (128000, 128000, 32768, 420, 300))
+                          MAX_SECONDS, MAX_REQUEST_SECONDS), (128000, 128000, 8192, 420, 300))
         messages = [{"role": "user", "content": "Constraint and evidence.\n" * 2500}]
-        delays = iter([25, 70, 80, 25, 25, 140, 25])
-        outputs = iter([2500, 9000, 9000, 2500, 2500, 9000, 2500])
+        delays = iter([25, 50, 50, 25, 25, 80, 25])
+        outputs = iter([1200] * 7)
 
         def charged(model, messages, on_usage, *, timeout):
-            self.assertEqual(model["maxOutputTokens"], 32768)
+            self.assertEqual(model["maxOutputTokens"], 2048)
             delay = next(delays)
             self.assertGreaterEqual(timeout, delay)
             self.requests.append(timeout)
@@ -76,20 +76,20 @@ class Harness2BudgetTests(unittest.TestCase):
 
         for _ in range(7):
             self.run_request(charged, messages=messages)
-        self.assertEqual(self.clock.now, 390)
-        self.assertEqual(self.budget.reported_tokens, 116800)
+        self.assertEqual(self.clock.now, 280)
+        self.assertEqual(self.budget.reported_tokens, 88200)
         self.assertEqual(len(self.usage), 7)
         self.assert_budget_failure(self.run_request)
         self.assertEqual(len(self.requests), 7)
 
     def test_output_cap_preserves_smaller_user_limit_and_does_not_mutate_model(self):
         self.run_request()
-        self.assertEqual(self.requests[-1][0]["maxOutputTokens"], MAX_OUTPUT_TOKENS)
+        self.assertEqual(self.requests[-1][0]["maxOutputTokens"], 2048)
         self.assertEqual(self.model["maxOutputTokens"], 65536)
         self.run_request(model={**self.model, "maxOutputTokens": 512})
         self.assertEqual(self.requests[-1][0]["maxOutputTokens"], 512)
         self.run_request(model={key: value for key, value in self.model.items() if key != "maxOutputTokens"})
-        self.assertEqual(self.requests[-1][0]["maxOutputTokens"], MAX_OUTPUT_TOKENS)
+        self.assertEqual(self.requests[-1][0]["maxOutputTokens"], 2048)
 
     def test_transport_receives_request_limit_or_remaining_deadline(self):
         self.run_request()

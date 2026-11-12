@@ -60,8 +60,12 @@ async def scoped_binding_readiness(session: AsyncSession, version: am.PluginVers
 async def binding_readiness(session: AsyncSession, version: am.PluginVersion,
                             project, org_id: str | None,
                             secret_refs: dict | None = None,
-                            binding_config: dict | None = None) -> dict:
-    """Behavior and constraints for this operation."""
+                            binding_config: dict | None = None, *,
+                            application_context: bool = False) -> dict:
+    """Report scope-specific plugin readiness at binding time, separating definite blockers from
+    warnings. Do not block saving during staged setup; runtime configuration gates remain
+    authoritative and allow retry after correction.
+    """
     from .. import models
     nodes = list(dict(version.workflow or {}).get("nodes") or [])
     reason = scm_support.workflow_reason(nodes) or optional_internal_features.workflow_missing_reason(nodes)
@@ -73,6 +77,24 @@ async def binding_readiness(session: AsyncSession, version: am.PluginVersion,
     warnings.extend(str(x) for x in capability.get("adapterWarnings") or [])
 
     wanted_mcp = list(capability.get("mcpServers") or [])
+    if application_context:
+        from . import plugin_application_mcp
+        owned = plugin_application_mcp.owned_names(
+            dict(getattr(version, "manifest", None) or {}), wanted_mcp)
+        if owned:
+            names = "、".join(sorted(owned))
+            dependency_checks.append({
+                "key": "app-mcp", "label": "应用 MCP 接入声明", "ok": True,
+                "detail": f"已声明应用自有连接：{names}；无需重复注册企业 MCP",
+                "detailMessage": descriptor("plugin.app-mcp.declared",
+                    f"已声明应用自有连接：{names}；无需重复注册企业 MCP", params={"names": names}),
+                "verification": "declaration",
+            })
+            warnings.append(
+                f"应用 MCP（{names}）由 SoduWork 客户端读取已保存的应用凭据；"
+                "本次只核对接入声明，未验证用户凭据或服务连通性。"
+                "实际使用仍检查安装授权、凭据和应用服务响应。")
+            wanted_mcp = [name for name in wanted_mcp if name not in owned]
     if wanted_mcp:
         from . import mcp_servers
         mcp_status = await mcp_servers.readiness(session, wanted_mcp)
@@ -249,7 +271,7 @@ async def simulate(session: AsyncSession, version: am.PluginVersion, project,
     """
     readiness = await binding_readiness(
         session, version, project, org_id, secret_refs=secret_refs,
-        binding_config=binding_config)
+        binding_config=binding_config, application_context=True)
     blockers = list(readiness["blockers"])
     warnings = list(readiness["warnings"])
     checks = [{

@@ -30,14 +30,15 @@ function loadSavedHub(app) {
 function saveHub(app, hub) {
   fs.writeFileSync(savedFile(app), JSON.stringify({ hub }), { encoding: 'utf8', mode: 0o600 });
 }
-function initialize(app, env = process.env) {
-  let hub = PRODUCTION_HUB, internalTest = false, editable = false;
+function initialize(app, env = process.env, distributionProfile = require('./distribution.cjs').current()) {
+  let hub = distributionProfile.hubOrigin, internalTest = false, editable = false;
   const testHub = env.SODUWORK_TEST_HUB_URL;
   const testProfile = env.SODUWORK_USER_DATA;
   if (!app.isPackaged && testHub) {
     const value = new URL(testHub);
     const profile = path.resolve(app.getPath('userData'));
-    const reserved = ['SoduWork'].map(name => path.resolve(app.getPath('appData'), name).toLowerCase());
+    const installedNames = ['SoduWork', 'soduwork', distributionProfile.userDataName, distributionProfile.linuxPackageName].filter(Boolean);
+    const reserved = installedNames.map(name => path.resolve(app.getPath('appData'), name).toLowerCase());
     if (!['http:', 'https:'].includes(value.protocol) ||
         !['127.0.0.1', '[::1]', 'localhost'].includes(value.hostname) ||
         value.username || value.password || value.search || value.hash || value.pathname !== '/' ||

@@ -91,6 +91,9 @@
   /* Reload notifications, refresh badges, and update the open notification center. */
   function pullNotices() {
     if (typeof notices === 'undefined' || !Array.isArray(notices)) return;
+    if (global.MateNoticeSync?.persistent) {
+      return global.MateNoticeSync.restore().catch(() => {});
+    }
     const arr = _read(noticeStorageKey(), '[]');
     if (!Array.isArray(arr)) return;
     notices.length = 0;
@@ -200,7 +203,7 @@
     if (global.soduWorkAPI && soduWorkAPI.onBroadcast) {
       soduWorkAPI.onBroadcast((kind, payload) => {
         const fn = HANDLERS[kind];
-        if (fn) fn(payload);
+        if (fn) return fn(payload);
       });
     }
   } catch (e) { /* No bridge: single-window mode. */ }

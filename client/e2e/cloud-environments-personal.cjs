@@ -50,7 +50,7 @@ app.whenReady().then(async () => {
   assert.equal(saveCall?.[1]?.credential?.hub, 'http://127.0.0.1:9080');
   assert.equal(installCall?.[1]?.credential?.hub, 'http://127.0.0.1:9080');
   assert.equal(await js('localStorage.length'), 0);
-  assert.match(await js('document.querySelector("dialog .ce-onetime h3").textContent'), /云端电脑已接入/);
+  assert.match(await js('document.querySelector("dialog .ce-onetime h3").textContent'), /Runner 安装已完成/);
   assert.equal(await js('document.querySelector("dialog").dataset.created'), 'true');
   assert.equal(await js('document.querySelector("dialog [type=submit]").disabled'), false);
   await js('document.querySelector("dialog [type=submit]").click(); void 0');
@@ -93,12 +93,35 @@ app.whenReady().then(async () => {
   await js('document.querySelector("input[name=host]").value="192.0.2.9"; document.querySelector("input[name=username]").value="runner"; document.querySelector("input[name=password]").value="synthetic-password-2"; void 0');
   await click('dialog [type=submit]');
   await until('!document.querySelector("dialog").hasAttribute("aria-busy")');
-  assert.match(await js('document.querySelector("dialog .ce-onetime h3").textContent'), /云端电脑已接入/);
+  assert.match(await js('document.querySelector("dialog .ce-onetime h3").textContent'), /连接信息已保存/);
+  assert.match(await js('document.querySelector("dialog [data-ce-connection]").textContent'), /尚未连接/);
   assert.equal(await js('localStorage.length'), 0);
   // Finish the one-time connection dialog before exercising the page actions;
   // a native modal otherwise intentionally blocks clicks on the remove button.
   await js('document.querySelector("dialog [type=submit]").click(); void 0');
   await until('!document.querySelector("dialog")');
+  // Existing SSH credentials restore Runner setup without a copy/paste round trip.
+  await js(`fixture.reconnectCalls=[];
+    soduWorkAPI.cloudComputer.get=async()=>({ok:true,configured:true});
+    fixture.savedProbe=soduWorkAPI.cloudComputer.test;
+    soduWorkAPI.cloudComputer.test=async()=>{fixture.reconnectCalls.push('probe');return {ok:false,error:'SSH unavailable'};};
+    fixture.savedRotate=SoduWorkAPI.rotateCloudEnvironmentCredential;
+    SoduWorkAPI.rotateCloudEnvironmentCredential=async(...args)=>{fixture.reconnectCalls.push('rotate');return fixture.savedRotate(...args);};
+    fixture.savedInstall=soduWorkAPI.cloudComputer.install;
+    soduWorkAPI.cloudComputer.install=async args=>{fixture.reconnectCalls.push('install');return fixture.savedInstall(args);};
+    CloudEnvironmentSetup.rotate(fixture.nodes[0],()=>{}, {recommendedHub:'https://soduwork.example.test'}); void 0`);
+  await click('dialog [type=submit]');
+  await until('!document.querySelector("dialog").hasAttribute("aria-busy")');
+  assert.deepEqual(await js('fixture.reconnectCalls'), ['probe'], 'failed SSH must not revoke the current Runner key');
+  assert.match(await js('document.querySelector("dialog [role=alert]").textContent'), /SSH unavailable/);
+  await js("soduWorkAPI.cloudComputer.test=async()=>{fixture.reconnectCalls.push('probe');return {ok:true};}; void 0");
+  await click('dialog [type=submit]');
+  await until('document.querySelector("dialog").dataset.created && !document.querySelector("dialog").hasAttribute("aria-busy")');
+  assert.deepEqual(await js('fixture.reconnectCalls'), ['probe', 'probe', 'rotate', 'install']);
+  assert.equal(await js('document.querySelector("dialog [data-ce-copy]")'), null);
+  await click('dialog [type=submit]');
+  await until('!document.querySelector("dialog")');
+  await js('soduWorkAPI.cloudComputer.test=fixture.savedProbe; soduWorkAPI.cloudComputer.install=fixture.savedInstall; SoduWorkAPI.rotateCloudEnvironmentCredential=fixture.savedRotate; void 0');
   // Verify the actual user path for preparing a cloud Harness, including
   // narrow-window layout and the asynchronous install state transition.
   await js(`(() => {

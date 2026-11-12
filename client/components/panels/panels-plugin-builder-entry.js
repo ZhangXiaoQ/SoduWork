@@ -2,8 +2,8 @@
 (function (global) {
   'use strict';
 
-  /* App creation starts with type selection in the create-app dialog, then opens this conversation.
-     The input receives the selected app-type prefix, and the user supplies the remaining description. */
+  /* The app creation dialog selects a type before opening this conversation.
+     The composer adds the corresponding creation prefix so the user can complete the description. */
   const APP_KIND_PROMPTS = {
     web: '创建网页类即用：',
     desktop: '创建桌面客户端：',

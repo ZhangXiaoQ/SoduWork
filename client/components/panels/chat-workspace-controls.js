@@ -665,6 +665,8 @@ function bindWorkbench(root, getContext) {
     if (global.ResizeObserver) {
       ctx.WB.observer = new global.ResizeObserver(ctx.scheduleNative);
       ctx.WB.observer.observe(root);
+      const body = root.querySelector('.ncw-body');
+      if (body) ctx.WB.observer.observe(body);
     }
     if (global.IntersectionObserver) {
       ctx.WB.visibilityObserver = new global.IntersectionObserver((entries) => {

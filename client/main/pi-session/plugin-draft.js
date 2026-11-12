@@ -29,13 +29,13 @@ function findRecent(handles) {
   return rows[0] || null;
 }
 
-function readRecent(handles) {
+function readRecent(handles, app) {
   const found = findRecent(handles);
   if (!found) return { ok: false, reason: '最近的活动会话里还没有可安装的插件草稿' };
-  return readCandidate(found);
+  return readCandidate(found, app);
 }
 
-async function readRecentAsync(handles) {
+async function readRecentAsync(handles, app) {
   const rows = (await Promise.all((Array.isArray(handles) ? handles : []).map(async handle => {
     try {
       const snapshot = typeof handle?.outputSnapshotAsync === 'function'
@@ -43,11 +43,11 @@ async function readRecentAsync(handles) {
       return snapshot ? _candidate(handle, snapshot) : null;
     } catch (_) { return null; }
   }))).filter(Boolean).sort((a, b) => b.at - a.at);
-  return rows.length ? readCandidate(rows[0])
+  return rows.length ? readCandidate(rows[0], app)
     : { ok: false, reason: '最近的活动会话里还没有可安装的插件草稿' };
 }
 
-function readSession(handle, target, indexed) {
+function readSession(handle, target, indexed, app) {
   if (!handle) return { ok: false, reason: '请重新打开制作插件的会话后安装' };
   if (typeof handle.inFlight === 'function' && handle.inFlight()) {
     return { ok: false, reason: '插件还在制作中，请等本轮完成后安装' };
@@ -75,15 +75,15 @@ function readSession(handle, target, indexed) {
     }
     file = current;
   }
-  return readCandidate({ handle, file, at: Number(file.at || 0) });
+  return readCandidate({ handle, file, at: Number(file.at || 0) }, app);
 }
 
-async function readSessionAsync(handle, target) {
+async function readSessionAsync(handle, target, app) {
   if (!handle) return readSession(handle, target);
-  return readSession(handle, target, await require('../conversation/artifact-runtime').snapshotAsync(handle));
+  return readSession(handle, target, await require('../conversation/artifact-runtime').snapshotAsync(handle), app);
 }
 
-function readCandidate(found) {
+function readCandidate(found, app) {
   try {
     if (typeof found.handle.inFlight === 'function' && found.handle.inFlight()) {
       return { ok: false, reason: '插件还在制作中，请等本轮完成后安装' };
@@ -102,7 +102,8 @@ function readCandidate(found) {
     }
     return {
       ok: true,
-      body: resources.collect(body, found.file.path, found.handle.cwd),
+      body: require('../jiyong-edit-source.cjs').reconcile({app,cwd:found.handle.cwd,file:found.file.path,
+        body:resources.collect(body, found.file.path, found.handle.cwd)}),
       source: {
         sessionId: String(found.handle.sessionId || ''),
         relative: String(found.file.relative || DRAFT_NAME),
@@ -114,13 +115,13 @@ function readCandidate(found) {
   }
 }
 
-function installIpc(ipcMain, session) {
-  ipcMain.handle('pi-session-recent-plugin-draft', () => readRecentAsync(session.list()));
+function installIpc(ipcMain, session, app) {
+  ipcMain.handle('pi-session-recent-plugin-draft', () => readRecentAsync(session.list(), app));
   ipcMain.handle('pi-session-plugin-draft', async (event, ref, target) => {
     if (!require('../platform-connections/index.cjs').trustedSender(event)) {
       return { ok: false, reason: '只允许 SoduWork 客户端安装会话插件' };
     }
-    try { return await readSessionAsync(session.get(ref), target); }
+    try { return await readSessionAsync(session.get(ref), target, app); }
     catch (error) { return { ok: false, reason: '插件草稿读取失败：' + error.message }; }
   });
 }

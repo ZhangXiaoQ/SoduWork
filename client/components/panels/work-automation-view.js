@@ -58,7 +58,8 @@
     if (!fields) return () => {};
     const scrollTop = fields.scrollTop;
     const active = body.contains(document.activeElement) ? document.activeElement : null;
-    const name = active?.name, reload = active?.hasAttribute('data-waz-reload-agents');
+    const name = active?.name || (active?.dataset?.selectId && document.getElementById(active.dataset.selectId)?.name);
+    const reload = active?.hasAttribute('data-waz-reload-agents');
     return () => {
       const next = body.querySelector('.waz-fields');
       if (next) next.scrollTop = scrollTop;

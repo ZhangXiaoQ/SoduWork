@@ -71,6 +71,18 @@
     "name": "Skill 创建与优化",
     "description": "把业务流程沉淀为可复用 Skill，支持新建、调整、校验和多平台导出。交付真实技能包、资源、变更说明与验证报告。"
   },
+  "soduwork-batch-release-149": {
+    "name": "【SoduWork 专用】批量发布 149",
+    "description": "SoduWork 发布窗口专用流程：只集成明确选择的待发布固定提交，完成发布前检查、自动合并、项目发布链、健康检查和发布回执。"
+  },
+  "soduwork-bugfix-149": {
+    "name": "Bug 修复 · 上线 149",
+    "description": "SoduWork 自有工程的缺陷修复闭环：先稳定复现并限定最小修复范围，再完成质量门禁、AI 审查、自动合并、149 发布、健康核对和带截图证据的人工验收；无法复现时安全转人工。"
+  },
+  "soduwork-change-149": {
+    "name": "需求交付 · 上线 149",
+    "description": "SoduWork 自有工程的新需求与需求变更闭环：先形成完整需求和验收基线，再完成全链路实现、质量门禁、AI 审查、自动合并、149 发布、健康核对和带截图证据的人工验收。"
+  },
   "soduwork-fast-change": {
     "name": "【SoduWork 专用】快速改动",
     "description": "SoduWork 日间轻量研发：Codex 一次完成 Bug 或小需求的实现、自测、自审与推送，只形成待发布固定提交，不合并、不打包、不部署。"

@@ -1,9 +1,9 @@
 // Exercise production React, API serialization, native controls and layout against an isolated HTTP fixture.
 const { app, BrowserWindow, session } = require('electron')
-const fs = require('node:fs'), path = require('node:path'), http = require('node:http')
+const fs = require('node:fs'), path = require('node:path'), http = require('node:http'), os = require('node:os')
 const assert = require('node:assert/strict')
 const root = path.resolve(__dirname, '..'), dist = path.join(root, 'dist')
-const output = path.resolve(root, '../outputs/quota-admin-browser-20261025')
+const output = process.argv[2] || fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-quota-admin-'))
 fs.mkdirSync(output, { recursive: true })
 app.setPath('userData', path.join(output, 'profile'))
 app.disableHardwareAcceleration()
@@ -94,7 +94,7 @@ async function handle(req, res) {
   if (!file.startsWith(dist + path.sep) || !fs.existsSync(file)) { res.writeHead(404); res.end(); return }
   let body = fs.readFileSync(file)
   if (relative === 'index.html') {
-    const setup = `localStorage.setItem('soduwork_admin_token','quota-fixture-token');localStorage.setItem('soduwork_admin_user',${JSON.stringify(JSON.stringify(user))});sessionStorage.setItem('soduwork-hub-screen','quotas');localStorage.setItem('soduwork.locale',${JSON.stringify(url.searchParams.get('locale') || 'zh-CN')});`
+    const setup = `localStorage.setItem('soduwork_hub_admin_token','quota-fixture-token');localStorage.setItem('soduwork_hub_admin_user',${JSON.stringify(JSON.stringify(user))});sessionStorage.setItem('soduwork-hub-screen','quotas');localStorage.setItem('soduwork.locale',${JSON.stringify(url.searchParams.get('locale') || 'zh-CN')});`
     body = Buffer.from(body.toString().replace('<head>', '<head><script>' + setup + '</script>'))
   }
   res.writeHead(200, { 'Content-Type': file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.html') ? 'text/html' : 'application/octet-stream' }); res.end(body)
@@ -122,6 +122,9 @@ app.whenReady().then(async () => {
   await win.loadURL(origin)
   await waitFor('document.querySelectorAll(".qm-plan-card").length===3', 'three plans')
   assert.equal(await js('document.querySelector(".app").dataset.screen'), 'quotas')
+  assert.equal(await js('document.querySelectorAll(".nav-item").length'), 1, 'quota-only permission exposes only the quota module')
+  await point('document.querySelector(".nav-item[aria-current=page]")')
+  assert.equal(await js('document.querySelectorAll(".qm-plan-card").length'), 3)
   assert.ok(await js('document.querySelector(".qm-trial").textContent.includes("100,000")'))
   await shot('plans-zh')
   checks.push('Dedicated permission-gated module renders trial, Standard and Pro from one catalog request')
@@ -190,6 +193,16 @@ app.whenReady().then(async () => {
   assert.ok(await js('document.querySelector(".quota-management").getBoundingClientRect().right <= innerWidth + 1'))
   await shot('plans-narrow')
   checks.push('English, Japanese and Korean copy plus narrow-layout bounds verified in Chromium')
+  const quotaRequestsBeforeDenial = requests.filter(row => row.path.startsWith('/api/v1/admin/quotas')).length
+  user.permissions = []
+  await win.loadURL(origin + '/?locale=en-US')
+  await waitFor('!!document.querySelector(".app .landing")', 'account without management permissions')
+  assert.equal(await js('document.querySelectorAll(".quota-management, .nav-item").length'), 0, 'no quota access without its permission')
+  assert.equal(requests.filter(row => row.path.startsWith('/api/v1/admin/quotas')).length, quotaRequestsBeforeDenial, 'denied account never requests quota data')
+  user.permissions = ['quota.manage']
+  await win.loadURL(origin + '/?locale=en-US')
+  await waitFor('document.querySelectorAll(".qm-plan-card").length===4', 'quota permission restored')
+  checks.push('Quota-only permission exposes the module; removing permission hides it and prevents quota requests; restoring permission restores access')
   assert.deepEqual(errors, [])
   assert.equal(requests.filter(row => /\/admin\/(users|model-catalog|orgs)/.test(row.path)).length, 0)
   await finish()

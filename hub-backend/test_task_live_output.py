@@ -7,6 +7,17 @@ from app.services import ai_exec, execution_sessions, local_stream, runtime_mess
 
 
 class LiveOutputTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        # These tests isolate transcript routing; acceptance/access have their
+        # own integration coverage and require real database models.
+        from app.services import cloud_acceptance, task_access
+        acceptance = patch.object(cloud_acceptance, 'status', AsyncMock(return_value=None))
+        access = patch.object(task_access, 'can_continue_execution', return_value=True)
+        acceptance.start()
+        access.start()
+        self.addCleanup(acceptance.stop)
+        self.addCleanup(access.stop)
+
     async def test_foreign_execution_is_rejected_before_runner_access(self):
         session = SimpleNamespace(execute=AsyncMock(return_value=Mock(scalar_one_or_none=Mock(return_value=None))))
         with patch.object(tasks, '_view_task', AsyncMock(return_value=SimpleNamespace(id='t'))), patch.object(ai_exec, 'load', AsyncMock()) as load:
@@ -21,7 +32,7 @@ class LiveOutputTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(tasks, '_view_task', AsyncMock(return_value=SimpleNamespace(id='t'))), patch.object(ai_exec, 'load', AsyncMock(return_value={})), patch.object(ai_exec, 'session_sync', return_value={'ok': True}) as read, patch.object(execution_sessions, 'ingest_live_snapshot', AsyncMock()), patch.object(execution_sessions, 'read_task', AsyncMock(return_value={'ok': True, 'ref': 'r', 'items': []})) as cached:
             await tasks.ai_session_task(tid='t', ref='r', since=401, client=None, session=session)
             read.assert_called_once_with({}, 'r', 401)
-            cached.assert_awaited_once_with(session, 't', 'r', 401)
+            cached.assert_awaited_once_with(session, 't', 'r', 401, limit=400)
 
     def test_pi_tool_identity_error_and_complete_output_are_preserved(self):
         rows = local_stream._items_from({'type': 'tool_execution_end', 'toolCallId': 'call', 'toolName': 'bash', 'isError': True,

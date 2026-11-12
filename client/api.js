@@ -430,6 +430,10 @@
   }
   function handleAuthError(error) {
     if (!error) return;
+    if (error.code === 'LEGAL_ACCEPTANCE_REQUIRED') {
+      window.dispatchEvent(new CustomEvent('soduwork-legal-required'));
+      return;
+    }
     if (error.code === 'TOKEN_QUOTA_EXCEEDED' || error.status === 401) {
       requireClientAuth(error.code || 'SESSION_INVALID', error.payload || error);
     }
@@ -1772,9 +1776,12 @@
      * Read incremental execution events without SSH: say for agent text, do for actions, and
      * out for command output.
      */
-    async aiSession(tid, since) {
+    async aiSession(tid, since, ref) {
       try {
-        var q = since ? ('?since=' + encodeURIComponent(since)) : '';
+        var params = new URLSearchParams();
+        if (since) params.set('since', String(since));
+        if (ref) params.set('ref', String(ref));
+        var q = params.size ? '?' + params.toString() : '';
         var r = await jfetch('/tasks/' + encodeURIComponent(tid) + '/ai-session' + q);
         mark(true); return r || { ok: false, items: [] };
       } catch (e) { markFromError(e); return { ok: false, items: [], httpStatus: Number(e.status) || 0, error: '拿不到执行记录，请检查需求权限或后台连接' }; }
@@ -2539,9 +2546,11 @@
         email: ['POST', '/client-auth/me/email-change'],
         export: ['POST', '/client-auth/me/exports'],
         deletion: ['POST', '/client-auth/me/deletion'],
-        legal: ['GET', '/client-auth/legal-documents'], privacy: ['GET', '/client-auth/me/privacy']
+        legal: ['GET', '/client-auth/legal-documents'], privacy: ['GET', '/client-auth/me/privacy'],
+        legalStatus: ['GET', '/client-auth/me/legal-status'], legalResponse: ['POST', '/client-auth/me/legal-response']
       };
       var route = routes[operation];
+      if (operation === 'legalVersion') route = ['GET', '/client-auth/legal-documents/versions/' + encodeURIComponent(String(payload && payload.id || ''))];
       if (operation === 'exportStatus') route = ['GET', '/client-auth/me/exports/' + encodeURIComponent(String(payload && payload.id || ''))];
       if (operation === 'revokeDevice') route = ['DELETE', '/client-auth/me/devices/' + encodeURIComponent(String(payload && payload.deviceId || ''))];
       if (!route) throw new Error('不支持的账号操作');

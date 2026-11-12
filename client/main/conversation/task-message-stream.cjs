@@ -13,7 +13,7 @@ function create(state, persist) {
     if (message?.done) return true; // Native replay of a completed stream.
     const previous = message?.blocks?.[0]?.text || '';
     const incoming = String(item.full ?? item.text ?? '');
-    const text = String(item.delta ? previous + incoming : incoming || (item.done ? previous : '')).slice(-50000);
+    const text = String(item.delta ? previous + incoming : incoming || (item.done ? previous : ''));
     if (!text) return true;
     const completedAt = item.done ? epoch(item.at) || Date.now() : 0;
     const record = { kind: 'message', role: 'assistant', text, blockKind: item.kind,
@@ -27,6 +27,7 @@ function create(state, persist) {
       state.messages.push(message); rows.set(key, message);
     }
     message.blocks[0].text = text;
+    Object.assign(message, source.fields(item.sourceAgent));
     message.blocks[0].done = item.done === true;
     message.done = item.done === true;
     message.completedAt = completedAt;

@@ -21,6 +21,8 @@ export default function PluginRecommendButton({ plugin, version, onChanged, onOp
   const [cover, setCover] = useState('')
   const [compose, setCompose] = useState(false)
   const [featured, setFeatured] = useState(false)
+  const [sidebar, setSidebar] = useState(false)
+  const [sidebarSaved, setSidebarSaved] = useState(Boolean(plugin.catalogPolicy?.sidebarRecommended))
   const savedCompose = plugin.catalogPolicy?.composeRecommended
   const [composeSaved, setComposeSaved] = useState(savedCompose ?? null)
   const [checking, setChecking] = useState(typeof savedCompose !== 'boolean')
@@ -33,15 +35,19 @@ export default function PluginRecommendButton({ plugin, version, onChanged, onOp
   useEffect(() => {
     const request = ++statusRequest.current
     setLookupError(false)
-    if (typeof savedCompose === 'boolean') {
+    if (typeof savedCompose === 'boolean' && typeof plugin.catalogPolicy?.sidebarRecommended === 'boolean') {
       setComposeSaved(savedCompose)
+      setSidebarSaved(plugin.catalogPolicy.sidebarRecommended)
       setChecking(false)
     } else {
       // Detail responses omit compose placements; read them before choosing the action.
       setComposeSaved(null)
       setChecking(true)
       api.pluginRecommendation(plugin.id).then((echo) => {
-        if (request === statusRequest.current) setComposeSaved(Boolean(echo?.composeRecommended))
+        if (request === statusRequest.current) {
+          setComposeSaved(Boolean(echo?.composeRecommended))
+          setSidebarSaved(Boolean(echo?.sidebarRecommended))
+        }
       }).catch(() => {
         if (request === statusRequest.current) setLookupError(true)
       }).finally(() => {
@@ -49,7 +55,7 @@ export default function PluginRecommendButton({ plugin, version, onChanged, onOp
       })
     }
     return () => { statusRequest.current += 1 }
-  }, [plugin.id, savedCompose])
+  }, [plugin.id, savedCompose, plugin.catalogPolicy?.sidebarRecommended])
   async function openDialog() {
     if (checking || busy || disabled) return
     const request = ++statusRequest.current
@@ -61,6 +67,8 @@ export default function PluginRecommendButton({ plugin, version, onChanged, onOp
       setComposeSaved(currentCompose)
       setLookupError(false)
       setCompose(currentCompose)
+      setSidebar(Boolean(echo?.sidebarRecommended))
+      setSidebarSaved(Boolean(echo?.sidebarRecommended))
       setFeatured(featuredNow)
       setCover(plugin.catalogPolicy?.coverUrl || version?.manifest?.coverUrl || plugin.latestVersion?.manifest?.coverUrl || '')
       setError('')
@@ -90,12 +98,13 @@ export default function PluginRecommendButton({ plugin, version, onChanged, onOp
     setBusy(true); setError('')
     try {
       const policy = await api.updatePluginCatalogPolicy(plugin.id, {
-        featured, coverUrl: cover.trim(), composeRecommended: compose,
+        featured, coverUrl: cover.trim(), composeRecommended: compose, sidebarRecommended: sidebar,
       })
       setComposeSaved(Boolean(policy?.composeRecommended))
+      setSidebarSaved(Boolean(policy?.sidebarRecommended))
       onChanged?.(plugin.id, policy)
       setOpen(false)
-      toast(featured || compose ? tx('已保存推荐，客户端目录会自动同步') : tx('已取消推荐'))
+      toast(featured || compose || sidebar ? tx('已保存推荐，客户端目录会自动同步') : tx('已取消推荐'))
     } catch (e) { setError(e.message); toast(e.message) }
     finally { setBusy(false) }
   }
@@ -103,15 +112,16 @@ export default function PluginRecommendButton({ plugin, version, onChanged, onOp
     if (busy) return
     setBusy(true); setError('')
     try {
-      const policy = await api.updatePluginCatalogPolicy(plugin.id, { featured: false, composeRecommended: false })
+      const policy = await api.updatePluginCatalogPolicy(plugin.id, { featured: false, composeRecommended: false, sidebarRecommended: false })
       setComposeSaved(false)
+      setSidebarSaved(false)
       onChanged?.(plugin.id, policy); setOpen(false); toast(tx('已取消推荐'))
     } catch (e) { setError(e.message); toast(e.message) }
     finally { setBusy(false) }
   }
   const saving = busy ? tx('正在保存…') : tx('保存')
-  const active = compose || featured
-  const hasSaved = featuredNow || composeSaved === true
+  const active = compose || featured || sidebar
+  const hasSaved = featuredNow || composeSaved === true || sidebarSaved
   const actionLabel = hasSaved ? tx('编辑推荐') : composeSaved === null ? tx('推荐设置') : t('plugin.recommend.action')
   return <>
     <div className={'plugin-recommend-control' + (hasSaved ? ' is-recommended' : '')}>
@@ -149,6 +159,9 @@ export default function PluginRecommendButton({ plugin, version, onChanged, onOp
           <PositionCard id="optApp" icon={APPS_ICON} label={tx('应用页 · 推荐分组')}
             sub={tx('应用面板「推荐」分组的大图卡片')}
             checked={featured} busy={busy} onToggle={() => setFeatured(v => !v)} />
+          <PositionCard id="optSidebar" icon={APPS_ICON} label={tx('主侧栏 · 应用入口')}
+            sub={tx('向有使用权限的用户展示，点击在主窗口右侧打开')}
+            checked={sidebar} busy={busy} onToggle={() => setSidebar(v => !v)} />
         </div>
       </section>
       {(version || plugin.latestVersion)?.trustState !== 'approved' &&

@@ -23,8 +23,8 @@ if (typeof electron === 'string') {
   const assert = require('node:assert/strict'), { pathToFileURL } = require('node:url');
   const client = path.resolve(__dirname, '..'), temporary = path.resolve(process.argv[2] || '');
   if (path.dirname(temporary) !== path.resolve(os.tmpdir()) || !path.basename(temporary).startsWith('soduwork-library-client-local-')) throw Error('Isolated temporary profile required');
-  const profile = path.join(temporary, 'profile'), output = path.resolve(client, '../outputs/library-client-local');
-  fs.mkdirSync(profile, { recursive: true }); fs.mkdirSync(output, { recursive: true });
+  const profile = path.join(temporary, 'profile'), libraryWorkRoot = path.join(temporary, 'workspace'), output = path.resolve(client, '../outputs/library-client-local');
+  fs.mkdirSync(profile, { recursive: true }); fs.mkdirSync(libraryWorkRoot, { recursive: true }); fs.mkdirSync(output, { recursive: true });
   app.setPath('userData', profile); app.setPath('sessionData', path.join(profile, 'chromium'));
   app.on('window-all-closed', () => {});
   const report = { ok: false, boundary: 'Real Electron, production preload/IPC, client filesystem, renderer API and panel. Synthetic account identities and loopback HTTP multipart receiver; no production profile, Hub or NFS.', cases: [] };

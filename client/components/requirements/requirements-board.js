@@ -6,7 +6,7 @@
   let identity = '', epoch = 0, projects = new Map(), projectRequest = 0, menuAnchor = null;
   let createMenuDismiss = null;
   const panel = () => document.getElementById('historyBoard');
-  const rows = () => typeof tasks === 'undefined' ? [] : tasks;
+  const rows = () => typeof tasks === 'undefined' ? [] : tasks.filter(R.isRequirement);
   const notify = text => global.petSay?.(text);
   const storageKey = () => global.SoduWorkAPI?.taskStorageKey?.('tasks');
   function syncIdentity() {

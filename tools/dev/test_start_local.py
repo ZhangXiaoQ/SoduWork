@@ -61,7 +61,11 @@ class LocalStartupTests(unittest.TestCase):
                 return  # Native macOS path is covered by its platform startup job.
             fresh = start.default_state()
             self.assertIn("soduwork", fresh.as_posix().lower())
-            fresh.mkdir(parents=True)
+            old = base / ("SoduWork/source-service" if os.name == "nt" else "soduwork/source-service")
+            old.mkdir(parents=True)
+            (old / "local-service.json").write_text("{}", encoding="utf-8")
+            self.assertEqual(start.default_state(), old)
+            fresh.mkdir(parents=True, exist_ok=True)
             marker = fresh / "local-service.json"
             marker.write_text("{}", encoding="utf-8")
             self.assertEqual(start.default_state(), fresh)
@@ -198,24 +202,20 @@ class LocalStartupTests(unittest.TestCase):
                 start.assert_available("127.0.0.1", port)
             self.assertEqual(listener.getsockname()[1], port)
 
-    @unittest.skipIf(os.name == "nt", "POSIX TIME_WAIT reuse; Windows keeps exclusive binding")
-    def test_closed_server_connections_do_not_block_immediate_restart(self):
+    @unittest.skipIf(os.name == "nt", "POSIX listener reuse; Windows uses exclusive bind")
+    def test_closed_http_connection_allows_restart_but_live_reusable_listener_does_not(self):
         with socket.socket() as listener:
             listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             listener.bind(("127.0.0.1", 0))
             listener.listen()
             port = listener.getsockname()[1]
-            with socket.create_connection(("127.0.0.1", port), timeout=2) as client:
-                connection, _ = listener.accept()
-                connection.close()
-                self.assertEqual(client.recv(1), b"")
-        start.assert_available("127.0.0.1", port)
-        with socket.socket() as restarted:
-            restarted.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            restarted.bind(("127.0.0.1", port))
-            restarted.listen()
             with self.assertRaisesRegex(start.StartupError, "already in use"):
                 start.assert_available("127.0.0.1", port)
+            with socket.create_connection(("127.0.0.1", port), timeout=2) as peer:
+                accepted, _ = listener.accept()
+                accepted.close()
+                self.assertEqual(peer.recv(1), b"")
+        start.assert_available("127.0.0.1", port)
 
     def test_check_is_read_only_even_for_a_new_data_directory(self):
         with patch.object(start, 'dependency_report') as report, patch.object(start, 'initialize') as initialize:
@@ -291,6 +291,49 @@ class LocalStartupTests(unittest.TestCase):
             with self.assertRaisesRegex(build.StartupError, 'Electron was not downloaded'):
                 build.prepare_desktop(self.state, self.state / 'startup.log')
         self.assertFalse((self.state / 'desktop-dependencies.sha256').exists())
+
+    def cached_desktop(self):
+        client = self.state / 'application/client'
+        client.mkdir(parents=True)
+        lock = client / 'package-lock.json'
+        lock.write_text('{}')
+        binary = build.electron_binary(client)
+        binary.parent.mkdir(parents=True)
+        binary.write_text('electron fixture')
+        (self.state / 'desktop-dependencies.sha256').write_text(
+            build.hashlib.sha256(lock.read_bytes()).hexdigest())
+        return client
+
+    def test_cached_windows_desktop_verifies_shell_on_each_start(self):
+        with patch.object(sys, 'platform', 'win32'):
+            client = self.cached_desktop()
+            log = self.state / 'startup.log'
+            with patch.object(build, 'check_dependencies', return_value=('node', 'npm')), \
+                    patch.object(build, 'run') as run:
+                for _ in range(2):
+                    self.assertEqual(build.prepare_desktop(self.state, log), client)
+            self.assertEqual(run.call_count, 2)
+            for call in run.call_args_list:
+                self.assertEqual(call.args[0], [
+                    'node', str(client / 'scripts/prepare-shell-runtime.cjs')])
+                self.assertEqual(call.kwargs['cwd'], client)
+                self.assertEqual(call.kwargs['log'], log)
+
+    def test_windows_shell_preparation_failure_stops_desktop_preparation(self):
+        with patch.object(sys, 'platform', 'win32'):
+            self.cached_desktop()
+            with patch.object(build, 'check_dependencies', return_value=('node', 'npm')), \
+                    patch.object(build, 'run', side_effect=build.StartupError('shell fixture failed')):
+                with self.assertRaisesRegex(build.StartupError, 'shell fixture failed'):
+                    build.prepare_desktop(self.state, self.state / 'startup.log')
+
+    def test_cached_nonwindows_desktop_does_not_prepare_windows_shell(self):
+        with patch.object(sys, 'platform', 'darwin'):
+            client = self.cached_desktop()
+            with patch.object(build, 'check_dependencies', return_value=('node', 'npm')), \
+                    patch.object(build, 'run') as run:
+                self.assertEqual(build.prepare_desktop(self.state, self.state / 'startup.log'), client)
+            run.assert_not_called()
 
     def test_desktop_download_failure_keeps_overrides_and_reports_recovery(self):
         client = self.state / 'application/client'
@@ -383,11 +426,18 @@ class LocalStartupTests(unittest.TestCase):
             build.prepare(self.state, self.state / "startup.log")
             for name in ("LICENSE", "third-party/manifest.json"):
                 self.assertEqual((self.state / "application" / name).read_bytes(), (source / name).read_bytes())
+            generated = [self.state / 'application/client' / relative for relative in (
+                '.runtime/git/bin/bash.exe', '.runtime-cache/portable-git.part')]
+            for file in generated:
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_bytes(b'generated runtime fixture')
             calls.clear()
             put("client/assets/connector-brands/fixture.svg", "updated artwork")
             build.prepare(self.state, self.state / "startup.log")
             self.assertEqual(calls, ["[4/4] 构建管理页面 / Building the management UI"])
             self.assertEqual((self.state / "application/client/assets/connector-brands/fixture.svg").read_text(), "updated artwork")
+            for file in generated:
+                self.assertEqual(file.read_bytes(), b'generated runtime fixture')
 
     def test_interactive_password_recovers_without_restarting_or_printing_secrets(self):
         config = start.initialize(self.state, 'admin')

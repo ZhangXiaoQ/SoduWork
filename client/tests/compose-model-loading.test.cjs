@@ -74,6 +74,21 @@ test('cold composer redraws share the first delayed request and ready waits for 
   assert.equal(f.requests.length, 1, 'completed directory remains cached');
 });
 
+test('managed picker shows protocol and warns on an incompatible selected default without silently replacing it', async () => {
+  const f = fixture(); f.start();
+  f.requests[0].resolve({ usable: [
+    { name: 'anthropic-fixture', providerKind: 'anthropic' },
+    { name: 'openai-fixture', providerKind: 'openai-compat' },
+  ], defaultModels: { pi: 'anthropic-fixture' } });
+  await f.picker.ready();
+  assert.equal(f.picker.value().modelName, 'anthropic-fixture');
+  assert.match(f.nodes.cpModelPop.innerHTML, /Anthropic/);
+  assert.match(f.nodes.cpModelPop.innerHTML, /role="note">企业模型对话通道只支持 OpenAI/);
+  f.choose('openai-fixture');
+  assert.equal(f.picker.value().modelName, 'openai-fixture');
+  assert.match(f.nodes.cpModelPop.innerHTML, /role="note">企业模型/);
+});
+
 test('binding after preference paint reuses the pending directory and a new draft refreshes completed data', async () => {
   const f = fixture();
   const painted = f.picker.refresh();

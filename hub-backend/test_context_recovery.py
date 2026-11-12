@@ -9,6 +9,31 @@ from app.services import local_base as base, local_ctx as ctx, local_stream as s
 from app.services import local_context_policy as policy
 
 class ContextRecoveryTests(unittest.TestCase):
+    def test_legacy_harness_session_migrates_through_the_existing_history_relay(self):
+        self.row.update(cli="harness2", cliSid="ses_legacy_executor", state="done", tokens={})
+        self.mock_profile("harness2", dict(base._PROFILES["harness2"], bin=lambda: "fixture",
+            start=lambda *_: ["new-native"], resume=lambda sid, *_: ["resume-native", sid]))
+        result = ctx.prepare_resume(self.ref, "Continue without repeating completed work", {})
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.spawn.call_args.args[1], ["new-native"])
+        self.assertIn("仅允许分析", self.spawn.call_args.args[2])
+        self.assertIn("Continue without repeating completed work", self.spawn.call_args.args[2])
+        self.assertEqual(self.row["contextSegments"][0]["sid"], "ses_legacy_executor")
+        self.assertEqual(self.row["taskId"], "keep-task")
+        self.assertEqual(self.row["mode"], "plan")
+        self.assertEqual(self.row["segment"], 2)
+
+    def test_independent_harness_session_resumes_without_relaying_or_losing_identity(self):
+        sid = "h2_" + "a" * 32
+        self.row.update(cli="harness2", cliSid=sid, state="done", tokens={})
+        self.mock_profile("harness2", dict(base._PROFILES["harness2"], bin=lambda: "fixture",
+            start=lambda *_: ["new-native"], resume=lambda value, *_: ["resume-native", value]))
+        with patch.object(ctx, "_relay", side_effect=AssertionError("Native session was replaced")):
+            self.assertTrue(ctx.prepare_resume(self.ref, "Continue", {})["ok"])
+        self.assertEqual(self.spawn.call_args.args[1], ["resume-native", sid])
+        self.assertEqual(self.row["cliSid"], sid)
+        self.assertEqual(self.row["segment"], 1)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

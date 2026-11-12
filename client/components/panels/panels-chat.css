@@ -27,12 +27,12 @@
   --font-min-readable:14px;--text-xs:14px;--text-sm:14px;--text-base:14px;--text-md:15px;
 }
 #composePanel{--font-min-readable:12px;--text-xs:12px;--text-sm:13px;--text-base:14px;--text-md:15px}
-.nchat{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--bg-0)}
+.nchat{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--bg-0);container:conversation / inline-size}
 /*
  * Keep .nchat-main a full-height flex column so the message area can scroll and the
  * composer remains visible. min-width:0 prevents long code from widening the layout.
  */
-.nchat-main{flex:1 1 auto;min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--bg-0);overflow:hidden;container:chat-column / inline-size}
+.nchat-main{--nchat-column-max:780px;--nchat-column-gutter:24px;flex:1 1 auto;min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--bg-0);overflow:hidden;container:chat-column / inline-size}
 /* Only the transcript scrolls; the footer remains anchored while reading history. */
 .nchat-main>.nchat-content-area{flex:1 1 0;min-height:0}
 .nchat-head{height:54px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:18px;
@@ -52,13 +52,15 @@
   display:flex;flex:1 1 auto;min-width:0;min-height:0;overflow:hidden}
 .nchat-head-icon{position:relative}.nchat-head-icon>i{position:absolute;right:1px;top:1px;min-width:14px;height:14px;
   box-sizing:border-box;padding:0 3px;border-radius:7px;background:var(--accent);color:#fff;font-size:max(var(--font-min-readable, 14.5px), 8.5px);font-style:normal;
-  font-weight:600;line-height:14px;text-align:center}.nchat-head-icon[hidden]{display:none}.nchat-summary{position:absolute;z-index:20;top:39px;right:34px;width:320px;
-  max-height:min(520px,calc(100vh - 82px));box-sizing:border-box;overflow:hidden;border:1px solid color-mix(in srgb,var(--line) 88%,transparent);
-  border-radius:14px;background:var(--bg-0);box-shadow:0 18px 48px -25px rgba(15,23,42,.38);text-align:left}
-.nchat-summary[hidden]{display:none}.nchat-summary>header{height:42px;box-sizing:border-box;padding:0 13px;display:flex;
+  font-weight:600;line-height:14px;text-align:center}.nchat-head-icon[hidden]{display:none}
+.nchat-summary{position:absolute;z-index:20;top:62px;right:8px;display:flex;flex-direction:column;
+  width:min(320px,calc(100% - 16px));max-height:calc(100% - 70px);min-height:0;box-sizing:border-box;overflow:hidden;
+  border:1px solid var(--line);border-radius:14px;background:var(--bg-0);text-align:left;box-shadow:0 18px 48px -25px rgba(15,23,42,.38)}
+.nchat-summary[hidden],.nchat.ncw-maximized .nchat-summary{display:none}.nchat-summary>header{height:42px;flex:none;box-sizing:border-box;padding:0 13px;display:flex;gap:8px;
   align-items:center;justify-content:space-between;border-bottom:1px solid var(--line)}.nchat-summary>header b{font-size:max(var(--font-min-readable, 14.5px), 12.5px);
   font-weight:560;color:var(--ink-2)}.nchat-summary>header span{font-size:max(var(--font-min-readable, 14.5px), 10.5px);color:var(--ink-5)}
-.nchat-summary>div{padding:7px;max-height:430px;overflow:auto}.nchat-summary button{width:100%;display:grid;grid-template-columns:28px minmax(0,1fr) auto;
+.nchat-summary>header b{margin-right:auto}
+.nchat-summary>div{padding:7px;min-height:0;overflow:auto}.nchat-summary button{width:100%;display:grid;grid-template-columns:28px minmax(0,1fr) auto;
   align-items:center;gap:8px;padding:8px;border:0;border-radius:9px;background:transparent;color:var(--ink-3);font:inherit;text-align:left}
 .nchat-summary button:hover{background:var(--bg-2)}.nchat-summary button b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   font-size:max(var(--font-min-readable, 14.5px), 12px);font-weight:500}.nchat-summary button small{max-width:92px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
@@ -69,6 +71,12 @@
 .nchat-summary .nchat-summary-more{display:flex;align-items:center;justify-content:center;gap:4px;margin-top:2px;padding:8px;
   border:0;border-radius:9px;background:transparent;color:var(--ink-4);font:inherit;font-size:max(var(--font-min-readable, 14.5px), 11px);cursor:pointer}
 .nchat-summary .nchat-summary-more:hover{background:var(--bg-2);color:var(--ink-2)}
+.nchat-summary .nchat-summary-close{display:grid;place-items:center;flex:none;width:28px;height:28px;padding:5px;cursor:pointer}
+.nchat-summary-close svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round}
+.nchat-summary button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+@media(min-width:960px){
+  .nchat.ncw-open .nchat-summary{right:calc(100% - max(320px,var(--nchat-w)) + 8px);max-width:calc(max(320px,var(--nchat-w)) - 16px)}
+}
 
 .nchat-title-tools{display:flex;align-items:center;flex:none}
 .nchat-title-tools>.nchat-head-icon{width:28px;height:28px;border-radius:7px}
@@ -127,10 +135,13 @@
 .nchat-jump-latest:active{box-shadow:0 3px 10px -8px rgba(15,23,42,.5)}
 .nchat-jump-latest:focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 55%,transparent);outline-offset:2px}
 .nchat-jump-latest svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-.nchat-inner{width:min(760px,100%);margin:0 auto;box-sizing:border-box;
-  padding:18px 24px 8px;display:flex;flex-direction:column;gap:8px}
+/* Anchor to the chat column, not its scrollbar-reduced viewport. The same
+   maximum width and gutters align message edges with the composer below. */
+.nchat-inner{width:min(var(--nchat-column-max),calc(100cqw - 2 * var(--nchat-column-gutter)));
+  margin:0 0 0 max(var(--nchat-column-gutter),calc((100cqw - var(--nchat-column-max)) / 2));box-sizing:border-box;
+  padding:18px 0 8px;display:flex;flex-direction:column;gap:8px}
 
-.nmsg{display:flex;flex-direction:column;gap:6px;max-width:100%}
+.nmsg{display:flex;flex-direction:column;gap:6px;width:100%;max-width:100%;box-sizing:border-box}
 /*
  * A transcript can contain thousands of already-settled messages after the
  * reader has loaded older pages.  Keep those messages in the scroll model,
@@ -150,10 +161,10 @@
    geometry when the reader scrolls away and back while output grows. */
 .nchat-inner>[data-streaming="true"],
 .nchat-inner>[data-chat-node]:has(.ntool.running,.nthink.is-live){content-visibility:visible}
-.nmsg.user{align-self:flex-end;align-items:flex-end;max-width:80%}
+.nmsg.user{align-self:flex-end;align-items:flex-end;width:auto;max-width:80%}
 .nmsg.user .nbubble{position:relative;background:var(--bg-3);border-radius:14px 14px 4px 14px;
   padding:9px 14px;font-size:14px;line-height:1.7;color:var(--ink);white-space:pre-wrap;word-break:break-word}
-.nmsg.ai{align-self:stretch}
+.nmsg.ai{align-self:stretch;width:100%}
 
 /* Message body */
 /* Do not use white-space:pre-wrap here. The former inline-span renderer needed it for line breaks,
@@ -180,7 +191,8 @@
 .nuser-criteria summary{width:max-content;max-width:100%;cursor:pointer;color:var(--ink-4);list-style-position:inside}
 .nuser-criteria ul{margin:7px 0 1px;padding:7px 0 0 19px;border-top:1px solid color-mix(in srgb,var(--line) 52%,transparent)}
 .nuser-criteria li+li{margin-top:3px}
-.ntext{position:relative;font-size:14px;line-height:1.68;color:var(--ink);white-space:normal;word-break:break-word}
+/* Let Markdown shrink inside reply flex rows; code and tables scroll internally. */
+.ntext{position:relative;width:100%;min-width:0;max-width:100%;box-sizing:border-box;font-size:14px;line-height:1.68;color:var(--ink);white-space:normal;word-break:break-word}
 .nmessage-footer{display:flex;align-items:center;justify-content:flex-end;gap:6px;min-height:28px;margin-top:4px;white-space:normal;
   /* Keep the action row in the hit-test tree even while it is visually quiet.
      Toggling pointer-events on hover made the target under the mouse change
@@ -423,7 +435,6 @@
 @media(prefers-reduced-motion:reduce){.nqueue-toolbar button[data-queue-action="add"],.nqueue-grip>span,.nqueue-row>.nqueue-send-now{transition:none}}
 /* Composer styling shared with the starter. */
 .nchat-foot{flex:none;padding:8px 24px 18px}
-.nchat-footin{width:min(760px,100%);margin:0 auto}
 .ai-disclaimer{width:100%;box-sizing:border-box;margin:6px 0 0;text-align:center;color:var(--ink-4);font-size:max(var(--font-min-readable, 14.5px), 12px);line-height:20px;user-select:text}
 .nbox{border:1px solid color-mix(in srgb,var(--line) 88%,transparent);border-radius:16px;
   background:var(--bg-0);box-shadow:0 1px 2px rgba(16,24,40,.035),0 0 24px -18px rgba(16,24,40,.24);
@@ -692,7 +703,8 @@
   color:var(--ink-3,#8a8f98);cursor:pointer;max-width:190px}
 .nwd svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.8;flex:0 0 auto}
 .nwd span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.nwd:hover,.nmode:hover{background:var(--surface-2,rgba(0,0,0,.04));color:var(--ink-2,#4a5058)}
+.nwd{cursor:default}
+.nmode:hover{background:var(--surface-2,rgba(0,0,0,.04));color:var(--ink-2,#4a5058)}
 .nwd.ghost{padding:3px 8px}
 .nmode.ro{background:var(--warn-soft,#fff4e5);border-color:transparent;color:var(--warn,#b25e09);font-weight:600}
 
@@ -793,7 +805,7 @@
   border:1px solid color-mix(in srgb,var(--s-cancel) 26%,transparent);border-radius:9px;color:var(--s-cancel);font-size:max(var(--font-min-readable, 14.5px), 12.5px)}
 .ncw button:focus-visible,.ncw-peek:focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 55%,transparent);outline-offset:2px}
 
-@media(max-width:960px){
+@media(max-width:959px){
   .nchat.ncw-open .nchat-main{flex:1 1 auto;width:auto;min-width:0}.nchat.ncw-open .ncw{position:absolute;z-index:6;inset:0 0 0 auto;
     width:calc(100% - 54px);box-shadow:-18px 0 44px -32px rgba(15,23,42,.48)}.ncw-resize{display:none}
 }
@@ -816,12 +828,11 @@
 @media(prefers-reduced-motion:reduce){.nstatus-copy.swap{animation:none}}
 
 /* Active conversation composer: compact, elevated and visually detached from the transcript. */
-.nchat-foot{position:relative;z-index:5;flex:none;display:flex;min-height:0;max-height:75%;box-sizing:border-box;padding:10px 24px 20px;
+.nchat-foot{position:relative;z-index:5;flex:none;display:flex;min-height:0;max-height:75%;box-sizing:border-box;padding:10px var(--nchat-column-gutter) 20px;
   background:transparent;pointer-events:none;cursor:default}
 /* The execution switch adds another action; reclaim gutters on narrow splits. */
-@container chat-column (max-width:380px){.nchat-foot{padding-inline:10px}}
-.nchat-footin{width:min(820px,100%);margin:0 auto;display:flex;flex-direction:column;min-height:0}
-.nchat-footin.nchat-compose-shell{width:min(780px,100%)}
+@container chat-column (max-width:380px){.nchat-inner,.nchat-foot{--nchat-column-gutter:10px}}
+.nchat-footin{width:min(var(--nchat-column-max),100%);margin:0 auto;display:flex;flex-direction:column;min-height:0}
 .nchat-entry-dock{position:relative;isolation:isolate;min-width:0;min-height:0;display:flex;flex-direction:column;pointer-events:auto;cursor:default}
 /* When context fills a short window, the queue yields its list height first. */
 .nchat-entry-dock>.nchat-queue{flex:0 1 auto;min-height:30px}

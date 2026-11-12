@@ -2,13 +2,12 @@
 PostgreSQL.
 """
 import uuid
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     BigInteger,
     JSON,
     Boolean,
-    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -606,20 +605,25 @@ class AiSchedule(Base):
     __tablename__ = "ai_schedule"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    title: Mapped[str] = mapped_column(String(200), default="")      # Title of each generated task.
-    note: Mapped[str] = mapped_column(Text, default="")              # Instructions sent to the AI.
-    # Hourly, daily, or weekly schedule; hour and minute are local to its time zone.
+    title: Mapped[str] = mapped_column(String(200), default="")      # 每次建出来的任务标题
+    note: Mapped[str] = mapped_column(Text, default="")              # 交代给 AI 的正文
+    # Rhythm values are hourly, daily, weekly, monthly, custom, or once.
     every: Mapped[str] = mapped_column(String(16), default="daily")
+    # Bounded iCalendar-style recurrence text used when every == custom.
+    custom_rule: Mapped[str] = mapped_column(Text, default="", server_default="")
     run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     # Server-owned consumption marker; manual execution does not consume the appointment.
     once_fired: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     at_hour: Mapped[int] = mapped_column(Integer, default=9)
     at_minute: Mapped[int] = mapped_column(Integer, default=0)
-    weekday: Mapped[int] = mapped_column(Integer, default=1)         # ISO weekday: 1 is Monday and 7 is Sunday.
-    start_date: Mapped[date | None] = mapped_column(Date, default=None)
-    end_date: Mapped[date | None] = mapped_column(Date, default=None)
-    # Creator's IANA time zone, independent of the Hub host time zone.
-    # Keep the requested local execution time when the host runs in UTC.
+    weekday: Mapped[int] = mapped_column(Integer, default=1)         # Legacy weekly value, 1=Monday … 7=Sunday.
+    weekdays: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")
+    month_days: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")
+    month_day_policy: Mapped[str] = mapped_column(String(16), default="skip", server_default="skip")
+    start_date: Mapped[str | None] = mapped_column(String(10), default=None)
+    end_date: Mapped[str | None] = mapped_column(String(10), default=None)
+    # IANA 时区（如 Asia/Shanghai）。计划时刻属于创建者，不属于 Hub 所在服务器；
+    # 否则同一条“每天 18:00”换到 UTC 容器后会变成另一个真实时刻。
     time_zone: Mapped[str] = mapped_column(String(64), default="Asia/Shanghai")
     # Agent workspace, using the same contract as manual dispatch.
     assignee_id: Mapped[str] = mapped_column(String(64), default="")     # Runtime key, for example local:pi.
@@ -993,6 +997,8 @@ class AIUsageDaily(Base):
     # Freeze attribution on the increment. A later model/account switch must
     # never relabel historical usage through the mutable cumulative event.
     dimension_key: Mapped[str] = mapped_column(String(64), default="", server_default="")
+    # Immutable platform-budget attribution; legacy/unknown increments stay charged.
+    quota_scope: Mapped[str] = mapped_column(String(16), default="platform", server_default="platform")
     billing_user_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
     org_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
     client_id: Mapped[str] = mapped_column(String(64), default="", server_default="")

@@ -35,7 +35,7 @@ app.whenReady().then(async () => {
   const session = { cwd: candidate, sessionId: 'app-author', inFlight: () => false,
     outputSnapshot: () => ({ files: [entry], delivery: { items: [entry] } }) };
   personal.install({ app, ipcMain, dialog: { showSaveDialog: async () => ({ filePath: path.join(root, 'app.soduwork-plugin') }) } });
-  require('../main/pi-session/plugin-draft').installIpc(ipcMain, { get: id => id === session.sessionId ? session : null, list: () => [session] });
+  require('../main/pi-session/plugin-draft').installIpc(ipcMain, { get: id => id === session.sessionId ? session : null, list: () => [session] }, app);
   fs.writeFileSync(path.join(root, 'host.html'), '<!doctype html><title>Application authoring fixture</title>');
   fs.writeFileSync(path.join(root, 'composer.html'), '<!doctype html><textarea id="draft">用户未发送的草稿</textarea><script>window.received=[];soduWorkAPI.workPreview.onComposerSubmit(p=>{received.push(p.text);soduWorkAPI.workPreview.composerSubmitResult({id:p.id,ok:true});});</script>');
   require('../main/work-preview').install({ app, ipcMain,
@@ -59,6 +59,28 @@ app.whenReady().then(async () => {
   assert.equal(exported.ok, true);
   assert.equal(require('../main/plugin-package-reader.cjs').readPersonalArchive(fs.readFileSync(exported.filePath)).template, 'app');
   report.cases.push('Built-in developer resources generate a real app; conversation resources collect, preflight, native install and export preserve app type and SDK.');
+  require('../main/app-settings-store.cjs').configure({app,safeStorage:electron.safeStorage,ownerOf:()=>'fixture/edit-author'});
+  const editing = personal.create(app,{...read.body,key:'edit-metadata-race',version:'1.0.3',author:'Original author',appCategory:'other'}).plugin;
+  const copied = await require('../main/jiyong-edit-source.cjs').prepare({app,pluginId:editing.pluginId,cwd:session.cwd});
+  fs.appendFileSync(path.join(path.dirname(copied.draft),'ui/app.js'),'\nwindow.metadataRaceFixed=true;');
+  for (const options of [{author:'Saved author'},{appCategory:'game'}]) {
+    const checksum=personal.get(app,editing.pluginId).checksum;
+    const updated=await js(host.webContents,'soduWorkAPI.personalPlugins.updateMetadata('+JSON.stringify(editing.pluginId)+','+JSON.stringify({...options,expectedChecksum:checksum})+')');
+    assert.equal(updated.ok,true);
+  }
+  const snapshot = session.outputSnapshot;
+  session.outputSnapshot=()=>({files:[{path:copied.draft,at:Date.now()}]});
+  const revised=await js(host.webContents,'soduWorkAPI.conversationSession.recentPluginDraft()');
+  assert.equal(revised.ok,true,revised.reason);assert.equal(revised.body.version,'1.0.6');
+  assert.equal(revised.body.author,'Saved author');assert.equal(revised.body.appCategory,'game');
+  const preview=await js(host.webContents,'soduWorkAPI.personalPlugins.preflight('+JSON.stringify(revised.body)+')');
+  assert.equal(preview.ok,true);assert.equal(preview.manifest.version,'1.0.6');
+  const revisedInstall=await js(host.webContents,'soduWorkAPI.personalPlugins.create('+JSON.stringify(revised.body)+')');
+  assert.equal(revisedInstall.ok,true);assert.equal(revisedInstall.plugin.pluginId,editing.pluginId);
+  assert.equal(revisedInstall.plugin.version,'1.0.6');assert.equal(revisedInstall.plugin.authorName,'Saved author');
+  assert.equal(personal._read(app).plugins.find(row=>row.id===editing.pluginId).versions.find(row=>row.version==='1.0.3').checksum,editing.checksum);
+  session.outputSnapshot=snapshot;
+  report.cases.push('Editing v1.0.3 while saving author/category to v1.0.5 yields a v1.0.6 candidate through real preload/IPC; preflight and installation keep metadata, app identity and immutable history.');
   const c = created.plugin.ui.contributions[0];
   const payload = { tabId: 'app-developer-demo', url: c.source.url, appBridge: {
     appId: 'plugin:' + created.plugin.pluginId, contributionId: c.id, origin, ...c.source.bridge } };

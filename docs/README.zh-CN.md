@@ -5,6 +5,7 @@
 | 你想做什么 | 阅读入口 |
 | --- | --- |
 | 第一次运行桌面和管理端 | [从源码启动](getting-started.md) |
+| 配置模型接口、排查计费与协议错误 | [模型服务](model-services.md) |
 | 理解目录、开始修改代码 | [开发指南](development.md) |
 | 提交代码或补充翻译 | [贡献指南](contributing.zh-CN.md) |
 | 部署给团队使用 | [Docker 自托管](../ops/self-host/README.zh-CN.md) |

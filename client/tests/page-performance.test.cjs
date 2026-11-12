@@ -148,6 +148,19 @@ test('real preload measures IPC but preserves result/error identity and omits ar
   assert.doesNotMatch(JSON.stringify(s.api.pagePerformance.snapshot()), /private|secret/);
 });
 
+test('desktop preload explicitly advertises local history and forwards bounded source options', async () => {
+  const s = preload(), options = { source: 'local', archived: true, limit: 50,
+    after: { at: 12, id: 'local-row' }, workspace: 'local-profile', catalogRevision: 7 };
+  assert.equal(s.api.conversationSession.localHistorySupported, true);
+  const request = s.api.conversationSession.history(options);
+  assert.equal(s.pending[0].name, 'pi-session-history');
+  assert.equal(s.pending[0].args[0], options);
+  const result = { ok: true, chats: [], localCatalog: { workspace: 'local-profile', revision: 7 } };
+  s.pending[0].resolve(result);
+  assert.equal(await request, result);
+  assert.doesNotMatch(JSON.stringify(s.api.pagePerformance.snapshot()), /local-profile|local-row/);
+});
+
 test('preload clears in-flight evidence on identity change and bounds count and age', async () => {
   const s = preload(), old = s.api.clientUpdateStatus(); s.api.pagePerformance.clear();
   s.pending[0].resolve({}); await old; assert.equal(s.api.pagePerformance.snapshot().events.length, 0);

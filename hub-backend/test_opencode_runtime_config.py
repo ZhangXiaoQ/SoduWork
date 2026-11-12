@@ -96,17 +96,21 @@ class OpenCodeRuntimeConfigTests(unittest.TestCase):
                 self.assertEqual(env["OPENCODE_CONFIG_CONTENT"], self.environment["OPENCODE_CONFIG_CONTENT"])
                 self.assertFalse((self.root / "runner").exists())
 
-    def test_harness_uses_shared_config_without_accepting_injected_lifecycle_root(self):
+    def test_harness_uses_native_config_without_accepting_injected_lifecycle_root(self):
         cfg = {"llm": {"base": "http://127.0.0.1/v1", "key": "fixture", "model": "fixture"}}
         injected = {**self.environment, "SODUWORK_DATA_ROOT": str(self.root / "untrusted")}
         with (patch.dict(os.environ, self.environment),
-              patch.object(local_base, "_env_for", return_value=injected),
-              patch.object(local_base, "_opencode_bin", return_value=sys.executable)):
-            env = harness2_runtime.environment({}, cfg)
-        self.assert_config(env)
+              patch.object(local_base, "_env_for", side_effect=AssertionError("No nested agent environment")),
+              patch.object(local_base, "_opencode_bin", side_effect=AssertionError("No OpenCode lookup"))):
+            env = harness2_runtime.environment(injected, cfg)
         self.assertEqual(env["SODUWORK_DATA_ROOT"], self.environment["SODUWORK_DATA_ROOT"])
+        self.assertEqual(json.loads(env[harness2_runtime.MODEL_ENV]), cfg["llm"])
+        self.assertFalse(any(key.startswith("OPENCODE_") for key in env))
+        self.assertEqual(env["XDG_CONFIG_HOME"], self.environment["XDG_CONFIG_HOME"])
+        self.assertFalse((self.root / "runner" / "agents" / "opencode").exists())
+        self.assertEqual(self.personal.read_bytes(), b"invalid personal config: PRIVATE-FIXTURE")
 
-    def test_harness_identity_is_private_idempotent_and_keeps_executor_contract(self):
+    def test_harness_identity_is_private_and_native_environment_is_idempotent(self):
         from copy import deepcopy
         config = {
             "model": "company/private-route",
@@ -119,43 +123,51 @@ class OpenCodeRuntimeConfigTests(unittest.TestCase):
         env = {**self.environment, "OPENCODE_CONFIG_CONTENT": json.dumps(config)}
         with patch.object(local_base, "_data_root", return_value=str(self.root / "runner")):
             harness2_runtime.prepare_executor_config(env)
+            first = dict(env)
             harness2_runtime.prepare_executor_config(env)
-        result = json.loads(env["OPENCODE_CONFIG_CONTENT"])
-        identity = result["agent"]["build"].pop("prompt")
-        self.assertEqual(result, original)
+        self.assertEqual(env, first)
+        self.assertEqual(config, original)
+        self.assertFalse(any(key.startswith("OPENCODE_") for key in env))
+        self.assertEqual(env["SODUWORK_DATA_ROOT"], str(self.root / "runner"))
+        identity = harness2_runtime.EXECUTOR_PROMPT
         self.assertIn("Google Harness²", identity)
         self.assertIn("not a foundation-model identity", identity)
         self.assertIn("internal model", identity)
-        self.assertIn("OpenCode", identity)
+        self.assertIn("No other agent CLI executes this turn", identity)
         self.assertNotIn("private-route", identity)
         self.assertNotIn("apiKey", identity)
-        self.assert_config(env)
+        self.assertEqual(self.personal.read_bytes(), b"invalid personal config: PRIVATE-FIXTURE")
         self.assertNotIn("agent", json.loads(self.environment["OPENCODE_CONFIG_CONTENT"]))
 
-    def test_harness_identity_is_private_idempotent_and_keeps_executor_contract(self):
+    def test_harness_native_executor_preserves_model_scope_and_private_configuration(self):
         from copy import deepcopy
-        config = {
-            "model": "company/private-route",
-            "provider": {"company": {"options": {"apiKey": "{env:SODUWORK_LLM_KEY}"}}},
-            "permission": {"edit": "deny", "webfetch": "ask"},
-            "plugin": ["file:///fixture/policy.mjs"],
-            "agent": {"build": {"temperature": 0.2}, "review": {"prompt": "Review only."}},
-        }
+        config = {"llm": {"base": "http://127.0.0.1/v1", "key": "fixture",
+                          "model": "company/private-route"}, "networkAllowed": False}
         original = deepcopy(config)
-        env = {**self.environment, "OPENCODE_CONFIG_CONTENT": json.dumps(config)}
-        with patch.object(local_base, "_data_root", return_value=str(self.root / "runner")):
-            harness2_runtime.prepare_executor_config(env)
-            harness2_runtime.prepare_executor_config(env)
-        result = json.loads(env["OPENCODE_CONFIG_CONTENT"])
-        identity = result["agent"]["build"].pop("prompt")
-        self.assertEqual(result, original)
+        inherited = {**self.environment, harness2_runtime.EXECUTOR_ENV: "untrusted-cli"}
+        with (patch.dict(os.environ, self.environment),
+              patch.object(local_base, "_data_root", return_value=str(self.root / "runner")),
+              patch.object(local_base, "_store_dir", return_value=str(self.root / "session"))):
+            env = harness2_runtime.environment(inherited, config, runtime_ref="native-session")
+            repeated = harness2_runtime.environment(env, config, runtime_ref="native-session")
+        self.assertEqual(env, repeated)
+        self.assertEqual(config, original)
+        self.assertEqual(json.loads(env[harness2_runtime.MODEL_ENV]), config["llm"])
+        self.assertEqual(env[harness2_runtime.ROOT_ENV], str(self.root / "session" / "harness2"))
+        self.assertEqual(env[harness2_runtime.NETWORK_ENV], "0")
+        self.assertNotIn(harness2_runtime.EXECUTOR_ENV, env)
+        self.assertFalse(any(key.startswith("OPENCODE_") for key in env))
+        self.assertEqual(env["XDG_CONFIG_HOME"], self.environment["XDG_CONFIG_HOME"])
+        self.assertEqual(env["SODUWORK_DATA_ROOT"], str(self.root / "runner"))
+        self.assertEqual(inherited[harness2_runtime.EXECUTOR_ENV], "untrusted-cli")
+        self.assertEqual(self.personal.read_bytes(), b"invalid personal config: PRIVATE-FIXTURE")
+        identity = harness2_runtime.EXECUTOR_PROMPT
         self.assertIn("Google Harness²", identity)
         self.assertIn("not a foundation-model identity", identity)
         self.assertIn("internal model", identity)
-        self.assertIn("OpenCode", identity)
+        self.assertIn("No other agent CLI executes this turn", identity)
         self.assertNotIn("private-route", identity)
         self.assertNotIn("apiKey", identity)
-        self.assert_config(env)
         self.assertNotIn("agent", json.loads(self.environment["OPENCODE_CONFIG_CONTENT"]))
 
     def test_source_bridge_redacts_opencode_invalid_config_diagnostic(self):

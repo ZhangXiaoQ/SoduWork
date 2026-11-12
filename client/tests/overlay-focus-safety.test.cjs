@@ -31,6 +31,13 @@ test('覆盖窗失焦保留显示区域，先穿透再通知渲染层确认新�
   assert.match(sync, /_overlayAwaitingShape/, '轮询不得在当前 revision 确认前恢复输入');
 });
 
+test('显式停放可选择使旧 revision 失效并清除待确认状态', () => {
+  const park = block(main, 'function parkOverlayShape(invalidate = false)', 'function setOverlayIdleInput()');
+  assert.match(park, /if \(invalidate\) _overlayShapeRevision\+\+/);
+  assert.match(park, /_overlayAwaitingShape = false/);
+  assert.match(park, /applyOverlayShape\(\[\], false\)/);
+});
+
 test('桌宠和竖条单独或同时显示时，主进程按真实组件区域持续守住鼠标穿透', () => {
   const apply = block(main, 'function applyOverlayShape(', 'function parkOverlayShape(');
   assert.match(apply, /_overlayShape\.resolve\(normalized, bounds\)/);

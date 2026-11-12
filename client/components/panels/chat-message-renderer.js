@@ -612,7 +612,8 @@
       if ((entry.controlledExecution || {}).sameMessageStream ||
         allMessages.some(m => m.taskId === entry.taskId && m.taskOutputKey)) return;
       const active = (entry.controlledExecution || {}).run || {};
-      const sessions = active.items ? [active] : (entry.trace && entry.trace.execution && entry.trace.execution.sessions || []);
+      const sessions = active.items ? [active] :
+        (entry.transcripts ? [...entry.transcripts.values()] : []);
       taskStreams.set(entry.taskId, sessions.filter(run => run.items && run.items.length).map(run =>
         '<div data-chat-node="task-stream:' + ctx.esc(entry.taskId + ':' + (run.ref || run.id)) +
         '" data-task-stream="' + ctx.esc(entry.taskId) + '" data-task-run="' + ctx.esc(run.ref || run.id || '') + '" data-delivery-final="' + ['completed', 'done', 'idle'].includes(run.status || run.state) + '">' + TaskExecutionStream.rowsHtml(run.items, run.status) + '</div>').join(''));

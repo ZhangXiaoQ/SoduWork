@@ -6,6 +6,7 @@
 <style>*{box-sizing:border-box}body{margin:0;font:14px var(--font-ui);background:var(--bg-1);color:var(--ink)}main{height:100vh;max-width:850px;margin:auto;padding:24px;display:flex;flex-direction:column}.history{flex:1;line-height:1.8;padding:36px 12px}#old{margin:0}</style>
 </head><body><main><div class="history">请继续完善这个项目。<p>原有对话和文件会保留，可以在输入框右下角切换 Agent。</p></div><div id="nchatQueue"></div><div id="old"></div></main>
 <script src="components/panels/agent-brand.js"></script>
+<script src="core/requirement-session-context.js"></script>
 <script src="core/locales/en-US.js"></script>
 <script src="core/locales/en-US-chat.js"></script>
 <script src="core/locales/en-US-runtime-pages.js"></script>
@@ -27,7 +28,8 @@ window.soduWorkAPI={conversationSession:{runtimes:async()=>({ok:true,runtimes,av
   selectModel:async(ref,name)=>{calls.push({ref,name});return{ok:true,selection:{name,model:{id:name,label:'模型 '+name.toUpperCase()}}}}}};
 WorkComposer.upgradeChat(document.querySelector('#old'));
 document.querySelector('#nchatWdName').textContent='项目工作区';
-window.controls=ChatComposerControls.create(document.querySelector('main'),{state:()=>state,say:text=>notices.push(text),
+window.controls=ChatComposerControls.create(document.querySelector('main'),{state:()=>({...state,
+  ...(window.boundTask ? {taskRuntime:RequirementSessionContext.executionRuntime(boundTask,'same-conversation',window.taskExecutions||[])} : {})}),say:text=>notices.push(text),
   runtimeSelected:r=>{state.adapterId=r.adapterId;state.displayName=r.displayName;controls.render()},
   modelSelected:s=>{state.selection=s;controls.render()},renderQueue(){},updateQueue(){}});
 controls.render();window.fixtureReady=true;

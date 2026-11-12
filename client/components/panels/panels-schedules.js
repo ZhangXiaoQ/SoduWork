@@ -3,8 +3,9 @@
  * new ordinary conversation whose prompt, model output, and result stay together in chat.
  */
 
-const SCH_EVERY = [['daily', '每天'], ['hourly', '每小时'], ['weekly', '每周'], ['once', '仅一次']];
+const SCH_EVERY = [['daily', '每天'], ['weekly', '每周'], ['monthly', '每月'], ['hourly', '每小时'], ['once', '仅一次'], ['custom', '自定义']];
 const SCH_WD = [[1, '周一'], [2, '周二'], [3, '周三'], [4, '周四'], [5, '周五'], [6, '周六'], [7, '周日']];
+const SCH_MONTH_DAYS = Array.from({ length: 31 }, (_, index) => index + 1);
 const SCH_CAPS = [
   ['browser', '浏览网页', '优先读取页面结构，适合查询、巡检和网页填报'],
   ['computer', '操作电脑', '网页无法结构化操作时，模拟鼠标键盘完成'],
@@ -70,12 +71,19 @@ function _schLocal(iso) {
 }
 function _schRhythm(s) {
   if (s.every === 'once') return _schTx(window.ScheduleTiming?.summary(s) || '指定日期时间 · 待设置');
-  if (s.every === 'hourly') return '每小时 ' + _sp2(s.atMinute) + ' 分';
-  if (s.every === 'weekly') {
-    const w = (SCH_WD.find(([k]) => k === Number(s.weekday)) || [, ''])[1];
-    return '每' + w + ' ' + _sp2(s.atHour) + ':' + _sp2(s.atMinute);
+  if (s.every === 'custom') return _schTx(window.ScheduleTiming?.summary(s) || '自定义规则 · 待设置');
+  if (s.every === 'hourly') return _schTx('每小时第几分') + ' ' + _sp2(s.atMinute) + ' ' + _schTx('分钟');
+  if (s.every === 'monthly') {
+    const days = Array.isArray(s.monthDays) ? s.monthDays : [];
+    const suffix = s.monthDayPolicy === 'last_day' ? ' · ' + _schTx('缺少日期时使用当月最后一天') : '';
+    return _schTx('每月') + ' ' + days.map(day => _sp2(day)).join('、') + ' ' + _schTx('日期') + suffix + ' ' + _sp2(s.atHour) + ':' + _sp2(s.atMinute);
   }
-  return '每天 ' + _sp2(s.atHour) + ':' + _sp2(s.atMinute);
+  if (s.every === 'weekly') {
+    const selected = Array.isArray(s.weekdays) && s.weekdays.length ? s.weekdays : [s.weekday];
+    const names = selected.map(day => (SCH_WD.find(([key]) => key === Number(day)) || [, ''])[1]).filter(Boolean).map(_schTx);
+    return _schTx('每周') + ' ' + names.join('、') + ' ' + _sp2(s.atHour) + ':' + _sp2(s.atMinute);
+  }
+  return _schTx('每天') + ' ' + _sp2(s.atHour) + ':' + _sp2(s.atMinute);
 }
 
 const SCH_RUN_STATE = {
@@ -467,8 +475,58 @@ function _schBlueprintHtml(s) {
     '</ol></section>';
 }
 
+function _schTimingNumbers(value, max) {
+  const source = Array.isArray(value) ? value : (value == null || value === '' ? [] : [value]);
+  return [...new Set(source.map(item => Number(item)).filter(item => Number.isInteger(item) && item >= 1 && item <= max))]
+    .sort((a, b) => a - b);
+}
+
+function _schTimePickerHtml(id, value, max, label) {
+  return '<select class="sch-in" id="' + id + '" data-forward-select="compact-time" aria-label="' +
+    esc(_schTx(label)) + '" aria-describedby="schClockHint">' +
+    window.ScheduleTiming.clockOptions(max, value) + '</select>';
+}
+
+function _schTimingControlsHtml(s) {
+  const weekdays = _schTimingNumbers(s.weekdays?.length ? s.weekdays : s.weekday, 7);
+  const monthDays = _schTimingNumbers(s.monthDays, 31);
+  const weekdayOptions = SCH_WD.map(([day, label]) =>
+    '<label class="sch-choice"><input type="checkbox" value="' + day + '"' +
+    (weekdays.includes(day) ? ' checked' : '') + '><span>' + _schTx(label) + '</span></label>').join('');
+  const monthOptions = SCH_MONTH_DAYS.map(day =>
+    '<label class="sch-choice"><input type="checkbox" value="' + day + '"' +
+    (monthDays.includes(day) ? ' checked' : '') + '><span>' + _sp2(day) + '</span></label>').join('');
+  return '<div class="sch-timing-range" id="schDateRange">' +
+    '<label class="sch-f-lbl"><span>' + _schTx('\u6267\u884c\u65e5\u671f\u8303\u56f4') + ' <em>' + _schTx('\u53ef\u9009') + '</em></span>' +
+      '<span class="sch-date-pair"><input class="sch-in" id="schStartDate" type="date" value="' + esc(s.startDate || '') + '" aria-label="' + _schTx('\u5f00\u59cb\u65e5\u671f') + '">' +
+      '<i>' + _schTx('\u81f3') + '</i><input class="sch-in" id="schEndDate" type="date" value="' + esc(s.endDate || '') + '" aria-label="' + _schTx('\u7ed3\u675f\u65e5\u671f') + '"></span>' +
+      '<small>' + _schTx('\u7559\u7a7a\u8868\u793a\u957f\u671f\u6709\u6548\uff0c\u7ed3\u675f\u65e5\u671f\u5305\u542b\u5f53\u5929') + '</small></label></div>' +
+    '<div class="sch-timing-choice" id="schWeekdays" hidden>' +
+      '<span class="sch-f-lbl">' + _schTx('\u661f\u671f') + ' <em>' + _schTx('\u53ef\u591a\u9009') + '</em></span>' +
+      '<div class="sch-choice-grid sch-week-grid">' + weekdayOptions + '</div></div>' +
+    '<div class="sch-timing-choice" id="schMonthDays" hidden>' +
+      '<span class="sch-f-lbl">' + _schTx('\u6bcf\u6708\u65e5\u671f') + ' <em>' + _schTx('\u53ef\u591a\u9009') + '</em></span>' +
+      '<div class="sch-choice-grid sch-month-grid">' + monthOptions + '</div>' +
+      '<label class="sch-chk sch-month-policy"><input type="checkbox" id="schMonthLastDay"' +
+        (s.monthDayPolicy === 'last_day' ? ' checked' : '') + '><span>' + _schTx('\u7f3a\u5c11\u65e5\u671f\u65f6\u4f7f\u7528\u5f53\u6708\u6700\u540e\u4e00\u5929') + '</span></label></div>';
+}
+
+function _schCustomRuleHtml(s) {
+  const example = window.ScheduleTiming.customExample(s.timeZone || _schBrowserTimeZone());
+  return '<label class="sch-custom-rule" id="schCustomRuleWrap"' +
+    (s.every === 'custom' ? '' : ' hidden') + '>' +
+    '<span class="sch-f-lbl">' + _schTx('自定义规则') + ' <em>' + _schTx('支持 iCalendar RRULE') + '</em></span>' +
+    '<textarea class="sch-in" id="schCustomRule" rows="4" maxlength="4096" spellcheck="false" data-user-content' +
+      ' placeholder="' + esc(example) + '" aria-describedby="schCustomRuleHint">' +
+      esc(s.customRule || '') + '</textarea>' +
+    '<small id="schCustomRuleHint">' + _schTx('可使用 DTSTART 与 RRULE 精确指定开始时间、时区和重复规则') + '</small>' +
+    '<small>' + _schTx('支持 HOURLY、DAILY、WEEKLY、MONTHLY，可设置 INTERVAL、COUNT 或 UNTIL') + '</small>' +
+    '<small>' + _schTx('按天、周、月重复时，夏令时跳过的时刻顺延，重复时刻执行一次') + '</small></label>';
+}
+
 function _schFormHtml(s) {
   s = s || { title: '', note: '', every: 'daily', atHour: 18, atMinute: 0, weekday: 1,
+             weekdays: [], monthDays: [], monthDayPolicy: 'skip', startDate: '', endDate: '', customRule: '',
              assigneeId: _schDefaultAgentId(), modelName: '', repoId: '', flow: false,
              pluginBindingId: '', personalPluginKey: '', pluginInputs: {},
              requiredCapabilities: [], retryLimit: 2, retryDelayMinutes: 5,
@@ -492,18 +550,16 @@ function _schFormHtml(s) {
     '<label class="sch-f-lbl">交代给 AI 的话<em>每次都会原样发过去，写清楚点</em></label>' +
     '<textarea class="sch-in" id="schNote" rows="4" placeholder="要做什么、产出成什么样、放哪儿。">' + esc(s.note) + '</textarea>' +
 
-    sec('什么时候跑', '按' + esc(_schTimeZoneLabel(s.timeZone)) + '执行 · 触发精度约两分钟') +
+    sec('什么时候跑', '<span id="schTimeZoneHint">按' + esc(_schTimeZoneLabel(s.timeZone)) + '执行 · 触发精度约两分钟</span>') +
     '<div class="sch-when-row">' +
     '<select class="sch-in sch-w-every" id="schEvery">' + opt(SCH_EVERY, s.every) + '</select>' +
-    '<select class="sch-in sch-w-wd" id="schWd">' + opt(SCH_WD, s.weekday) + '</select>' +
+    '<select class="sch-in sch-w-wd" id="schWd" hidden aria-hidden="true">' + opt(SCH_WD, s.weekday) + '</select>' +
     '<span class="sch-clock" id="schHWrap">' +
-    '<select class="sch-in" id="schH" aria-label="小时" aria-describedby="schClockHint">' +
-    window.ScheduleTiming.clockOptions(24, s.atHour) + '</select><em id="schClockSep" aria-hidden="true">:</em>' +
-    '<select class="sch-in" id="schM" aria-label="分钟" aria-describedby="schClockHint">' +
-    window.ScheduleTiming.clockOptions(60, s.atMinute) + '</select>' +
+    _schTimePickerHtml('schH', s.atHour, 24, '小时') + '<em id="schClockSep" aria-hidden="true">:</em>' +
+    _schTimePickerHtml('schM', s.atMinute, 60, '分钟') +
     '<small id="schClockHint">滚动选择时间</small></span>' +
     _schOnceFieldsHtml(s) + '<span class="sch-when-pv" id="schPv" role="status" aria-live="polite"></span></div>' +
-    _schDateRangeHtml(s) +
+    _schTimingControlsHtml(s) + _schCustomRuleHtml(s) +
 
     sec('在哪儿运行', '不依赖工程的办公自动化可以留空') +
     '<label class="sch-f-lbl">工程</label><select class="sch-in" id="schRepo">' +
@@ -601,9 +657,6 @@ function _wireSchForm() {
       ..._schReadTiming(),
       atHour: window.ScheduleTiming.clockNumber(document.getElementById('schH').value),
       atMinute: window.ScheduleTiming.clockNumber(document.getElementById('schM').value),
-      weekday: Number(document.getElementById('schWd').value || 1),
-      startDate: document.getElementById('schStartDate')?.value || '',
-      endDate: document.getElementById('schEndDate')?.value || '',
       assigneeId: document.getElementById('schWho').value,
       assigneeType: 'agent',
       modelName: mode === 'direct' && _schAgentAllowsModel(document.getElementById('schWho')?.value)
@@ -650,6 +703,16 @@ function _wireSchForm() {
         const result = await SoduWorkAPI.preflightSchedule(readBody());
         if (!isCurrent() || seq !== probeSeq || line !== document.getElementById('schReady')) return;
         _schRenderPreflight(line, result);
+        if (ev.value === 'custom' || (ev.value !== 'once' && Object.hasOwn(result, 'nextRunAt'))) {
+          const zone = result.timeZone || readBody().timeZone;
+          const wall = window.ScheduleTiming.localInput(result.nextRunAt, zone);
+          const preview = ev.value === 'custom' ? _schTx(window.ScheduleTiming.customPreview(result, zone)) :
+            wall ? _schTx('下一次：') + wall.replace('T', ' ') : _schTx('计划已超出有效日期范围');
+          const nextRun = document.getElementById('schPv');
+          const blueprint = document.getElementById('schBpWhen');
+          if (nextRun) nextRun.textContent = preview;
+          if (blueprint) blueprint.textContent = preview;
+        }
       } catch (error) {
         if (!isCurrent() || seq !== probeSeq || line !== document.getElementById('schReady')) return;
         line.className = 'sch-ready waiting';
@@ -719,10 +782,21 @@ function _wireSchForm() {
   };
   const sync = () => {
     const v = ev.value;
-    document.getElementById('schWd').style.display = v === 'weekly' ? '' : 'none';
-    document.getElementById('schHWrap').style.display = v === 'once' ? 'none' : '';
+    const legacyWeekday = document.getElementById('schWd');
+    if (legacyWeekday) legacyWeekday.style.display = 'none';
     const dateRange = document.getElementById('schDateRange');
-    if (dateRange) dateRange.style.display = v === 'once' ? 'none' : '';
+    const weekdays = document.getElementById('schWeekdays');
+    const monthDays = document.getElementById('schMonthDays');
+    const customRule = document.getElementById('schCustomRuleWrap');
+    const timeZoneHint = document.getElementById('schTimeZoneHint');
+    if (timeZoneHint) timeZoneHint.textContent = _schTx(v === 'custom'
+      ? '按规则内时区执行 · 触发精度约两分钟'
+      : '按' + _schTimeZoneLabel(_schReadTiming().timeZone) + '执行 · 触发精度约两分钟');
+    if (dateRange) dateRange.hidden = v === 'once' || v === 'custom';
+    if (weekdays) weekdays.hidden = v !== 'weekly';
+    if (monthDays) monthDays.hidden = v !== 'monthly';
+    if (customRule) customRule.hidden = v !== 'custom';
+    document.getElementById('schHWrap').style.display = (v === 'once' || v === 'custom') ? 'none' : '';
     document.getElementById('schH').hidden = v === 'hourly';
     const clockSep = document.getElementById('schClockSep');
     if (clockSep) clockSep.hidden = v === 'hourly';
@@ -767,13 +841,22 @@ function _wireSchForm() {
     wirePluginSelect();
     sync();
   });
-  ['schH', 'schM', 'schWd', 'schRunAt', 'schStartDate', 'schEndDate'].forEach(id => document.getElementById(id)?.addEventListener('input', sync));
+  ['schH', 'schM', 'schWd', 'schRunAt', 'schStartDate', 'schEndDate', 'schCustomRule'].forEach(id => {
+    const control = document.getElementById(id);
+    if (control) control.addEventListener('input', sync);
+  });
+  document.querySelectorAll('#schWeekdays input, #schMonthDays input, #schMonthLastDay').forEach(input => {
+    input.addEventListener('change', sync);
+  });
   document.getElementById('schTitle').addEventListener('input', event => {
     event.currentTarget.classList.remove('invalid');
     event.currentTarget.removeAttribute('aria-invalid');
     sync();
   });
-  ['schH', 'schM', 'schWd'].forEach(id => document.getElementById(id).addEventListener('change', sync));
+  ['schH', 'schM', 'schWd'].forEach(id => {
+    const control = document.getElementById(id);
+    if (control) control.addEventListener('change', sync);
+  });
   document.getElementById('schWho').addEventListener('change', async event => {
     if (event.catalogRefresh) { _schRefreshModelField(); scheduleProbe(); return; }
     // A different substrate may have a different model namespace. Never carry

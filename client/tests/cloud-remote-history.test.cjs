@@ -122,7 +122,8 @@ test('remote directory and persisted sync receipt expose one history row per tas
         return { ok: true, conversation: { id: 'sync-p3', receipt: { taskId: 'task-p3' } }, page: latest, messages };
       }
       return {ok: true, chats: [
-      {sessionId: 'mobile-p3', taskId: 'task-p3', ref: 'run-p3', title: 'P3', canSend: true},
+      {sessionId: 'mobile-p3', taskId: 'task-p3', ref: 'run-p3', title: '自动验收 · P3 · 第2版',
+        conversationReview: {mode: 'auto', taskId: 'requirement', artifactSeq: 2}, canSend: true},
       {sessionId: 'mobile-other', taskId: 'task-other', ref: 'run-other', title: 'P3', canSend: true},
       ]};
     } });
@@ -130,6 +131,8 @@ test('remote directory and persisted sync receipt expose one history row per tas
   const result = await controller.history();
   assert.deepEqual(result.chats.map(row => row.id), [cachedId, 'mobile-other']);
   assert.deepEqual(result.chats[0].historyAliasIds, ['mobile-p3']);
+  assert.equal(result.chats[0].title, '自动验收 · P3 · 第2版', 'old replay receipt must not erase the authoritative review label');
+  assert.equal(result.chats[1].title, 'P3', 'namesake ordinary conversation is unchanged');
 
   // Work cards are restored before opening the passive execution view. A
   // previously rendered directory ID must remain resolvable after sync wins

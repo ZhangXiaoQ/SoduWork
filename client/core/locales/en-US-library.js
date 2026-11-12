@@ -3,6 +3,10 @@
 (function (global) {
   'use strict';
   const messages = {
+    '成果已变化，请重新打开后保存': 'The deliverable has changed. Reopen it before saving.',
+    '成果正在收集，请稍后重试': 'Deliverables are being collected. Please try again shortly.',
+    '成果读取不完整，请重试': 'The deliverable could not be read completely. Please try again.',
+    '成果已变化，请重新打开会话': 'The deliverable has changed. Reopen the conversation.',
     "本地文件不存在": "Local file not found",
     "找不到这份资料的本地文件，可能已被删除或移动。请恢复文件后重试，或从原会话重新保存、重新上传到资料库。": "The local file for this item could not be found. It may have been deleted or moved. Restore it and try again, or save it again from the original conversation or upload it to the library.",
     '名称重复': 'Name already exists',

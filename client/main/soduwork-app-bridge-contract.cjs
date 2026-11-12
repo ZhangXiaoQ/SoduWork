@@ -69,6 +69,7 @@ const METHOD_CAPABILITY = Object.freeze({
   'data.batch': 'data.write',
   'data.assetPut': 'data.write',
   'data.assetGet': 'data.read',
+  'files.pickLocal':'data.read', 'files.copyLocal':'data.write', 'files.begin':'data.write', 'files.append':'data.write', 'files.finish':'data.write', 'files.cancel':'data.write', 'files.getUrl':'data.read',
 });
 
 const METHODS = new Set(Object.keys(METHOD_CAPABILITY));
@@ -156,6 +157,7 @@ function normalizeRequest(raw) {
     out.params={recipientUserId:text(params.recipientUserId,MAX_RECIPIENT),query:text(params.query,120).replace(/^@/,''),text:String(params.text || ''),requestId:params.requestId};
     return out;
   }
+  if (method.startsWith('files.')) {out.params=require('../core/app-files-contract.cjs').normalize(method,params);return out;}
   if (method.startsWith('data.')) {
     out.params = method.startsWith('data.asset') ? require('../core/jiyong-contract.cjs').assetRequest(method,params) : require('../core/jiyong-contract.cjs').json(params);
     return out;

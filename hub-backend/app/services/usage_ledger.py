@@ -70,6 +70,24 @@ async def upsert_cumulative(
                 .execution_options(populate_existing=True))
             ).scalar_one()
 
+    # Old integrations may have cumulative events without daily facts. Preserve
+    # their unknown funding before the first new increment makes the legacy
+    # fallback query ineligible. Never infer old funding from mutable metadata.
+    prior = {field: _number(getattr(row, field, 0)) for field in _COUNTERS}
+    if any(prior.values()) and not await session.scalar(select(models.AIUsageDaily.id).where(
+            models.AIUsageDaily.usage_event_id == row.id).limit(1)):
+        anchored = _dt(row.occurred_at)
+        dimensions = {field: str(getattr(row, field) or "") for field in (
+            "billing_user_id", "org_id", "client_id", "agent_key", "provider", "model", "source_type")}
+        dimensions.update(quota_scope="platform", cost_known=bool(row.cost_microusd))
+        dimension_key = hashlib.sha256(json.dumps({**dimensions, "currency": row.currency},
+            sort_keys=True, ensure_ascii=True).encode()).hexdigest()
+        session.add(models.AIUsageDaily(usage_event_id=row.id,
+            day_key=anchored.astimezone(timezone(timedelta(hours=8))).date().isoformat(),
+            dimension_key=dimension_key, **dimensions, occurred_at=anchored,
+            currency=row.currency, is_baseline=True, **prior))
+        await session.flush()
+
     for field in (
         "org_id", "billing_user_id", "actor_user_id", "client_id", "runner_id",
         "source_type", "source_id", "source_title", "conversation_id", "task_id",
@@ -102,6 +120,7 @@ async def upsert_cumulative(
         # A missing price is different from a known zero. Keep that distinction
         # on the immutable daily increment so later attribution changes cannot relabel it.
         dimensions['cost_known'] = bool(values.get('cost_known'))
+        dimensions['quota_scope'] = "personal" if values.get('quota_scope') == "personal" else "platform"
         dimension_key = hashlib.sha256(json.dumps({**dimensions, 'currency': row.currency},
             sort_keys=True, ensure_ascii=True).encode()).hexdigest()
         daily = (await session.execute(select(models.AIUsageDaily).where(
@@ -228,7 +247,9 @@ async def from_client(
         source_type = "chat"
         workflow_run_id = ""
         node_run_id = ""
+    from .model_quota import reported_scope
     values = {
+        "quota_scope": reported_scope(client, payload),
         **normalize_usage(dict(payload.get("usage") or {})),
         "org_id": str((user.org_id if user else "") or ""),
         "billing_user_id": user_id,

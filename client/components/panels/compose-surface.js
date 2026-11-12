@@ -12,6 +12,8 @@
       plugins: ctx._pluginMention, skills: ctx._skillPicker };
   }
   function _rememberComposeDraft() {
+    // Retired starter controls must not recreate a draft already consumed by a chat.
+    if (document.getElementById('composePanel')?.dataset?.stage === 'chat') return;
     const controls = _composeDraftControls(), chat = global.NativeChat;
     if (!controls.input || !chat) return;
     if (chat.rememberComposerDraft) chat.rememberComposerDraft('new', controls);

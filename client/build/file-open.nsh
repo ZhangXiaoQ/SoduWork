@@ -1,7 +1,13 @@
 ; Register an explicit action for all files without changing default handlers.
 ; SHELL_CONTEXT follows the installation scope; the stable launcher survives updates.
 !ifndef SODUWORK_FILE_VERB
-  !define SODUWORK_FILE_VERB "Software\Classes\*\shell\SoduWork.Open"
+  !if "${APP_ID}" == "com.soduwork.cn"
+    !define SODUWORK_FILE_VERB "Software\Classes\*\shell\com.soduwork.cn.Open"
+  !else if "${APP_ID}" == "com.soduwork.global"
+    !define SODUWORK_FILE_VERB "Software\Classes\*\shell\com.soduwork.global.Open"
+  !else
+    !define SODUWORK_FILE_VERB "Software\Classes\*\shell\SoduWork.Open"
+  !endif
 !endif
 !ifndef SODUWORK_OPEN_APP
   !define SODUWORK_OPEN_APP "Software\Classes\Applications\${APP_EXECUTABLE_FILENAME}"
@@ -14,11 +20,11 @@
       DeleteRegKey SHELL_CONTEXT "Software\Classes\*\shell\SoduWork.Open"
     ${EndIf}
   !endif
-  WriteRegStr SHELL_CONTEXT "${SODUWORK_FILE_VERB}" "" "用 SoduWork 打开"
+  WriteRegStr SHELL_CONTEXT "${SODUWORK_FILE_VERB}" "" "用 ${PRODUCT_NAME} 打开"
   WriteRegStr SHELL_CONTEXT "${SODUWORK_FILE_VERB}" "Icon" '"$appExe",0'
   WriteRegStr SHELL_CONTEXT "${SODUWORK_FILE_VERB}" "MultiSelectModel" "Single"
   WriteRegStr SHELL_CONTEXT "${SODUWORK_FILE_VERB}\command" "" '"$appExe" --soduwork-open-file "%1"'
-  WriteRegStr SHELL_CONTEXT "${SODUWORK_OPEN_APP}" "FriendlyAppName" "SoduWork"
+  WriteRegStr SHELL_CONTEXT "${SODUWORK_OPEN_APP}" "FriendlyAppName" "${PRODUCT_NAME}"
   WriteRegStr SHELL_CONTEXT "${SODUWORK_OPEN_APP}\shell\open\command" "" '"$appExe" --soduwork-open-file "%1"'
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
 !macroend

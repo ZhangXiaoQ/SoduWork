@@ -118,13 +118,31 @@ function authorization(input, options) {
   };
 }
 
-function augment(text, input, runtimeGuide) {
+function inputSelections(input, allowedIds) {
+  const allowed = new Set(allowedIds || []), result = [];
+  for (const row of Array.isArray(input) ? input.slice(0, MAX_PLUGINS) : []) {
+    if (!allowed.has(row?.pluginId) || !row.inputValues || typeof row.inputValues !== 'object') continue;
+    const values = {};
+    for (const [key, value] of Object.entries(row.inputValues).slice(0, 50)) {
+      if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(key) || ['constructor', 'prototype', '__proto__'].includes(key)) continue;
+      if (typeof value === 'string') values[key] = neutralize(value);
+      else if (typeof value === 'boolean' || typeof value === 'number' && Number.isFinite(value)) values[key] = value;
+    }
+    if (Object.keys(values).length) result.push({ pluginId: row.pluginId, inputValues: values });
+  }
+  if (JSON.stringify(result).length > 20000) throw Error('插件参数过长，请缩短后重试');
+  return result;
+}
+
+function augment(text, input, runtimeGuide, selections) {
   const plugins = compact(input);
   const visible = neutralize(text);
   if (!plugins.length) return visible;
   const guide = neutralize(runtimeGuide).trim().slice(0, 4000);
+  const inputs = inputSelections(selections, plugins.map(item => item.pluginId));
   return visible + '\n\n' + START + '\n' + JSON.stringify({
     plugins,
+    ...(inputs.length ? { inputs } : {}),
     ...(guide ? { runtimeGuide: guide } : {}),
   }) + '\n' + END;
 }
@@ -151,5 +169,5 @@ function parse(value) {
 
 module.exports = {
   START, END, MAX_PLUGINS, MAX_CONTEXT,
-  compact, augment, parse, authorization, capabilitySet, runtimeName,
+  compact, augment, parse, authorization, capabilitySet, runtimeName, inputSelections,
 };

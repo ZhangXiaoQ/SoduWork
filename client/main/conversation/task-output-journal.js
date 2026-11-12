@@ -42,6 +42,8 @@ async function usedHarnesses(app, ref) {
 // by that Runner. Anchoring to its cursor preserves interleaving on reopen.
 async function create(app, ref) {
   const file = journalPath(app, ref), messages = [];
+  let nativeHistoryObserved = false;
+  const observeNativeHistory = row => { if (row.after > 0 || row.kind === 'context-sent') nativeHistoryObserved = true; };
   async function size() {
     if (!file) return 0;
     try { return (await fs.promises.stat(file)).size; }
@@ -76,7 +78,7 @@ async function create(app, ref) {
       // Retain the durable-before-visible contract and interrupted-line boundary.
       fs.appendFileSync(file, '\n' + batch.map(row => JSON.stringify(row) + '\n').join(''), { mode: 0o600, flush });
     }
-    for (const row of batch) rememberContext(row);
+    for (const row of batch) { observeNativeHistory(row); rememberContext(row); }
   }
   async function restore(through, apply) {
     if (closed) return;
@@ -99,6 +101,7 @@ async function create(app, ref) {
   let ordinal = 0, sentThrough = 0;
   for await (const row of rowsThrough(initialSize)) {
     ordinal++;
+    observeNativeHistory(row);
     if (row.kind === 'context-sent') sentThrough = ordinal;
   }
   if (ordinal > sentThrough) {
@@ -114,6 +117,6 @@ async function create(app, ref) {
     closed = true; next = null; replayLines?.close(); replayInput?.destroy();
     replay.return().catch(() => {});
   }
-  return { append, appendMany, restore, context, close };
+  return { append, appendMany, restore, context, close, get nativeHistoryObserved() { return nativeHistoryObserved; } };
 }
 module.exports = { create, usedHarnesses };

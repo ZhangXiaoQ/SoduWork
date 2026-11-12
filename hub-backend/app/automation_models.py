@@ -319,7 +319,7 @@ class Plugin(Base):
     key: Mapped[str] = mapped_column(String(100), index=True)
     name: Mapped[str] = mapped_column(String(120))
     description: Mapped[str] = mapped_column(String(600), default="")
-    source_kind: Mapped[str] = mapped_column(String(24), default="personal")
+    source_kind: Mapped[str] = mapped_column(String(24), default="soduwork")
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     created_by: Mapped[str] = mapped_column(String(36), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

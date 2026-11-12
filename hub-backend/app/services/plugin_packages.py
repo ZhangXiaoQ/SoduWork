@@ -116,7 +116,8 @@ def parse(data: bytes) -> dict:
     checksum = _canonical_digest(zf, names)
     content_checksum = _canonical_digest(
         zf, names, {plugin_signatures.SIGNATURE_PATH})
-    manifest_name = "plugin.json" if "plugin.json" in names else ""
+    manifest_name = "plugin.json" if "plugin.json" in names else (
+        "soduwork/plugin.json" if "soduwork/plugin.json" in names else "")
     if not manifest_name:
         portable_roots = []
         for name in names:
@@ -150,7 +151,7 @@ def parse(data: bytes) -> dict:
                 zf, plugin_personal_resources.discovery_files(names, manifest, prefix))
             adapter = {
                 "manifest": manifest, "workflow": workflow,
-                "sourceKind": "personal",
+                "sourceKind": "adapter" if manifest_name.startswith("soduwork/") else "soduwork",
                 "bundledSkills": bundled, "warnings": warnings,
                 "blockers": [], "unsupportedComponents": [],
             }
@@ -227,7 +228,7 @@ def store(parsed: dict) -> str:
     folder = os.path.join(package_root(), key)
     os.makedirs(folder, exist_ok=True)
     # Preserve existing content-addressed paths; new packages use the current brand.
-    for suffix in (".soduwork-plugin",):
+    for suffix in (".soduwork-plugin", ".soduwork-plugin", ".soduwork-plugin"):
         existing = os.path.join(folder, checksum + suffix)
         if os.path.isfile(existing):
             if _stored_checksum(existing) != content_checksum:

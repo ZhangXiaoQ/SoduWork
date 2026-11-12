@@ -38,8 +38,8 @@ function _schRecipeValues(item) {
       _schPickLocale(item.nameLocales, locale) || item.title || item.name,
     note: _schPickLocale(item.noteLocales, locale) || item.note || '',
     every: item.every || 'daily', atHour: item.atHour, atMinute: item.atMinute,
+    ...(item.every === 'custom' ? {customRule: item.customRule || ''} : {}),
     weekday: item.weekday, timeZone: item.timeZone,
-    startDate: item.startDate || '', endDate: item.endDate || '',
     requiredCapabilities: item.requiredCapabilities || [], retryLimit: item.retryLimit,
     retryDelayMinutes: item.retryDelayMinutes, pluginBindingId: item.pluginBindingId || '',
     pluginInputs: item.pluginInputs || {},
@@ -379,14 +379,18 @@ function _schRenderEditorDrawer(focusDrawer) {
       String((_schEditing || {}).id || '') === sid));
   });
   if (!isOpen) {
+    window.ForwardSelect?.destroy(content);
     layer.classList.remove('show'); layer.setAttribute('aria-hidden', 'true'); content.replaceChildren();
     return;
   }
+  window.ForwardSelect?.destroy(content);
   content.innerHTML = _schEditorDrawerHtml();
   layer.classList.add('show'); layer.setAttribute('aria-hidden', 'false');
   content.querySelectorAll('[data-editor-close]').forEach(button =>
     button.addEventListener('click', () => _schCloseEditor(true)));
   _wireSchForm();
+  const clock = content.querySelector('.sch-clock');
+  if (clock) window.ForwardSelect?.enhance(clock);
   _schBindAgentReload();
   if (focusDrawer) requestAnimationFrame(() => {
     const firstInput = content.querySelector('#schTitle');
@@ -600,20 +604,21 @@ function _schOnceFieldsHtml(value) {
   const local = window.ScheduleTiming?.localInput(value.runAt, zone) || '';
   return '<label class="sch-once-field" id="schOnceWrap"' + (value.every === 'once' ? '' : ' style="display:none"') + '>' +
     '<span>执行日期时间 · ' + esc(_schTimeZoneLabel(zone)) + '</span>' +
-    '<input class="sch-in" id="schRunAt" type="datetime-local" step="0.001" value="' + esc(local) +
+    '<input class="sch-in" id="schRunAt" type="datetime-local" step="60" value="' + esc(local) +
     '" aria-describedby="schOnceHint"><small id="schOnceHint"></small></label>';
-}
-
-function _schDateRangeHtml(value) {
-  return '<div class="sch-date-range" id="schDateRange"' + (value.every === 'once' ? ' style="display:none"' : '') + '>' +
-    '<label><span>开始日期</span><input class="sch-in" id="schStartDate" type="date" value="' + esc(value.startDate || '') + '"></label>' +
-    '<label><span>结束日期</span><input class="sch-in" id="schEndDate" type="date" value="' + esc(value.endDate || '') + '"></label></div>';
 }
 
 function _schReadTiming() {
   const existing = _schEditing && _schEditing !== 'new' ? _schEditing : {};
   const every = document.getElementById('schEvery').value;
   const timeZone = existing.timeZone || _schBrowserTimeZone();
+  const checked = selector => [...(document.querySelectorAll(selector) || [])]
+    .filter(input => input.checked).map(input => Number(input.value))
+    .filter(value => Number.isInteger(value));
+  const weekdays = checked('#schWeekdays input[type="checkbox"]');
+  const monthDays = checked('#schMonthDays input[type="checkbox"]');
+  const legacyWeekday = Number(document.getElementById('schWd')?.value || existing.weekday || 1);
+  const hasWeekdayGrid = Boolean(document.getElementById('schWeekdays'));
   let runAt = '';
   if (every === 'once') {
     const local = document.getElementById('schRunAt')?.value || '';
@@ -628,26 +633,59 @@ function _schReadTiming() {
     runAt = existing.every === 'once' && same ? existing.runAt
       : window.ScheduleTiming?.fromLocalInput(local, timeZone) || '';
   }
-  return { every, runAt, timeZone, ...(existing.id ? { scheduleId: existing.id } : {}) };
+  const startControl = document.getElementById('schStartDate');
+  const endControl = document.getElementById('schEndDate');
+  const startDate = startControl ? startControl.value : (existing.startDate || '');
+  const endDate = endControl ? endControl.value : (existing.endDate || '');
+  const selectedWeekdays = every === 'weekly'
+    ? (hasWeekdayGrid ? weekdays : [legacyWeekday])
+    : [];
+  const selectedMonthDays = every === 'monthly' ? monthDays : [];
+  const policyControl = document.getElementById('schMonthLastDay');
+  const policy = policyControl ? (policyControl.checked ? 'last_day' : 'skip') :
+    (existing.monthDayPolicy || 'skip');
+  const customRule = document.getElementById('schCustomRule')?.value ?? existing.customRule ?? '';
+  return {
+    every, runAt, timeZone,
+    weekday: selectedWeekdays[0] || (every === 'weekly' ? null : legacyWeekday),
+    weekdays: selectedWeekdays,
+    monthDays: selectedMonthDays,
+    monthDayPolicy: policy,
+    startDate: every === 'once' || every === 'custom' ? null : startDate,
+    endDate: every === 'once' || every === 'custom' ? null : endDate,
+    ...(every === 'custom' ? { customRule: String(customRule).trim() } : {}),
+    ...(existing.id ? { scheduleId: existing.id } : {}),
+  };
 }
 
 function _schTimingError(value, focus) {
-  const rangeError = value.startDate && value.endDate && value.endDate < value.startDate
-    ? '结束日期不能早于开始日期' : '';
   const existing = _schEditing && _schEditing !== 'new' ? _schEditing : undefined;
-  const error = rangeError || window.ScheduleTiming?.validate(value, existing) ||
-    (!window.ScheduleTiming ? '时间设置尚未就绪，请重新打开自动化' : '');
+  const error = window.ScheduleTiming?.validate(value, existing) ||
+    (!window.ScheduleTiming ? '\u65f6\u95f4\u8bbe\u7f6e\u5c1a\u672a\u5c31\u7eea\uff0c\u8bf7\u91cd\u65b0\u6253\u5f00\u81ea\u52a8\u5316' : '');
   if (error && focus) {
-    const input = document.getElementById(rangeError ? 'schEndDate' : value.every === 'once' ? 'schRunAt' :
-      value.every !== 'hourly' && (!Number.isInteger(value.atHour) || value.atHour < 0 || value.atHour > 23) ? 'schH' : 'schM');
-    input.classList.add('invalid'); input.setAttribute('aria-invalid', 'true');
-    input.focus({ preventScroll: true });
+    let inputId = value.every === 'once' ? 'schRunAt' : value.every === 'custom' ? 'schCustomRule' :
+      value.every !== 'hourly' && (!Number.isInteger(value.atHour) || value.atHour < 0 || value.atHour > 23) ? 'schH' : 'schM';
+    if (/\u5f00\u59cb\u65e5\u671f/.test(error)) inputId = 'schStartDate';
+    else if (/\u7ed3\u675f\u65e5\u671f/.test(error)) inputId = 'schEndDate';
+    else if (/\u661f\u671f/.test(error)) inputId = 'schWeekdays';
+    else if (/\u6708\u5ea6\u65e5\u671f/.test(error)) inputId = 'schMonthDays';
+    let input = document.getElementById(inputId);
+    if ((inputId === 'schWeekdays' || inputId === 'schMonthDays') && input &&
+        typeof input.querySelector === 'function') {
+      input = input.querySelector('input') || input;
+    }
+    if (input) {
+      input.classList.add('invalid'); input.setAttribute('aria-invalid', 'true');
+      input.focus({ preventScroll: true });
+    }
     if (typeof petSay === 'function') petSay(_schTx(error));
   }
   return error;
 }
 
 function _schSyncTiming(every) {
+  const customRule = document.getElementById('schCustomRule');
+  if (customRule) { customRule.classList.remove('invalid'); customRule.removeAttribute('aria-invalid'); }
   const field = document.getElementById('schOnceWrap');
   const input = document.getElementById('schRunAt');
   if (!field || !input) return;
@@ -665,41 +703,102 @@ function _schSyncTiming(every) {
  */
 function _schNextPreview() {
   const every = document.getElementById('schEvery').value;
+  const timing = _schReadTiming();
+  timing.atHour = window.ScheduleTiming.clockNumber(document.getElementById('schH').value);
+  timing.atMinute = window.ScheduleTiming.clockNumber(document.getElementById('schM').value);
   if (every === 'once') {
-    const timing = _schReadTiming(), previous = _schEditing || {};
-    if (previous.onceFired && timing.runAt === previous.runAt) return _schTx('本次预约已触发');
+    const previous = _schEditing || {};
+    if (previous.onceFired && timing.runAt === previous.runAt) return _schTx('\u672c\u6b21\u9884\u7ea6\u5df2\u89e6\u53d1');
     const error = _schTimingError(timing);
     if (error) return _schTx(error);
-    if (Date.parse(timing.runAt) <= Date.now()) return _schTx('等待补跑一次');
-    return '下一次：' + _schTx(window.ScheduleTiming.summary(timing));
+    if (Date.parse(timing.runAt) <= Date.now()) return _schTx('\u7b49\u5f85\u8865\u8dd1\u4e00\u6b21');
+    return '\u4e0b\u4e00\u6b21\uff1a' + _schTx(window.ScheduleTiming.summary(timing));
   }
-  const hh = window.ScheduleTiming.clockNumber(document.getElementById('schH').value);
-  const mm = window.ScheduleTiming.clockNumber(document.getElementById('schM').value);
-  const error = _schTimingError({every, atHour:hh, atMinute:mm});
-  for (const id of ['schH', 'schM']) {
+
+  if (every === 'custom') {
+    const error = _schTimingError(timing);
+    if (error) return _schTx(error);
+    return _schTx('保存后由服务端计算下一次执行时间');
+  }
+
+  const error = _schTimingError(timing);
+  for (const id of ['schH', 'schM', 'schStartDate', 'schEndDate']) {
     const control = document.getElementById(id);
-    control.classList.remove('invalid'); control.removeAttribute('aria-invalid');
+    if (control) { control.classList.remove('invalid'); control.removeAttribute('aria-invalid'); }
   }
   if (error) return _schTx(error);
-  const wd = Number(document.getElementById('schWd').value || 1);
-  const now = new Date();
-  const n = new Date(now);
+
+  // Compare wall-clock fields in the saved zone, independently of the OS zone.
+  const localNow = window.ScheduleTiming.localInput(new Date().toISOString(), timing.timeZone);
+  const now = new Date(localNow + 'Z');
+  const key = value => {
+    const date = value instanceof Date ? value : new Date(value);
+    return date.getUTCFullYear() + '-' + _sp2(date.getUTCMonth() + 1) + '-' + _sp2(date.getUTCDate());
+  };
+  const startKey = timing.startDate || '';
+  const endKey = timing.endDate || '';
+  const allowed = value => (!startKey || value >= startKey) && (!endKey || value <= endKey);
+  const candidate = (day, hour, minute) => {
+    const value = new Date(day);
+    value.setUTCHours(hour, minute, 0, 0);
+    return value;
+  };
+  const show = value => {
+    const today = key(value) === key(now);
+    const tomorrow = new Date(now);
+    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+    const dateLabel = (window.SoduWorkI18n && typeof window.SoduWorkI18n.t === 'function')
+      ? window.SoduWorkI18n.t('\u007bvalue1\u007d\u6708\u007bvalue2\u007d\u65e5',
+        (value.getUTCMonth() + 1) + '\u6708' + value.getUTCDate() + '\u65e5',
+        { value1: value.getUTCMonth() + 1, value2: value.getUTCDate() })
+      : (value.getUTCMonth() + 1) + '\u6708' + value.getUTCDate() + '\u65e5';
+    const label = today ? _schTx('\u4eca\u5929') : key(value) === key(tomorrow) ? _schTx('\u660e\u5929') : dateLabel;
+    return _schTx('\u4e0b\u4e00\u6b21\uff1a') + label + ' ' + _sp2(value.getUTCHours()) + ':' + _sp2(value.getUTCMinutes());
+  };
+
   if (every === 'hourly') {
-    n.setMinutes(mm, 0, 0);
-    if (n <= now) n.setHours(n.getHours() + 1);
-  } else {
-    n.setHours(hh, mm, 0, 0);
-    if (every === 'weekly') {
-      const cur = n.getDay() === 0 ? 7 : n.getDay();
-      n.setDate(n.getDate() + ((wd - cur) % 7 + 7) % 7);
-      if (n <= now) n.setDate(n.getDate() + 7);
-    } else if (n <= now) n.setDate(n.getDate() + 1);
+    const probe = new Date(now);
+    probe.setUTCSeconds(0, 0);
+    if (startKey && key(probe) < startKey) {
+      const [year, month, day] = startKey.split('-').map(Number);
+      probe.setUTCFullYear(year, month - 1, day);
+      probe.setUTCHours(0, timing.atMinute, 0, 0);
+    } else {
+      probe.setUTCMinutes(timing.atMinute, 0, 0);
+    }
+    if (probe <= now) probe.setUTCHours(probe.getUTCHours() + 1);
+    if (allowed(key(probe))) return show(probe);
+    return _schTx('\u8ba1\u5212\u5df2\u8d85\u51fa\u6709\u6548\u65e5\u671f\u8303\u56f4');
   }
-  const sameDay = n.toDateString() === now.toDateString();
-  const tomorrow = new Date(now); tomorrow.setDate(tomorrow.getDate() + 1);
-  const day = _schTx(sameDay ? '今天' : (n.toDateString() === tomorrow.toDateString() ? '明天'
-    : (n.getMonth() + 1) + '月' + n.getDate() + '日'));
-  return '下一次：' + day + ' ' + _sp2(n.getHours()) + ':' + _sp2(n.getMinutes());
+
+  const selectedWeekdays = Array.isArray(timing.weekdays) ? timing.weekdays : [];
+  const selectedMonthDays = Array.isArray(timing.monthDays) ? timing.monthDays : [];
+  const probe = startKey && startKey > key(now) ? new Date(startKey + 'T00:00:00Z') : new Date(now);
+  probe.setUTCHours(0, 0, 0, 0);
+  for (let offset = 0; offset <= 62; offset += 1) {
+    const day = new Date(probe);
+    day.setUTCDate(probe.getUTCDate() + offset);
+    const dateKey = key(day);
+    if (endKey && dateKey > endKey) break;
+    if (!allowed(dateKey)) continue;
+    let matches = every === 'daily';
+    if (every === 'weekly') {
+      const weekday = day.getUTCDay() || 7;
+      matches = selectedWeekdays.includes(weekday);
+    }
+    if (every === 'monthly') {
+      const lastDay = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth() + 1, 0)).getUTCDate();
+      const monthDay = day.getUTCDate();
+      const mapped = selectedMonthDays.some(value => value <= lastDay ? value === monthDay :
+        timing.monthDayPolicy === 'last_day' && monthDay === lastDay);
+      matches = mapped;
+    }
+    if (matches) {
+      const run = candidate(day, timing.atHour, timing.atMinute);
+      if (run > now) return show(run);
+    }
+  }
+  return _schTx('\u8ba1\u5212\u5df2\u8d85\u51fa\u6709\u6548\u65e5\u671f\u8303\u56f4');
 }
 
 // Share presentation between editing-time and mandatory save-time preflight so stale successful states cannot remain visible.

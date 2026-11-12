@@ -7,7 +7,7 @@ const os = require('node:os');
 const vm = require('node:vm');
 const { spawnSync } = require('node:child_process');
 const { createRequire } = require('node:module');
-const productionGuids = [require('../main/distribution.cjs').current().nsisGuid];
+const productionGuids = [require('../package.json').build.nsis.guid];
 
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'soduwork-update-e2e-registry-'));
@@ -18,8 +18,8 @@ async function fixture(t) {
   const entry = path.resolve(__dirname, '../e2e/fixtures/isolated-installer-build.cjs');
   const source = await fs.readFile(entry, 'utf8'), fixtureRequire = createRequire(entry);
   const module = { exports: {} }; let invoked;
-  vm.runInNewContext(source, { module, require: name => name === 'electron-builder'
-    ? { build: async options => { invoked = options; return []; } } : fixtureRequire(name), process });
+  vm.runInNewContext(source, { module, process, require: name => name === 'electron-builder'
+    ? { build: async options => { invoked = options; return []; } } : fixtureRequire(name) });
   const options = { config: { appId: 'com.soduwork.update.e2e.12345',
     directories: { output: path.join(root, 'dist') },
     nsis: { include: path.resolve(__dirname, '../build/installer.nsh') } } };

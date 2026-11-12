@@ -6,6 +6,7 @@ import os
 import sys
 import io
 import zipfile
+from pathlib import Path
 
 DB = os.path.abspath(".smoke-office-plugins.db")
 for suffix in ("", "-shm", "-wal"):
@@ -101,7 +102,7 @@ async def main():
 
     parsed = {}
     for key, (filename, skill, expected_output) in FILES.items():
-        with open(os.path.join("plugins", filename), encoding="utf-8") as handle:
+        with (Path(__file__).resolve().parents[1] / "plugins" / filename).open(encoding="utf-8") as handle:
             raw = json.load(handle)
         manifest, workflow, report = plugin_packages.normalize(raw)
         parsed[key] = (manifest, workflow, report)
@@ -162,18 +163,28 @@ async def main():
 
     async with SessionLocal() as session:
         await plugin_service.bootstrap_example(session)
+        discovered = set(FILES) | {"delivery-audit"}
         rows = list((await session.execute(select(am.Plugin).where(
-            am.Plugin.key.in_(set(FILES))))).scalars().all())
-        check("bootstrap discovers all six plugins", len(rows) == len(FILES),
+            am.Plugin.key.in_(discovered)))).scalars().all())
+        check("bootstrap discovers office and delivery-audit plugins", len(rows) == len(discovered),
               [row.key for row in rows])
         versions = list((await session.execute(select(am.PluginVersion).where(
             am.PluginVersion.plugin_id.in_({row.id for row in rows}))))
             .scalars().all())
-        check("each plugin has one immutable version", len(versions) == len(FILES),
+        check("each plugin has one immutable version", len(versions) == len(discovered),
               len(versions))
         check("new built-ins enter quarantine",
               all(row.trust_state == "quarantined" and not row.enabled
                   for row in versions))
+
+        await plugin_service.bootstrap_example(session)
+        repeated = list((await session.execute(select(am.PluginVersion).where(
+            am.PluginVersion.plugin_id.in_({row.id for row in rows}))))
+            .scalars().all())
+        check("bootstrap is idempotent and does not approve discovered versions",
+              {row.id for row in repeated} == {row.id for row in versions}
+              and all(row.trust_state == "quarantined" and not row.enabled
+                      for row in repeated))
 
         await work_catalog.bootstrap(session)
         scenarios = {row.key: row for row in

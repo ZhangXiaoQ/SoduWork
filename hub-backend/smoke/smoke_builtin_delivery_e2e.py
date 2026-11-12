@@ -39,7 +39,7 @@ from app.services import (code_delivery, delivery_truth, deployments, plugin_pac
 
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
-MODEL = "fixture-coding-large-model"
+MODEL = "dev-coding-large-agent-soduwork"
 passed = failed = 0
 lines: list[str] = []
 flow_state: dict[str, dict] = {}

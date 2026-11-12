@@ -46,7 +46,7 @@ async def validate(session, client, binding):
     return packet
 
 
-async def inputs(session, row):
+async def inputs(session, row, *, instruction):
     client = await session.get(models.Client, row.owner_client_id)
     if not client or client.user_ref != row.owner_user_id or client.auth_state != 'active':
         raise HTTPException(403, "验收账号已变化，请重新登录后发起")
@@ -79,7 +79,7 @@ async def inputs(session, row):
               "不得直接调用审批或任务修改接口。完成后由系统重新核对权限和版本并提交验收。\n"
               "将 UTF-8 JSON 报告写入工作目录文件 " + report_name(row) + "，并作为本轮输出保留。\n"
               "格式：" + json.dumps(example, ensure_ascii=False) + "\n固定版本材料：\n" +
-              json.dumps(material, ensure_ascii=False) + "\n验收人补充说明：\n" + row.options["instruction"])
+              json.dumps(material, ensure_ascii=False) + "\n验收人补充说明：\n" + instruction)
     if len(prompt) > 50000:
         raise HTTPException(413, "验收上下文过大，请先整理材料后重试")
     await session.refresh(client)

@@ -30,6 +30,8 @@ export default {
   "推荐位置": "Placement",
   "可多选 · 排序默认升序": "Multi-select · ascending order by default",
   "对话页 · 起手推荐": "Chat page · starter card",
+  "主侧栏 · 应用入口": "Main sidebar · app shortcut",
+  "向有使用权限的用户展示，点击在主窗口右侧打开": "Shown to authorized users; opens beside the main sidebar",
   "出现在「新对话」页输入框下方，点击直接填入输入框（横向 ≤3）": "Appears under the new-chat composer; clicking fills the input box (up to 3 in a row)",
   "应用页 · 推荐分组": "Apps page · featured group",
   "出现在应用面板「推荐」分组（大图卡片）": "Appears in the apps panel's featured group (large cover card)",

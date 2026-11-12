@@ -1,6 +1,9 @@
 ; SoduWork installation identity and safe in-place upgrade checks.
-; A distributor may explicitly declare its own predecessor at build time.
-; Public self-hosted builds never adopt another distributor's registry identity.
+!ifndef SODUWORK_PREVIOUS_INSTALL_GUID
+  !if "${APP_ID}" == "com.soduwork.app"
+    !define SODUWORK_PREVIOUS_INSTALL_GUID "1950f0e5-fb32-5782-95db-b8bf71cad731"
+  !endif
+!endif
 !ifdef SODUWORK_PREVIOUS_INSTALL_GUID
   !define SODUWORK_PREVIOUS_INSTALL_KEY "Software\${SODUWORK_PREVIOUS_INSTALL_GUID}"
   !define SODUWORK_PREVIOUS_UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${SODUWORK_PREVIOUS_INSTALL_GUID}"

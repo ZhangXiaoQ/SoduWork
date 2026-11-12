@@ -2,14 +2,15 @@
   'use strict';
   const DEFAULT = 0.5, SNAP_WIDTH = 320;
   const text = (source, params) => global.SoduWorkI18n?.t(source, source, params) || source.replace(/\{(\w+)\}/g, (_, key) => params?.[key] ?? '');
+  const availableWidth = root => (root.querySelector('.nchat-stage') || root).getBoundingClientRect().width;
   function current(root) {
-    const total = root.getBoundingClientRect().width;
+    const total = availableWidth(root);
     const main = root.querySelector('.nchat-main');
     return total && main ? main.getBoundingClientRect().width / total : DEFAULT;
   }
   function set(root, ratio) {
     if (!root) return DEFAULT;
-    const total = root.getBoundingClientRect().width || 640;
+    const total = availableWidth(root) || 640;
     const min = Math.min(DEFAULT, SNAP_WIDTH / total);
     const max = Math.max(min, Math.min(0.7, 1 - SNAP_WIDTH / total));
     const value = Math.max(min, Math.min(max, Number(ratio) || DEFAULT));
@@ -46,7 +47,7 @@
     const matches = event => drag && (event?.pointerId === undefined || drag.pointerId === undefined || event.pointerId === drag.pointerId);
     function move(event) {
       if (!matches(event)) return;
-      const total = root.getBoundingClientRect().width;
+      const total = availableWidth(root);
       if (!total) return;
       const width = drag.startWidth + event.clientX - drag.startX;
       drag.snap = width <= SNAP_WIDTH;
@@ -87,7 +88,7 @@
     function key(event) {
       if (event.isComposing || drag || isMaximized()) return;
       const ratio = current(root), step = event.shiftKey ? 0.05 : 0.02;
-      const width = root.getBoundingClientRect().width;
+      const width = availableWidth(root);
       let next;
       if (event.key === 'Home' || event.key === 'ArrowLeft' && (ratio - step) * width <= SNAP_WIDTH) {
         event.preventDefault(); snap(ratio); return;

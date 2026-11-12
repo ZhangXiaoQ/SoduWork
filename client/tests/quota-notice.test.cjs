@@ -94,3 +94,50 @@ test('没有额度卡时恢复通知不会触发无意义的刷新请求', () =>
   assert.equal(f.ctx.SoduWorkQuotaNotice.markRestored(), false);
   assert.deepEqual(f.calls, []);
 });
+
+test('selected personal Pi hides only the platform budget card and never clears the global budget', () => {
+  const f = fixture();
+  f.ctx.SoduWorkQuota = require('../core/token-quota');
+  const composer = { parentElement: {}, before(card) { card.isConnected = true; } };
+  const card = f.ctx.SoduWorkQuotaNotice.mount(composer), notice = f.ctx.SoduWorkQuotaNotice;
+  const platform = { enabled: true, exceeded: true, reason: 'total_exhausted', limit: 10, used: 10,
+    quotaVersion: 2, personalModelsAllowed: true };
+  delete platform.reason; // Legacy monthly quotas rely on the explicit v2 allowance flag.
+  const personal = { id: 'mine', quotaVersion: 2, quotaScope: 'personal' };
+  notice.update({ quota: platform });
+  notice.modelChanged({ id: 'org', quotaVersion: 2, quotaScope: 'platform' }, 'pi', composer);
+  assert.equal(card.hidden, false);
+  assert.match(card.querySelector('[data-quota-guidance]').textContent, /\u4e2a\u4eba\u6a21\u578b/);
+  notice.modelChanged(personal, 'pi', composer);
+  assert.equal(card.hidden, true);
+  assert.deepEqual(f.calls, [], 'choosing personal must not mark the global account quota restored');
+  notice.modelChanged({ id: 'org', quotaVersion: 2, quotaScope: 'platform' }, 'pi', composer);
+  assert.equal(card.hidden, false, 'switching back still shows exhausted platform budget');
+  notice.modelChanged(personal, 'codex-harness', composer);
+  assert.equal(card.hidden, false);
+  assert.doesNotMatch(card.querySelector('[data-quota-guidance]').textContent, /\u4e2a\u4eba\u6a21\u578b/);
+  for (const patch of [{ reason: 'trial_expired' }, { limit: 0 }, { restrictModels: true }, { quotaVersion: 1 }]) {
+    notice.update({ quota: { ...platform, ...patch } });
+    notice.modelChanged(personal, 'pi', composer);
+    assert.equal(card.hidden, false);
+    assert.doesNotMatch(card.querySelector('[data-quota-guidance]').textContent, /\u4e2a\u4eba\u6a21\u578b/);
+  }
+});
+
+test('an allowed personal conversation does not hide another mounted composer quota card', () => {
+  const f = fixture(); f.ctx.SoduWorkQuota = require('../core/token-quota');
+  const notice = f.ctx.SoduWorkQuotaNotice;
+  const one = { parentElement: {}, before(card) { card.isConnected = true; } };
+  const two = { parentElement: {}, before(card) { card.isConnected = true; } };
+  const a = notice.mount(one), b = notice.mount(two);
+  notice.update({ quota: { enabled: true, exceeded: true, limit: 10, used: 10,
+    quotaVersion: 2, personalModelsAllowed: true } });
+  notice.modelChanged({ id: 'mine', quotaVersion: 2, quotaScope: 'personal' }, 'pi',
+    { querySelector: selector => selector === '.work-composer' ? one : null });
+  notice.modelChanged({ id: 'org', quotaVersion: 2, quotaScope: 'platform' }, 'pi', two);
+  assert.equal(a.hidden, true);
+  assert.equal(b.hidden, false);
+  notice.modelChanged();
+  assert.equal(a.hidden, false, 'leaving a conversation clears its allowance presentation');
+  assert.equal(b.hidden, false);
+});

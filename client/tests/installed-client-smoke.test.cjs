@@ -5,13 +5,14 @@ const smokeFile = path.resolve(__dirname, '../../tools/ci/installed-client-smoke
 const source = fs.readFileSync(smokeFile, 'utf8');
 const smokeRequire = require('node:module').createRequire(smokeFile);
 
-async function launch(t, platform, validProfile = true) {
+async function launch(t, platform, validProfile = true, realKeychain = false) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-install-acceptance-test-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const installed = path.join(root, 'installed');
   const profile = path.join(root, validProfile ? 'soduwork-acceptance-profile-test' : 'personal-profile');
   const output = path.join(root, 'result.json');
-  const state = { platform, pid: process.pid, env: { SODUWORK_USER_DATA: '/must-not-use-existing-profile' },
+  const state = { platform, pid: process.pid, env: { SODUWORK_USER_DATA: '/must-not-use-existing-profile',
+      ...(realKeychain ? { SODUWORK_MAC_REAL_KEYCHAIN: '1' } : {}) },
     argv: ['node', 'smoke', path.join(installed, 'app'), installed, profile, output, '9.9.1'] };
   const launches = [], errors = [];
   const childError = new Error('Intentional stop after capturing the application launch');
@@ -63,4 +64,12 @@ test('Mac acceptance rejects a personal profile before launching the application
   assert.deepEqual(result.launches, []);
   assert.equal(result.report, null);
   assert.equal(fs.existsSync(result.profile), false);
+});
+
+test('Mac acceptance can opt into the real login Keychain for signed release checks', async t => {
+  const result = await launch(t, 'darwin', true, true);
+  assert.equal(result.error, result.childError);
+  assert.equal(result.launches.length, 1);
+  assert.equal(result.launches[0].args.includes('--use-mock-keychain'), false);
+  assert.equal(result.report.limitations.some(text => text.includes('mock Keychain')), false);
 });

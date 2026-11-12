@@ -65,6 +65,56 @@ test('application conversations restore configured ukey without an app window an
     assert.equal(fs.readFileSync(path.join(f.root, 'app-settings.secure.json'), 'utf8').includes('fixture-conversation-key'), false);
   } finally { f.cleanup(); }
 });
+test('stored MCP credentials survive page closure, preference changes, elapsed days and concurrent consumers', async t => {
+  const f = fixture(), personal = require('../main/personal-plugins');
+  const guard = require('../main/pi-session/app-mcp-grant.cjs'), preview = require('../main/work-preview');
+  const original = preview.appContextFor, received = [], leases = [];
+  const server = http.createServer((req, res) => { received.push(req.headers.authorization); res.end('{"ok":true}'); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { preview.appContextFor = original; leases.forEach(l => l.cleanup()); server.closeAllConnections(); server.close(); f.cleanup(); });
+  const origin = 'http://127.0.0.1:' + server.address().port;
+  const plugin = personal.create(f.app, { key: 'persistent-mcp', name: 'Persistent MCP', version: '0.1.0', template: 'app',
+    description: 'Fixture', instructions: 'Fixture', mcpServers: ['cloud'],
+    ui: { contributions: [{ id: 'main', slot: 'workspace.navigation', title: 'App', source: {
+      type: 'external', url: origin, bridge: { version: 1, capabilities: ['mcp.connect'] },
+    } }] } }).plugin;
+  const bound = {pluginId:plugin.pluginId,origin};
+  store.update(bound, {values:{serviceKey:'fixture-shared-key', accountId:'account-a'}});
+  store.saveConnection(bound, 'main', {server:'cloud',url:origin+'/mcp',credentialKey:'serviceKey'});
+  let closed = false;
+  preview.appContextFor = () => {
+    if (closed) throw Error('page destroyed');
+    return {pluginId:plugin.pluginId,requiresMcp:true,connection:{credentialKey:'serviceKey',readCurrent(){throw Error('page-only connection');}}};
+  };
+  const handle = {snapshot:()=>({activePlugins:[plugin.pluginId]})};
+  guard.bind(handle, {}, plugin.pluginId, f.app);
+  const turn = {}; await guard.guardSend(handle, turn);
+  closed = true;
+  store.update(bound, {values:{theme:'light',accountName:'New display name'}});
+  await turn.beforeTurn();
+  const connection = (await guard.forSession(handle)).connection;
+  const proxy = require('../main/pi-session/app-mcp-proxy.cjs');
+  leases.push(await proxy.create(connection), await proxy.create(connection));
+  const call = lease => fetch(lease.url,{method:'POST',headers:{Authorization:'Bearer '+lease.token},body:'{}'});
+  const realNow = Date.now;
+  try {
+    Date.now = () => realNow() + 7*86400000;
+    assert.deepEqual((await Promise.all(leases.map(call))).map(r=>r.status), [200,200]);
+  } finally { Date.now = realNow; }
+  assert.deepEqual(received, ['Bearer fixture-shared-key','Bearer fixture-shared-key']);
+  const accepted = {}; await guard.guardSend(handle, accepted);
+  store.update(bound, {values:{serviceKey:'fixture-replacement-key'}});
+  store.update(bound, {values:{serviceKey:'fixture-shared-key'}});
+  await assert.rejects(accepted.beforeTurn(), /账号或设置已变化/);
+  assert.deepEqual((await Promise.all(leases.map(call))).map(r=>r.status), [401,401]);
+  assert.equal(received.length,2,'Changed credentials are blocked before upstream execution');
+  const fresh = await guard.context(null,plugin.pluginId,undefined,f.app);
+  leases.push(await proxy.create(fresh.connection));
+  assert.equal((await call(leases[2])).status,200);
+  store.update(bound,{remove:['serviceKey']});
+  assert.equal((await call(leases[2])).status,401);
+});
+
 test('any main-window conversation may select an application and queued turns keep independent application credentials', async () => {
   const f = fixture(), personal = require('../main/personal-plugins');
   const guard = require('../main/pi-session/app-mcp-grant.cjs');

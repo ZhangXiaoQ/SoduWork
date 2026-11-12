@@ -3,8 +3,13 @@ import unittest
 
 
 MODULES = (
+    "tests.test_harness2_native_executor",
+    "tests.test_harness2_native_safety",
+    "tests.test_harness2_native_provider",
+    "test_harness2_native_web",
     "tests.test_harness2_bridge",
     "tests.test_harness2_budget",
+    "tests.test_harness2_latency",
     "tests.test_harness2_errors",
     "tests.test_harness2_events",
     "tests.test_harness2_interactive",

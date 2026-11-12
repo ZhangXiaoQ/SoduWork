@@ -150,6 +150,9 @@
       const nativeId = !row.id.startsWith('task:');
       const status = row.taskId ? taskState(entry || { taskId: row.taskId, task: {} }, nativeId ? row : null) : 'queued';
       const running = status === 'running';
+      const controller = (ctx._snap?.execution?.taskExecutions || []).find(value => value.taskId === row.taskId);
+      const waitLabel = controller?.status === 'waiting' && ({ connection: '等待连接', auth: '需要重新登录',
+        permission: '等待授权', stop: '停止中' })[controller.waitingReason];
       const active = Boolean(row.taskId && String(state.activeTaskId || '') === String(row.taskId));
       const movable = nativeId && !active && !row.local && !transferred && !(currentSend() && sendingNow.id === row.id);
       const showImmediate = !row.taskId && nativeId && immediate.supported === true;
@@ -166,7 +169,7 @@
         '<button type="button" class="nqueue-copy" data-queue-action="' + (row.taskId ? 'detail' : 'edit') +
         '" title="' + ctx.esc(row.taskTitle || row.text) + '" data-task-id="' + ctx.esc(row.taskId || '') + '" data-queue-id="' + ctx.esc(row.id) + '">' +
         '<b>' + ctx.esc(row.taskTitle || row.text) + '</b></button>' +
-        (status === 'queued' ? '' : '<span class="nqueue-state">' + ctx.esc(labels[status] || '等待确认') +
+        (status === 'queued' ? '' : '<span class="nqueue-state">' + ctx.esc(waitLabel || labels[status] || '等待确认') +
           (running ? '<span class="nqueue-progress" aria-hidden="true"></span>' : '') + '</span>') +
         (showImmediate ? '<button type="button" class="nqueue-send-now" data-queue-action="send-now" data-queue-id="' + ctx.esc(row.id) +
           '" title="' + ctx.esc(sendHint) + '" aria-label="' + ctx.esc(isSending ? '正在引导' : '引导') +

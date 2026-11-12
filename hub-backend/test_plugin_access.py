@@ -261,21 +261,30 @@ class PluginAccessTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.json()["ui"], parsed["manifest"]["ui"])
         self.assertEqual({row["path"] for row in response.json()["resources"]},
                          {"ui/index.html", "assets/logo.svg"})
+        etag = response.headers["etag"]
+        conditional = await self.http.get(path, headers={"If-None-Match": etag})
+        self.assertEqual(conditional.status_code, 304)
+        self.assertEqual(conditional.content, b"")
+        self.assertEqual((await self.http.get(path, headers={"If-None-Match": "W/" + etag})).status_code, 304)
+        self.assertEqual((await self.http.get(path, headers={"x-test-user": "outside", "If-None-Match": etag})).status_code, 409)
         self.assertEqual((await self.http.get(path, headers={"x-test-user": "outside"})).status_code, 409)
         installation = (await self.session.execute(select(am.PluginInstallation).where(
             am.PluginInstallation.user_id == "employee", am.PluginInstallation.plugin_id == self.plugin.id))).scalar_one()
         installation.enabled = False
         await self.session.commit()
         self.assertEqual((await self.http.get(path)).status_code, 409)
+        self.assertEqual((await self.http.get(path, headers={"If-None-Match": etag})).status_code, 409)
         installation.enabled = True
         await self.session.commit()
         await self.save(use={"mode": "none"})
         self.assertEqual((await self.http.get(path)).status_code, 409)
+        self.assertEqual((await self.http.get(path, headers={"If-None-Match": etag})).status_code, 409)
         await self.save(use={"mode": "organization"})
         changed = [{**row, "content": base64.b64encode(b"<title>Changed page</title>").decode()}
                    if row["path"] == "ui/index.html" else row for row in resources]
         Path(self.version.package_path).write_bytes(plugin_drafts.build(draft(template="app", ui=ui, resources=changed)))
         self.assertEqual((await self.http.get(path)).status_code, 409, "modified immutable packages are rejected")
+        self.assertEqual((await self.http.get(path, headers={"If-None-Match": etag})).status_code, 409)
 
     async def test_revocation_blocks_task_start_even_with_known_binding_id(self):
         task = SimpleNamespace(id="", repo_id=None, project_id=None, owner_client_id="device-employee")

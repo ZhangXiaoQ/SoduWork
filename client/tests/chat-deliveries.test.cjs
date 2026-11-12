@@ -7,11 +7,49 @@ const vm = require('node:vm');
 
 const code = fs.readFileSync(path.join(__dirname, '../components/panels/chat-deliveries.js'), 'utf8');
 
-function helper(document) {
-  const global = { addEventListener() {}, document };
+function helper(document, extra = {}) {
+  const global = { addEventListener() {}, document, ...extra };
   vm.runInNewContext(code, { window: global, globalThis: global, URL, document });
   return global.ChatDeliveries;
 }
+
+test('cloud card does not paint a package receipt as a saved PC library item', async () => {
+  const child = () => ({ textContent: '', hidden: false, dataset: {}, classList: { toggle() {} },
+    setAttribute() {}, appendChild() {}, replaceWith() {}, replaceChildren() {}, querySelector: child });
+  const retry = child(), card = { ...child(), dataset: {},
+    querySelector: selector => selector === '[data-delivery-retry]' ? retry : child() };
+  const document = { createElement: tag => tag === 'section' ? card : child(),
+    createTextNode: text => ({ textContent: text }), querySelectorAll: () => [card] };
+  const message = { dataset: {}, querySelector: () => null, querySelectorAll: () => [], appendChild() {} };
+  let decorated = false, saves = 0;
+  const root = { ownerDocument: document, querySelectorAll: selector => selector === '[data-delivery]'
+    ? decorated ? [card] : [] : [message] };
+  const api = {
+    getTaskDelivery: async () => { throw Error('Package receipt is not a save receipt'); },
+    syncTaskDelivery: async () => { throw Error('Package preparation is not a library save'); },
+    getTaskLibraryDeliveryStatus: async (taskId, selected) => {
+      assert.equal(taskId, 'cloud');
+      assert.deepEqual({...selected}, {round: 1, executionRef: 'run'});
+      return { ok: true, delivery: null, manifest: {id: 'immutable', revision: 'v1', files: [{ path: 'a.txt' }] } };
+    },
+    saveTaskLibraryDelivery: async (_taskId, selected) => {
+      assert.deepEqual({...selected}, {round: 1, executionRef: 'run', deliveryId: 'immutable', revision: 'v1'});
+      saves++; return { ok: true, delivery: { id: 'local-saved', files: [{ path: 'a.txt' }] } };
+    },
+  };
+  const deliveries = helper(document, { SoduWorkAPI: api });
+  const snapshot = { status: 'idle', cloudHandoff: { taskId: 'cloud' } };
+  deliveries.decorate(root, [{ taskId: 'cloud', artifactId: 'a', name: 'a.txt', role: 'output', round: 1, sourceRef: 'run' }], 'ref', snapshot);
+  decorated = true;
+  deliveries.hydrate(root, { ref: 'ref', snapshot });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(retry.title, '保存到资料库');
+  assert.equal(saves, 0);
+  await deliveries.handle({ closest: selector => selector === '[data-delivery]' ? card
+    : selector === '[data-delivery-retry]' ? retry : null }, {});
+  assert.equal(saves, 1);
+  assert.equal(retry.title, '已保存到资料库，点击查看');
+});
 
 test('cloud delivery keeps same-named files from different paths', () => {
   const deliveries = helper();

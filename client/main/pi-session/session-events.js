@@ -144,6 +144,8 @@ function _snapshot(options) {
     const binding = ctx.taskBinding;
     const active = ctx.turnQueue.active();
     const controlled = active && active.options.controlled && (active.options.pluginDebug ? ctx.handle.pluginDebug : ctx.taskExecutions.get(active.options.taskId));
+    const controlledView = !active?.options.pluginDebug &&
+      require('./controlled-execution-snapshot.cjs').project(controlled, active?.id);
     const transcript = ctx.liveAccess.view(options && typeof ctx.acc.uiSnapshot === 'function'
       ? ctx.acc.uiSnapshot(options) : ctx.acc.snapshot());
     const queue = ctx.turnQueue.state();
@@ -160,6 +162,7 @@ function _snapshot(options) {
       modelSelection: ctx.modelSelection.view(),
       thinking: _thinkingView(),
       execution: { ..._execution(), ...(failedBeforeOutput ? { running: false } : {}),
+        ...controlledView?.execution,
         turnQueue: queue, taskExecutions: Array.from(ctx.taskExecutions.values()),
         queueImmediate: ctx.immediate.view(),
         modelRecovery: !ctx.inFlight && !ctx.turnQueue.active() ? ctx.modelRecovery.view() : null },

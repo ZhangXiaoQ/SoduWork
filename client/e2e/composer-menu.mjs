@@ -149,7 +149,7 @@ try{
  for(const skin of skins){
   await page.run(s=>{document.documentElement.dataset.theme=s.theme;document.documentElement.dataset.skin=s.skin},skin);await delay(300);
   await page.call('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
-  await open();await audit(skin.id);if(['bear-ruby','flat-azure','soduwork-signature'].includes(skin.id))await shot(skin.id+'-menu');
+  await open();await audit(skin.id);if(['bear-cnbm','flat-azure','soduwork-signature'].includes(skin.id))await shot(skin.id+'-menu');
   await click('#cpMore');
  }
  // A desktop window also contains the 272px navigation/history shell. Measure

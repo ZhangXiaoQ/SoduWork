@@ -160,7 +160,7 @@ def list_assignees_sync(cfg: dict) -> dict:
                 "orgId": r.org_id,
                 "capabilities": execution_capabilities.clean_report(r.capabilities),
                 "machineKey": mkey, "machineLabel": label,
-                # As in ai_local, stage-specific model overrides apply only to shared-provider runtimes.
+                # As with ai_local, only gateway-backed runtimes support model overrides.
                 "modelPick": supports_soduwork_model_kind("local:" + key),
                 "note": "在 %s 上跑，产出落那台机器的工作目录" % (label or "远程执行机"),
             })

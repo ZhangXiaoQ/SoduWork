@@ -14,6 +14,7 @@ function setup() {
   let nextFrame = 1;
   let resizeCallback = null;
   const listeners = [];
+  const observed = new Set();
   const rect = { left: 100, right: 916, top: 100, bottom: 500, width: 816, height: 400 };
   const style = { borderLeftWidth: '0px', borderRightWidth: '0px', direction: 'ltr', scrollbarWidth: 'auto' };
   const scrollbarStyle = { width: '5px', display: 'block' };
@@ -70,9 +71,9 @@ function setup() {
     },
     ResizeObserver: class {
       constructor(fn) { resizeCallback = fn; }
-      observe() {}
-      unobserve() {}
-      disconnect() {}
+      observe(node) { observed.add(node); }
+      unobserve(node) { observed.delete(node); }
+      disconnect() { observed.clear(); }
     },
     setTimeout,
     clearTimeout,
@@ -82,7 +83,7 @@ function setup() {
   const ctx = { _ref: 'test-ref', _mount: () => el };
   const state = sandbox.ChatScrollFollow.create(ctx);
   return {
-    state, ctx, el, scroll, list, button, frames, rect, style, scrollbarStyle,
+    state, ctx, el, scroll, list, button, frames, rect, style, scrollbarStyle, observed,
     emit(type, event = {}) { listeners.filter(row => row[0] === type).forEach(row => row[1](event)); },
     flushFrame() { const item = frames.shift(); if (item) item[1](); },
     resize() { if (resizeCallback) resizeCallback(); },
@@ -220,6 +221,22 @@ test('ResizeObserver layout changes are coalesced and cancelled on reset', () =>
   view.resize();
   assert.equal(view.frames.length, 0, 'released state no longer follows layout changes');
   assert.equal(view.button.removed, true);
+});
+
+test('keyboard viewport changes follow latest but preserve a reader browsing history', () => {
+  const view = setup();
+  view.state._ensureScrollFollow(view.el);
+  assert.ok(view.observed.has(view.scroll), 'observe the viewport, not only the transcript');
+  view.scroll._top = 400;
+  view.scroll.clientHeight = 180;
+  view.resize(); view.flushFrame();
+  assert.equal(view.scroll.scrollTop, 620, 'latest remains visible above the keyboard');
+  view.emit('wheel', {deltaY: -100}); view.scroll._top = 400;
+  view.scroll.clientHeight = 240;
+  view.resize(); view.flushFrame();
+  assert.equal(view.scroll.scrollTop, 400, 'resizing must not pull a history reader to latest');
+  view.state._releaseScrollFollow();
+  assert.equal(view.observed.size, 0);
 });
 
 test('a small upward wheel cancels queued following before the next token or scroll event', () => {

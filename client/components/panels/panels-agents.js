@@ -1,19 +1,9 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+/*
+ * Agent runtime installation and configuration: show availability,
+ * installation/version/path, missing setup, and real execution checks separately.
+ * Installed does not imply usable. This surface manages the current client only;
+ * cloud runtime maintenance belongs to the cloud-computer surface.
+ */
 
 let _agData = null;                 /* {env, agents, modelCount} */
 let _agOpen = '';                   /* Currently expanded agent; only one opens at a time. */
@@ -295,7 +285,7 @@ function _agTx(value) {
   /* Trailing parenthetical the exact catalog cannot match
    * (e.g. "gpt-5（走我自己的额度）" -> model id + translated suffix). */
   let m = text.match(/^([\s\S]*?)(（[^（）]{1,24}）)$/);
-  if (m) {
+  if (m && m[1]) {
     const suffix = _agTx(m[2]);
     if (suffix !== m[2]) return m[1] + suffix;
   }
@@ -586,6 +576,7 @@ function _agModelHtml(a) {
       list.map(m => '<option value="' + esc(m.name) + '"' +
         (m.name === cur ? ' selected' : '') + '>' + esc(m.label || m.name) +
         (m.provider ? ' · ' + esc(_agTx(m.provider)) : '') +
+        (m.providerKind === 'anthropic' ? ' · Anthropic' : '') +
         (m.keyFrom === 'mine' ? ' · 走我的额度' : '') + '</option>').join('') +
       /*
        * Keep unavailable selected models visible and labeled rather than silently reverting the
@@ -593,6 +584,8 @@ function _agModelHtml(a) {
        */
       (a.modelGone ? '<option value="' + esc(cur) + '" selected>' + esc(cur) + '（已不可用）</option>' : '') +
     '</select>' +
+    (list.some(m => m.providerKind === 'anthropic')
+      ? '<span class="ag-model-warn" role="note">企业模型对话通道只支持 OpenAI 兼容协议；列表中的 Anthropic 模型需使用支持其协议的 Agent。</span>' : '') +
     (a.modelGone
       ? '<span class="ag-model-warn">这个模型现在用不了，派活会退回默认' +
         (fallback ? '（' + esc(fallback) + '）' : '') + '</span>'
@@ -640,7 +633,7 @@ function _agBodyHtml(a, s, ak) {
         '<button class="btn-mini" data-alogin="' + esc(ak) + '"' + dis + '>连接 Codex</button></div>' : '') +
     (bundled ? '<div class="ag-cfg"><b>随 SoduWork 内置</b><span>' +
       (a.key === 'harness2'
-        ? 'Google Research Harness² 核心随 SoduWork 升级；首次使用点击「准备组件」准备执行组件。「重装 / 升到最新」会准备 SoduWork 支持的执行组件版本；卸载仅停用本底座，保留共享 OpenCode。'
+        ? 'Harness² 核心及独立执行器随 SoduWork 升级，无需安装其他底座；停用会保留任务记录，点「启用」可重新启用。'
         : '安装包已包含 ' + esc(a.name || a.key) +
           '；升级 SoduWork 时会一起升级，不需要单独安装、更新或卸载。') + '</span></div>' : '') +
     /*
@@ -663,7 +656,7 @@ function _agBodyHtml(a, s, ak) {
     (_agConfirm === ak && _agCanUninstall(a)
       ? '<div class="sch-confirm"><div>真的把 ' + esc(a.name) + ' 从执行机上卸掉？' +
         '<i>' + (a.key === 'harness2'
-          ? '停用这台机器上的 Harness²，新任务不能再派给它；保留内置核心、共享 OpenCode 和任务记录。点「启用」可重新启用。'
+          ? '停用这台机器上的 Harness²，新任务不能再派给它；保留内置文件和任务记录。点「启用」可重新启用。'
           : '这台机器上所有人都会少一个能派活的助手；手上正在跑的活会失败。装回来只要点一次「装上」。') + '</i></div>' +
         '<div class="sch-c-ops">' +
         '<button class="btn-mini" data-acancel="1">算了</button>' +
@@ -699,7 +692,7 @@ function _agJobHtml(job) {
   const runningHint = job.action === 'login'
     ? '请按下方官方地址与设备码完成登录。此操作不启动模型对话。'
     : harnessProbe
-    ? '仅验证 OpenCode 执行组件；不运行 Harness² 推演，会使用所选模型额度，最多 3 分钟。'
+    ? '验证 Harness² 独立执行器；不运行推演，会使用所选模型额度，最多 3 分钟。'
     : '这一步可能要几十秒，日志在下面滚';
   /* Log lines live inside <pre data-alog>, which the DOM adapter deliberately
    * leaves alone; translate each line here instead. The head-model filter in

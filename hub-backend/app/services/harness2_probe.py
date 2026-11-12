@@ -5,10 +5,10 @@ import json
 
 from .agent_setup_probe import _clean
 
-COVERAGE = "execute-v2"
+COVERAGE = "native-execute-v1"
 TIMEOUT = 180
-INTRO = "② 仅验证 OpenCode 执行组件；不运行 Harness² 推演，会使用所选模型额度，最多 3 分钟。"
-MISSING_PROOF = "收到执行回复，但尚未确认 OpenCode 执行组件完整结束，请点「测一下」重试。"
+INTRO = "② 验证 Harness² 独立执行器；不运行推演，会使用所选模型额度，最多 3 分钟。"
+MISSING_PROOF = "收到执行回复，但尚未确认 Harness² 独立执行器完整结束，请点「测一下」重试。"
 UNVERIFIED = "上次测试尚未验证当前执行组件；请点「测一下」重新验证。"
 
 
@@ -37,4 +37,4 @@ def visible_record(record: dict) -> dict:
 
 
 def success_detail(version: str) -> str:
-    return f"通了 —— Harness² {version} 的 OpenCode 执行组件已验证；此测试不包含推演。"
+    return f"通了 —— Harness² {version} 的独立执行器已验证；此测试不包含推演。"

@@ -8,11 +8,21 @@ if (!output || !path.isAbsolute(output)) throw Error('Absolute evidence path req
 fs.mkdirSync(output, { recursive: true });
 app.setPath('userData', fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-sidebar-projects-')));
 const report = { ok: false, cases: [], screenshots: [] };
-let win, picks = 0, finishArchive;
+let win, picks = 0, finishArchive, accountUnavailable = false, localRevision = 0;
+let localRows = [];
+// These account-directory fixtures exercise private grouping and late account
+// replies. Runtime labels do not imply a native transcript in this empty profile.
 const rows = Array.from({ length: 50 }, (_, i) => ({ id: 'chat-' + i,
   title: ['合同审核与修改建议', '本周产品进展', '讨论客户需求', '整理交付资料'][i % 4] + (i > 3 ? ' ' + i : ''),
-  adapterId: ['pi', 'codex', 'opencode'][i % 3], at: 1000 - i, state: i === 0 ? 'running' : 'completed' }));
-ipcMain.handle('pi-session-history', () => ({ ok: true, chats: rows }));
+  adapterId: ['pi', 'codex', 'opencode'][i % 3], accountProjection: true,
+  at: 1000 - i, state: i === 0 ? 'running' : 'completed' }));
+ipcMain.handle('pi-session-history', require('./fixtures/history-ipc.cjs').create(() =>
+  accountUnavailable ? { ok: false, reason: 'Fixture account unavailable' } : { ok: true, chats: rows }, {
+  local: options => ({ ok: true, chats: localRows, next: null,
+    localCatalog: { workspace: 'sidebar-project-fixture', revision: localRevision,
+      ...(options.catalogRevision === localRevision ? {} : { items: localRows.map(row => ({ id: row.id,
+        historyAliasIds: row.historyAliasIds || [], originIds: row.source?.id ? [row.source.id] : [] })) }) } }),
+}));
 ipcMain.handle('pi-session-pick-cwd', () => { picks++; return { ok: true, dir: 'C:\\Work\\paperclip', name: 'paperclip' }; });
 ipcMain.handle('pi-session-history-delete', (_, id) => {
   const i = rows.findIndex(r => r.id === id); if (i >= 0) rows.splice(i, 1); return { ok: true };
@@ -34,6 +44,8 @@ async function run() {
   } });
   await win.loadFile(path.join(__dirname, 'fixtures/sidebar-projects.html'));
   await until('document.querySelectorAll(".ws-chat-row").length===50');
+  assert.equal(await js('!!document.querySelector("#wsAccountChatsBox,#wsAccountChats")'), false,
+    'All eligible history uses the existing project, pinned and recent organization');
   await js(`window.marqueeRow=row('chat-0').querySelector('.ws-chat');window.marqueeTitle=marqueeRow.querySelector('.ws-chat-title');window.originalTitle=marqueeTitle.textContent;marqueeTitle.textContent='这是需要完整阅读的长会话标题，用于确认悬停后可以缓慢滚动看到最后的内容';marqueeRow.dispatchEvent(new MouseEvent('mouseenter'))`);
   await until('marqueeTitle.scrollLeft > 8');
   await js("marqueeRow.dispatchEvent(new MouseEvent('mouseleave'))");
@@ -112,7 +124,12 @@ async function run() {
   await js('document.documentElement.dataset.theme="warm"');
   await shot('03-edit-project-warm');
   assert.equal(await js('getComputedStyle(document.querySelector(".ws-project-dialog")).backgroundColor'), 'rgb(255, 253, 250)');
-  win.setSize(760, 560); await delay(100);
+  win.setSize(760, 560);
+  report.smallWindow = { bounds: win.getBounds(), content: win.getContentSize(),
+    viewport: await js('({width:innerWidth,height:innerHeight,ratio:devicePixelRatio})') };
+  // Hidden offscreen Windows bounds may round up by one device-independent pixel.
+  await until(`innerWidth <= ${report.smallWindow.bounds.width} && innerHeight <= ${report.smallWindow.bounds.height}`);
+  await js('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
   assert.ok(await js('document.querySelector(".ws-project-dialog").getBoundingClientRect().right<=innerWidth'));
   assert.ok(await js('document.querySelector(".ws-project-dialog").getBoundingClientRect().bottom<=innerHeight'));
   await shot('04-small-window');
@@ -121,8 +138,10 @@ async function run() {
   assert.equal(await js('row("chat-1").parentElement.id'), 'wsChats');
   assert.equal(await js('row("chat-3").parentElement.id'), 'wsChats');
   report.cases.push('theme-aware editor fits short windows; confirmed removal only ungroups and preserves conversations');
-  // A late archive result must update the initiating account's groups only.
-  await js('document.querySelector("#wsProjectAdd").click();document.querySelector("#wsProjectName").value="Archive scope";document.querySelector(".ws-project-save").click();window.archiveProjectId=projectId();drag("chat-1",archiveProjectId);');
+  // This imported account group remains private; new UI-created groups above
+  // now belong to the device and intentionally survive account switches.
+  await js(`window.archiveProjectId='project-account-archive-scope';WorkspaceSidebarState.create(WorkspaceSidebarState.accountOptions({storage:localStorage,api:SoduWorkAPI}))
+    .applyRemoteProject({id:archiveProjectId,name:'Archive scope',folders:[],chatIds:['chat-1']});WorkspaceShell.setChats(${JSON.stringify(rows)});`);
   await js(`window.firstKey=WorkspaceSidebarState.accountOptions({storage:localStorage,api:SoduWorkAPI}).key;fixtureAccount='second-employee';window.secondKey=WorkspaceSidebarState.accountOptions({storage:localStorage,api:SoduWorkAPI}).key;fixtureAccount='employee';
     window.secondState=JSON.parse(localStorage.getItem(firstKey));secondState.projects[0].name='Other account project';localStorage.setItem(secondKey,JSON.stringify(secondState));
     window.confirm=()=>true;document.querySelector('.ws-project-edit').click();document.querySelector('.ws-project-archive').click();void 0;
@@ -163,6 +182,52 @@ async function run() {
   await js(`document.querySelector('[data-move-to="'+iconGroups.find(p=>p.appId==='local:artwork').id+'"]').click()`);
   assert.equal(await js('row("chat-3").closest(".ws-project").dataset.projectId'), await js('iconGroups.find(p=>p.appId==="local:artwork").id'));
   report.cases.push('Move dialog reuses each application group PNG or safe app-glyph fallback, ordinary folders stay unchanged, and selecting an app group still moves the chat through the existing state.');
+
+  const originalRows = rows.slice();
+  localRows = [
+    { id: 'native-one', title: 'Native one', at: 4000, historyAliasIds: ['retired-native'] },
+    { id: 'downloaded-copy', title: 'Local replay', at: 3500, cached: true, localReplica: true, source: { id: 'account-original' } },
+    { id: 'native-two', title: 'Native two', at: 2000 },
+  ];
+  rows.splice(0, rows.length,
+    { id: 'account-newest', title: 'Newest account conversation', at: 5000, accountConversation: true },
+    { id: 'account-original', title: 'Executable account original', at: 4500, accountConversation: true, accountCanSend: true },
+    { id: 'account-older', title: 'Older account conversation', at: 3000, accountConversation: true },
+    { id: 'retired-native', title: 'Retired native alias', at: 4000 });
+  localRevision++;
+  await js('localStorage.clear()'); await reload();
+  await until('document.querySelectorAll("#wsChats .ws-chat").length===6');
+  const recentIds = '[...document.querySelectorAll("#wsChats .ws-chat")].map(el=>el.dataset.chatId)';
+  assert.deepEqual(await js(recentIds), ['account-newest', 'account-original', 'native-one', 'downloaded-copy', 'account-older', 'native-two']);
+  assert.equal(await js('!!document.querySelector("#wsAccountChatsBox,#wsAccountChats")'), false);
+  assert.equal(await js('!!row("retired-native")'), false);
+  assert.equal(await js('!!row("downloaded-copy")&&!!row("account-original")'), true,
+    'The downloaded replay cannot replace its independently executable account original');
+  report.cases.push('Mixed local and account history uses one chronological recent list, hides native aliases and preserves original/copy identities');
+  await js('drag("account-older","recent","native-one");drag("native-two","recent","account-original")');
+  const mixedOrder = ['account-newest', 'native-two', 'account-original', 'account-older', 'native-one', 'downloaded-copy'];
+  assert.deepEqual(await js(recentIds), mixedOrder);
+  await reload(); await until('document.querySelectorAll("#wsChats .ws-chat").length===6');
+  assert.deepEqual(await js(recentIds), mixedOrder);
+  await js('drag("native-one","pinned");drag("account-original","pinned","native-one")');
+  assert.deepEqual(await js('[...document.querySelectorAll("#wsPinnedChats .ws-chat")].map(el=>el.dataset.chatId)'), ['account-original', 'native-one']);
+  await reload(); await until('document.querySelectorAll(".ws-chat-row").length===6');
+  assert.deepEqual(await js('[...document.querySelectorAll("#wsPinnedChats .ws-chat")].map(el=>el.dataset.chatId)'), ['account-original', 'native-one']);
+  report.cases.push('Mixed-source recent and pinned drag order survives a real renderer reload');
+  accountUnavailable = true;
+  await js('WorkspaceShell.refreshConversationHistory()');
+  assert.equal(await js('document.querySelector("#wsAccountHistoryStatus").hidden'), false);
+  assert.equal(await js('document.querySelector("#wsAccountHistoryStatus").parentElement.id'), 'wsChatsBox');
+  assert.equal(await js('document.querySelector("#wsAccountHistoryStatus").textContent'), '部分会话暂时无法读取');
+  assert.equal(await js('document.querySelectorAll(".ws-chat-row").length'), 6);
+  await shot('06-unified-history');
+  accountUnavailable = false;
+  await js('WorkspaceShell.refreshConversationHistory()');
+  assert.equal(await js('document.querySelector("#wsAccountHistoryStatus").hidden'), true);
+  report.cases.push('An account read failure preserves visible history and uses a compact recoverable status inside the original recent section');
+  rows.splice(0, rows.length, ...originalRows); localRows = []; localRevision++;
+  await js('localStorage.clear()'); await reload();
+  await until('document.querySelectorAll(".ws-chat-row").length===50');
 
   assert.deepEqual(await js('errors'), []);
   win.webContents.debugger.attach('1.3');

@@ -119,6 +119,47 @@ async function run() {
   assert.equal(await js(`!!document.querySelector('#goal button')`), true);
   await shot('goal-en');
   report.cases.push('production goal rail renders its blocked and resumable state in the locale adapter');
+  await win.loadURL('about:blank');
+  await js(`document.body.innerHTML='<main id="issues"></main>';document.head.innerHTML='<style>'+${JSON.stringify(read('theme/variables.css') + read('components/requirements/requirements-board.css'))}+'</style>'`);
+  await inject();
+  for (const file of ['core/requirements.js', 'components/panels/task-trace-approval.js', 'components/requirements/requirements-view.js']) await js(read(file));
+  await js(`window.__teamCap={meId:'fixture-reviewer'};
+    window.renderIssues=()=>{document.querySelector('#issues').innerHTML=RequirementsView.board([
+      {id:'pending',title:'核对成果并选择验收方式',status:'done',createdBy:'fixture-reviewer',canReview:true},
+      {id:'direct',title:'User title 保存',status:'done',createdBy:'fixture-reviewer',canReview:true}
+    ],{...Requirements.defaults,limits:{}},{approvals:new Map([['pending',{id:'review',action:'review',status:'pending'}]])});};renderIssues();`);
+  for (const [locale, label] of [
+    ['en-US', 'Review outputs and choose a review method'],
+    ['ja-JP', '成果を確認して検収方法を選択'],
+    ['ko-KR', '성과를 확인하고 검수 방식 선택'],
+    ['zh-CN', '核对成果并选择验收方式'],
+    ['en-US', 'Review outputs and choose a review method'],
+  ]) {
+    await js(`SoduWorkI18n.setLocale(${JSON.stringify(locale)})`); await tick();
+    for (const redraw of [false, true]) {
+      if (redraw) { await js('renderIssues()'); await tick(); }
+      assert.deepEqual(await js(`Array.from(document.querySelectorAll('.rq-card-decision'),node=>node.textContent)`), [label, label]);
+      assert.deepEqual(await js(`Array.from(document.querySelectorAll('.rq-card-decision'),node=>node.dataset.rqOpen).sort()`), ['direct', 'pending']);
+      assert.deepEqual(await js(`['pending','direct'].map(id=>document.querySelector('[data-hbid="'+id+'"] .rq-card-title').textContent)`), ['核对成果并选择验收方式', 'User title 保存']);
+      assert.equal(await js(`document.querySelectorAll('.rq-card-decision svg').length`), 4);
+    }
+    await shot('acceptance-entry-' + locale);
+  }
+  report.cases.push('Pending and direct acceptance entries follow all four locales before and after rerender; user titles and navigation remain unchanged');
+  await js(read('components/panels/panels-chat-chrome.js'));
+  await js(`document.body.innerHTML='<main class="nchat" id="summaryChat"><div class="nchat-stage"><div class="nchat-main">'+ChatChrome.header()+'</div></div></main>';
+    ChatChrome.bind(document.querySelector('#summaryChat'),()=>({ref:'locale-fixture'}));ChatChrome.openSummary();`);
+  for (const [locale, toggle, close] of [
+    ['en-US', 'Toggle output summary panel', 'Close output summary'],
+    ['ja-JP', '成果サマリーパネルを切り替え', '成果サマリーを閉じる'],
+    ['ko-KR', '산출물 요약 패널 전환', '산출물 요약 닫기'],
+    ['zh-CN', '切换成果摘要面板', '关闭成果摘要'],
+  ]) {
+    await js(`SoduWorkI18n.setLocale(${JSON.stringify(locale)})`); await tick();
+    assert.deepEqual(await js(`['[data-chat-summary]','[data-chat-summary-close]'].map(s=>document.querySelector(s).getAttribute('aria-label'))`), [toggle, close]);
+    assert.deepEqual(await js(`['[data-chat-summary]','[data-chat-summary-close]'].map(s=>document.querySelector(s).title)`), [toggle, close]);
+  }
+  report.cases.push('Summary toggle and close controls follow all four locales, including tooltips and accessible names.');
   report.ok = true;
 }
 app.whenReady().then(run).catch(error => { report.error = error.stack; }).finally(() => {

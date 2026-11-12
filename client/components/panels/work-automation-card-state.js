@@ -87,15 +87,26 @@
       repos, reason: String(agents?.reason || ''), modelOptions: [], defaultModel: '' };
   }
   function savedHtml(value, agent, method, esc) {
+    const tx = text => global.SoduWorkI18n?.translateText?.(text) || text;
     const when = String(value.atHour).padStart(2, '0') + ':' + String(value.atMinute).padStart(2, '0');
-    const rhythm = value.every === 'once' ? global.ScheduleTiming.summary(value) : value.every === 'hourly'
-      ? '每小时第 ' + String(value.atMinute).padStart(2, '0') + ' 分' : value.every === 'weekly'
-        ? ['周一', '周二', '周三', '周四', '周五', '周六', '周日'][Math.max(0, Number(value.weekday) - 1)] + ' ' + when : '每天 ' + when;
-    return '<div class="waz-saved"><span class="waz-saved-mark">✓</span><p>自动化已创建</p><h3 data-user-content>' + esc(value.title) + '</h3>' +
+    const selectedWeekdays = Array.isArray(value.weekdays) && value.weekdays.length ? value.weekdays : [value.weekday];
+    const weekdayLabels = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+    const monthDays = Array.isArray(value.monthDays) ? value.monthDays.slice().sort((a, b) => a - b) : [];
+    const range = value.startDate || value.endDate
+      ? ' · ' + (value.startDate || '…') + ' – ' + (value.endDate || '…') : '';
+    let rhythm = tx('每天') + ' ' + when + range;
+    if (value.every === 'once') rhythm = global.ScheduleTiming.summary(value);
+    else if (value.every === 'custom') rhythm = tx(global.ScheduleTiming.summary(value));
+    else if (value.every === 'hourly') rhythm = tx('每小时第几分') + ' ' + String(value.atMinute).padStart(2, '0') + ' ' + tx('分钟') + range;
+    else if (value.every === 'monthly') rhythm = tx('每月') + ' ' + monthDays.join(', ') + ' ' + tx('日期') +
+      (value.monthDayPolicy === 'last_day' ? ' · ' + tx('缺少日期时使用当月最后一天') : '') + ' · ' + when + range;
+    else if (value.every === 'weekly') rhythm = selectedWeekdays.map(day =>
+      tx(weekdayLabels[Math.max(0, Number(day) - 1)])).join(', ') + ' ' + when + range;
+    return '<div class="waz-saved"><span class="waz-saved-mark">✓</span><p>' + esc(tx('自动化已创建')) + '</p><h3 data-user-content>' + esc(value.title) + '</h3>' +
       '<div><span>' + esc(rhythm) + '</span><span>' + esc(agent?.name || value.assigneeId) + '</span>' +
       (method ? '<span>' + esc(method.name) + ' · v' + esc(method.version || '') + '</span>' : '') +
-      '</div><small>以后每次运行都会生成可追踪的任务，并保留结果、异常与重试记录。</small>' +
-      '<button type="button" class="waz-button primary" data-waz-open>查看自动化</button></div>';
+      '</div><small>' + esc(tx('以后每次运行都会生成可追踪的任务，并保留结果、异常与重试记录。')) + '</small>' +
+      '<button type="button" class="waz-button primary" data-waz-open>' + esc(tx('查看自动化')) + '</button></div>';
   }
   global.WorkAutomationCardState = { create, loadOptions, savedHtml };
 })(window);

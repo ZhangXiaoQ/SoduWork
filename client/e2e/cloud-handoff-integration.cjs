@@ -13,7 +13,7 @@ const repo = path.resolve(__dirname, '../..'), output = process.argv[2];
 if (!output || !path.isAbsolute(output)) throw Error('Absolute output directory required');
 const report = { ok: false, checks: [], errors: [] };
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
-let root, backend, backendLog, win, current, cloud, identity;
+let root, backend, backendLog, backendError, win, current, cloud, identity;
 app.on('window-all-closed', () => {});
 async function until(fn, label, timeout = 20000) {
   const end = Date.now() + timeout;
@@ -36,11 +36,16 @@ app.whenReady().then(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), 'soduwork-cloud-integrated-'));
   app.setPath('userData', path.join(root, 'profile'));
   backendLog = sync.openSync(path.join(output, 'hub.log'), 'w');
-  backend = spawn(path.join(repo, process.platform === 'win32'
+  backend = spawn(process.env.SODUWORK_TEST_PYTHON || path.join(repo, process.platform === 'win32'
     ? 'hub-backend/.venv/Scripts/python.exe' : 'hub-backend/.venv/bin/python'),
     [path.join(repo, 'hub-backend/tests/handoff_http_fixture.py'), root],
     { cwd: path.join(repo, 'hub-backend'), windowsHide: true, stdio: ['ignore', backendLog, backendLog] });
-  await until(() => sync.existsSync(path.join(root, 'ready.json')), 'isolated Hub ready', 45000);
+  backend.once('error', error => { backendError = error; });
+  await until(() => {
+    if (backendError) throw backendError;
+    if (backend.exitCode !== null) throw Error('Isolated Hub stopped before ready: ' + backend.exitCode);
+    return sync.existsSync(path.join(root, 'ready.json'));
+  }, 'isolated Hub ready', 45000);
   identity = JSON.parse(await fs.readFile(path.join(root, 'ready.json'), 'utf8'));
   cloud = create({ app, identityOf: async () => identity, interval: 100 });
   ipcMain.handle('handoff-e2e-attachments', (_event, taskId) => request('/tasks/' + encodeURIComponent(taskId) + '/attachments'));
@@ -81,13 +86,23 @@ app.whenReady().then(async () => {
     await until(() => current.snapshot().messages.some(row => row.blocks?.some(block =>
       block.kind === 'thinking' && block.text === thought)), agent.id + ': native thought replay');
     const thoughtBlocks = current.snapshot().messages.flatMap(row => row.blocks || []).filter(block => block.kind === 'thinking');
-    assert.equal(thoughtBlocks.length, 1, agent.id + ': final thought must replace delta chunks');
+    // Harness2 emits its own refinement progress before the vendor's reasoning.
+    // Keep that separate phase while asserting the final vendor thought replaces
+    // all of its streamed fragments, rather than counting unrelated progress.
+    const refinement = thoughtBlocks.filter(block => agent.id === 'harness2' && block.text.startsWith('Harness²：'));
+    assert.equal(refinement.length, agent.id === 'harness2' ? 1 : 0);
+    const nativeThoughts = thoughtBlocks.filter(block => !refinement.includes(block));
+    assert.equal(nativeThoughts.length, 1, agent.id + ': final thought must replace delta chunks');
+    assert.equal(nativeThoughts[0].text, thought);
+    assert.equal(nativeThoughts[0].done, true);
     assert.equal(current.snapshot().tools.length, 0, agent.id + ': reasoning cannot invent tool calls');
     const page = await request('/tasks/' + taskId + '/ai-session');
     assert.ok(page.items.some(row => row.kind === 'thinking'));
-    const billed = ['pi', 'claude', 'codex'].includes(agent.id);
+    // The vendor fixture emits model tokens for native/fallback runtimes, and
+    // Harness2 reports refinement tokens. These four ACP peers emit occupancy only.
+    const billed = !['codex-harness', 'qwen', 'opencode', 'dsh'].includes(agent.id);
     assert.equal(page.items.some(row => row.kind === 'usage'), billed,
-      agent.id + ': bill native usage, never ACP context occupancy');
+      agent.id + ': bill reported model tokens, never ACP context occupancy');
     win = new BrowserWindow({ show: false, width: 1200, height: 820, webPreferences: { sandbox: true,
       contextIsolation: true, nodeIntegration: false, offscreen: true, backgroundThrottling: false,
       preload: path.join(__dirname, 'fixtures/cloud-workspace-preload.cjs') } });
@@ -102,7 +117,8 @@ app.whenReady().then(async () => {
       return{thoughts:rows.filter(x=>x.type==='thinking').map(x=>x.item.text),
         usageRows:rows.filter(x=>x.type==='usage').length,outputCards:[...host.querySelectorAll('.ntool-name')].filter(x=>x.textContent==='输出').length,
         expanded:host.querySelector('.dks-thinking button')?.getAttribute('aria-expanded')}})()`);
-    assert.deepEqual(runtimeView.thoughts, [thought]);
+    assert.deepEqual(runtimeView.thoughts, [...refinement.map(block => block.text), thought],
+      agent.id + ": persisted renderer keeps refinement separate and deduplicates native reasoning");
     assert.equal(runtimeView.outputCards, 0); assert.equal(runtimeView.usageRows, 0);
     assert.equal(runtimeView.expanded, 'false');
     await js(`window.SoduWorkAPI={listAttachments:cloudFixture.attachments,attachmentUrl:row=>${JSON.stringify(identity.hub)}+row.url};

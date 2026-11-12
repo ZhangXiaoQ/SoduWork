@@ -52,7 +52,7 @@ function mergeHistory(diskRows, handles, limit) {
   });
   live.forEach(row => merged.push(row));
   return merged.sort((left, right) => Number(right.at || 0) - Number(left.at || 0))
-    .slice(0, Math.max(1, Math.min(50, limit || 20)));
+    .slice(0, Math.max(1, Number(limit) || 20));
 }
 
 module.exports = { presenceState, messageTitle, originalMessageTitle, mergeHistory };

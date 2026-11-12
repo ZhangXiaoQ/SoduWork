@@ -8,13 +8,88 @@
   const legacyReceiptKey = /^(mate_receipt_.+)_(accepted|delivered|read)$/;
   const api = () => global.SoduWorkAPI || {};
   const scope = () => api().taskStorageKey?.('notices') || 'soduwork_work_notices_v1';
+  const persistence = global.SoduWorkNoticePersistence?.create();
+  let durable = null, working = null;
   const capture = () => ({ key: scope(), epoch });
   const current = token => token.key === scope() && token.epoch === epoch;
   const folderOf = row => row.folder === 'sent' ? 'sent' : 'received';
   const stamp = value => Number(value) || (Date.parse(value) || 0);
   const metadataKey = () => scope() + ':sync';
+  const ready = key => Boolean(persistence && durable?.scope === key);
+  const cacheStamp = () => ready(scope()) ? durable.version + ':' + (localStorage.getItem(scope()) || '') : localStorage.getItem(scope());
+  function readRows() { return working ? working.rows : _readNotices(); }
+  function saveMetadata(meta) {
+    if (working) working.meta = meta;
+    else localStorage.setItem(metadataKey(), JSON.stringify(meta));
+  }
+  function legacy(key) {
+    const raw = localStorage.getItem(key), metaRaw = localStorage.getItem(key + ':sync');
+    const rows = JSON.parse(raw || '[]'), meta = JSON.parse(metaRaw || '{}') || {};
+    if (!Array.isArray(rows)) throw Error('Invalid legacy notice cache');
+    if (typeof meta !== 'object' || Array.isArray(meta) || rows.some(row => !row || typeof row !== 'object' || (row.serverMessageId && !row.id)))
+      throw Error('Invalid legacy notice records');
+    return { rows, meta, retire() {
+      if (rows.some(row => row?.serverMessageId) && localStorage.getItem(key) === raw)
+        localStorage.setItem(key, JSON.stringify(rows.filter(row => !row?.serverMessageId)));
+      if (metaRaw !== null && localStorage.getItem(key + ':sync') === metaRaw) localStorage.removeItem(key + ':sync');
+    } };
+  }
+  function cachedRows(key, local) {
+    if (!ready(key)) return local;
+    const remote = new Map(durable.rows.map(row => [row.id, row]));
+    for (const row of local) if (!remote.has(row.id)) remote.set(row.id, row);
+    return [...remote.values()].filter(row => !dismissed(row, durable.meta));
+  }
+  function modify(token, change) {
+    if (!persistence) return change();
+    let beforeLocal = [], afterLocal = [];
+    return persistence.update(token.key, () => legacy(token.key), state => {
+      if (!current(token)) return { stale: true };
+      const local = legacy(token.key).rows.filter(row => !row?.serverMessageId);
+      working = { rows: [...state.rows, ...local], meta: state.meta };
+      beforeLocal = local;
+      try {
+        const result = change();
+        state.rows = working.rows;
+        state.meta = working.meta;
+        afterLocal = working.rows.filter(row => !row.serverMessageId);
+        return result;
+      } finally { working = null; }
+    }).then(value => {
+      if (value.stale) return false;
+      // Merge only this operation's local edits after the durable transaction.
+      // A new synchronous reminder in another window must survive the await.
+      const after = new Map(afterLocal.map(row => [row.id, row]));
+      const edits = new Map(beforeLocal.filter(row => JSON.stringify(row) !== JSON.stringify(after.get(row.id)))
+        .map(row => [row.id, { before: row, after: after.get(row.id) }]));
+      let localWritten = false;
+      if (edits.size) {
+        const local = legacy(token.key).rows.flatMap(row => {
+          const edit = edits.get(row.id);
+          if (row.serverMessageId || !edit || JSON.stringify(row) !== JSON.stringify(edit.before)) return [row];
+          localWritten = true; return edit.after ? [edit.after] : [];
+        });
+        if (localWritten) localStorage.setItem(token.key, JSON.stringify(local));
+      }
+      if (!current(token)) return false;
+      const changed = durable?.version !== value.version || durable?.scope !== token.key;
+      durable = value;
+      const next = cachedRows(token.key, legacy(token.key).rows);
+      const localChanged = JSON.stringify(notices.filter(row => !row.serverMessageId)) !==
+        JSON.stringify(next.filter(row => !row.serverMessageId));
+      notices.length = 0;
+      for (const row of next) notices.push(row);
+      if (changed || value.changed || localChanged) repaint();
+      if ((value.changed || localWritten) && global.WinSync) global.WinSync.pushNotices();
+      return value.result;
+    }).catch(() => { throw new Error('通知无法保存到本机，请检查存储空间后重试。'); });
+  }
+  function restore() {
+    if (!persistence || typeof notices === 'undefined') return Promise.resolve(true);
+    return modify(capture(), () => { metadata(); return true; });
+  }
   function metadata() {
-    try { return migrateMetadata(JSON.parse(localStorage.getItem(metadataKey()) || '{}') || {}); }
+    try { return migrateMetadata(working?.meta || (ready(scope()) ? durable.meta : JSON.parse(localStorage.getItem(metadataKey()) || '{}')) || {}); }
     catch (_) { return {}; }
   }
   function migrateMetadata(meta) {
@@ -28,7 +103,7 @@
         return migrated;
       }))];
     }
-    if (changed) try { localStorage.setItem(metadataKey(), JSON.stringify(meta)); } catch (_) { /* Retry migration on the next read. */ }
+    if (changed) try { saveMetadata(meta); } catch (_) { /* Retry migration on the next read. */ }
     return meta;
   }
   function dismissed(row, meta) {
@@ -89,6 +164,7 @@
   }
   function commit(next, token) {
     if (!current(token)) return false;
+    if (working) { working.rows = next; return true; }
     const encoded = JSON.stringify(next);
     const memoryChanged = JSON.stringify(notices) !== encoded;
     // Another window may already have persisted these rows. Do not broadcast
@@ -101,7 +177,7 @@
     notices.splice(0, notices.length, ...next);
     if (_saveNotices() === false) {
       notices.splice(0, notices.length, ...previous);
-      throw new Error('通知无法保存到本机，请检查存储空间后重试；尚未确认送达。');
+      throw new Error('通知无法保存到本机，请检查存储空间后重试。');
     }
     repaint(); return true;
   }
@@ -157,8 +233,11 @@
     return dismissed(receipt, meta) ? null : receipt;
   }
   function merge(items, folder, token, complete = false) {
+    return modify(token, () => mergeRows(items, folder, token, complete));
+  }
+  function mergeRows(items, folder, token, complete) {
     if (!current(token)) return false;
-    const meta = metadata(), list = _readNotices().filter(row => !dismissed(row, meta));
+    const meta = metadata(), list = readRows().filter(row => !dismissed(row, meta));
     const server = new Map(), legacy = new Map(), receiptIndexes = new Map(), changedSent = new Map();
     const legacyKey = row => JSON.stringify([folderOf(row), String(row.messageId || ''), String(row.senderId || '')]);
     list.forEach((row, index) => {
@@ -201,8 +280,11 @@
     return updateReceipts([{ serverId, receipt }], token);
   }
   function updateReceipts(updates, token) {
+    return modify(token, () => updateReceiptRows(updates, token));
+  }
+  function updateReceiptRows(updates, token) {
     if (!current(token)) return false;
-    const list = _readNotices(), indexes = new Map();
+    const list = readRows().slice(), indexes = new Map();
     list.forEach((row, index) => { if (row.kind !== 'mate_receipt' && folderOf(row) === 'received') indexes.set(String(row.serverMessageId || ''), index); });
     let changed = false;
     for (const { serverId, receipt } of updates) {
@@ -231,7 +313,7 @@
         return { serverId: String(item.id), receipt: result };
       }));
       const updates = results.filter(result => result.status === 'fulfilled' && result.value).map(result => result.value);
-      if (updates.length) updateReceipts(updates, token);
+      if (updates.length) await updateReceipts(updates, token);
       const failed = results.find(result => result.status === 'rejected');
       if (failed) throw failed.reason;
     }
@@ -244,9 +326,11 @@
       ? requests.get(key).catch(() => {}).then(() => current(token) ? refresh(target) : { ok: false, stale: true })
       : requests.get(key);
     const work = (async () => {
+      if (persistence) await restore();
+      if (!current(token)) return { ok: false, stale: true };
       if (!api().mateMessages) throw new Error('当前版本暂不支持通知同步');
       const cached = revisions.get(key);
-      const conditional = cached?.store === localStorage.getItem(token.key) ? cached.revision : '';
+      const conditional = cached?.store === cacheStamp() ? cached.revision : '';
       revisions.delete(key);
       let cursor = '', seen = new Set(), revision = '', consistent = true, finalRevision = '';
       do {
@@ -254,10 +338,12 @@
         if (!current(token)) return { ok: false, stale: true };
         if (!result || result.ok === false || !Array.isArray(result.items)) throw new Error(result?.reason || '通知暂时无法加载，请重试');
         if (result.notModified) {
+          if (persistence) await restore();
+          if (!current(token)) return { ok: false, stale: true };
           // A revision is useful only with the exact durable cache that was
           // reconciled. Another window may clear/replace that cache in flight.
           if (!cursor && conditional && result.revision === conditional &&
-              cached.store === localStorage.getItem(token.key)) {
+              cached.store === cacheStamp()) {
             revisions.set(key, cached); refreshQuotaNotice();
             return { ok: true, notModified: true };
           }
@@ -267,7 +353,7 @@
         if (!cursor) revision = String(result.revision || '');
         if (result.revision && result.revision !== revision) consistent = false;
         if (!result.nextCursor) finalRevision = String(result.revision || '');
-        if (!merge(result.items, target, token, !result.nextCursor)) return { ok: false, stale: true };
+        if (!await merge(result.items, target, token, !result.nextCursor)) return { ok: false, stale: true };
         if (target === 'received') await acknowledge(result.items, token);
         cursor = String(result.nextCursor || '');
         if (cursor && seen.has(cursor)) throw new Error('通知分页没有继续前进，请重试');
@@ -276,7 +362,7 @@
       const result = { ok: current(token) };
       if (result.ok) {
         if (revision && consistent && finalRevision === revision) revisions.set(key,
-          { revision, store: localStorage.getItem(token.key) });
+          { revision, store: cacheStamp() });
         refreshQuotaNotice();
       }
       return result;
@@ -299,23 +385,48 @@
     if (!result || result.ok === false || result.status !== 'read') throw new Error('已读状态未获服务确认，请重试');
     return updateReceipt(id, result, token);
   }
+  function confirmedRead(messageId, readAt) {
+    const token = capture(), key = String(messageId || '');
+    if (!key) return false;
+    return modify(token, () => {
+      let changed = false;
+      const next = readRows().map(row => {
+        if (row.kind === 'mate_receipt' || folderOf(row) !== 'received' ||
+            !(row.messageId === key || row.serverMessageId === key || row.id === 'mate_' + key.slice(0, 64))) return row;
+        changed = true;
+        return { ...row, read: true, readAt: readAt || Date.now(), status: 'read' };
+      });
+      return changed && commit(next, token);
+    });
+  }
   function clear() {
-    const token = capture(), meta = metadata();
-    const cleared = rows('received').flatMap(row => row.kind === 'mate_receipt' ? receiptMarkers(row)
+    const token = capture();
+    const selected = rows('received');
+    const localIds = new Set(_readNotices().filter(row => !row.serverMessageId && folderOf(row) === 'received').map(row => row.id));
+    const cleared = selected.flatMap(row => row.kind === 'mate_receipt' ? receiptMarkers(row)
       : row.serverMessageId ? [row.id, 'mate_' + row.serverMessageId] : [row.id]);
-    const ids = [...new Set([...(meta.ids || []), ...cleared])];
-    delete meta.clearedAt;
-    localStorage.setItem(metadataKey(), JSON.stringify({ ...meta, ids }));
-    return commit(notices.filter(row => folderOf(row) === 'sent'), token);
+    return modify(token, () => {
+      const meta = metadata();
+      const ids = [...new Set([...(meta.ids || []), ...cleared])];
+      delete meta.clearedAt;
+      saveMetadata({ ...meta, ids });
+      return commit(readRows().filter(row => folderOf(row) === 'sent' ||
+        (row.serverMessageId ? !dismissed(row, { ...meta, ids }) : !localIds.has(row.id))), token);
+    });
   }
   function markLocalRead(id) {
-    const token = capture(), meta = metadata(), list = _readNotices();
-    const row = list.find(item => item.id === id);
-    if (!row || row.read) return false;
-    meta.readIds = [...new Set([...(meta.readIds || []), ...(row.kind === 'mate_receipt' ? receiptMarkers(row) : [id])])];
-    localStorage.setItem(metadataKey(), JSON.stringify(meta));
-    row.read = true;
-    return commit(list, token);
+    const token = capture();
+    const selected = rows('received').find(row => row.id === id);
+    return modify(token, () => {
+      const meta = metadata(), list = readRows().slice();
+      const row = list.find(item => item.id === id);
+      if (!row || row.read) return false;
+      if (!selected) return false;
+      meta.readIds = [...new Set([...(meta.readIds || []), ...(selected.kind === 'mate_receipt' ? receiptMarkers(selected) : [id])])];
+      saveMetadata(meta);
+      list[list.indexOf(row)] = { ...row, read: row.kind !== 'mate_receipt' || hasReceiptMarker(row, meta.readIds) };
+      return commit(list, token);
+    });
   }
   function tick(force) {
     if (!api().mateMessages) return;
@@ -341,20 +452,22 @@
     if (!isMessage && String(event.senderId || '') !== userId) return null;
     const serverId = String(isMessage ? event.serverMessageId || '' : event.messageId || '');
     if (!serverId) return null;
-    const meta = metadata(), list = _readNotices();
-    const row = list.find(item => item.serverMessageId === serverId && folderOf(item) === 'received' &&
-      (isMessage ? item.kind !== 'mate_receipt' : item.kind === 'mate_receipt'));
-    if (!row || row.read || dismissed(row, meta)) return null;
-    const wantedState = String(event.status || event.type.replace('mate_message_', ''));
-    if (!isMessage && (statusOrder[row.receiptStatus] ?? -1) < (statusOrder[wantedState] ?? -1)) return null;
-    const marker = isMessage ? 'mate_notice_' + serverId : receiptMarker(row);
-    if (isMessage ? meta.presentedIds?.includes(marker) : hasReceiptMarker(row, meta.presentedIds)) return null;
-    // Persist notification markers per account to deduplicate concurrent callbacks, reopened windows, and phase replays.
-    const markers = isMessage ? [marker] : receiptMarkers(row);
-    localStorage.setItem(metadataKey(), JSON.stringify({ ...meta,
-      presentedIds: [...new Set([...(meta.presentedIds || []), ...markers])] }));
-    // Recheck account identity before presentation because it may change before a Promise callback runs.
-    return { text: row.bodyText || row.text || '', taskId: row.taskId || null, isCurrent: () => current(token) };
+    return modify(token, () => {
+      const meta = metadata(), list = readRows();
+      const row = list.find(item => item.serverMessageId === serverId && folderOf(item) === 'received' &&
+        (isMessage ? item.kind !== 'mate_receipt' : item.kind === 'mate_receipt'));
+      if (!row || row.read || dismissed(row, meta)) return null;
+      const wantedState = String(event.status || event.type.replace('mate_message_', ''));
+      if (!isMessage && (statusOrder[row.receiptStatus] ?? -1) < (statusOrder[wantedState] ?? -1)) return null;
+      const marker = isMessage ? 'mate_notice_' + serverId : receiptMarker(row);
+      if (isMessage ? meta.presentedIds?.includes(marker) : hasReceiptMarker(row, meta.presentedIds)) return null;
+      // Persist notification markers per account to deduplicate concurrent callbacks, reopened windows, and phase replays.
+      const markers = isMessage ? [marker] : receiptMarkers(row);
+      saveMetadata({ ...meta,
+        presentedIds: [...new Set([...(meta.presentedIds || []), ...markers])] });
+      // Recheck account identity before presentation because it may change before a Promise callback runs.
+      return { text: row.bodyText || row.text || '', taskId: row.taskId || null, isCurrent: () => current(token) };
+    });
   }
   async function handle(event) {
     if (event?.type === 'notice') {
@@ -367,7 +480,7 @@
       // to establish ownership before persisting their body or acknowledging.
       if (event.serverMessageId && event.recipientId && userId) {
         const item = { ...event, id: event.serverMessageId, createdAt: event.sentAt || event.createdAt };
-        if (merge([item], 'received', token)) await acknowledge([item], token);
+        if (await merge([item], 'received', token)) await acknowledge([item], token);
       }
       if (current(token)) return refresh('received', true);
       return;
@@ -382,11 +495,12 @@
     if (!folder) return refresh(null, true);
     // Full server events can be reconciled immediately; older servers are
     // handled by the same durable list refresh below.
-    if (event.text != null && event.messageId) merge([{ ...event, id: event.messageId,
+    if (event.text != null && event.messageId) await merge([{ ...event, id: event.messageId,
       messageId: event.clientMessageId }], folder, capture());
     return refresh(folder, true);
   }
-  global.MateNoticeSync = { rows, refresh, markRead, markLocalRead, clear, tick, handle, canPresent, present };
+  global.MateNoticeSync = { rows, refresh, markRead, markLocalRead, clear, tick, handle, canPresent, present,
+    restore, cachedRows, ready, confirmedRead, persistent: Boolean(persistence), dismissedId: id => hasMarker(metadata().ids, id) };
   global.addEventListener?.('soduwork-work-task-change', repaint);
   global.addEventListener?.('soduwork-task-source', repaint);
   global.addEventListener?.('soduwork-device-auth', repaint);
@@ -397,5 +511,9 @@
       void refresh(domain === 'team-messages-sent' ? 'sent' : 'received', true).catch(() => {});
     }
   });
-  global.addEventListener?.('soduwork-data-scope-changed', () => { epoch++; requests = new Map(); revisions = new Map(); lastAttempt = 0; });
+  global.addEventListener?.('soduwork-data-scope-changed', () => {
+    epoch++; requests = new Map(); revisions = new Map(); lastAttempt = 0; durable = null;
+    persistence?.reset(); void restore().catch(() => {});
+  });
+  if (persistence) void restore().catch(() => {});
 })(window);

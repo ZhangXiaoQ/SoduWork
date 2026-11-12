@@ -24,7 +24,7 @@ test('failed renderer finalization cancels pending frames, unwires, and releases
     clearTimer(id) { timers.delete(id); },
   });
   const release = new Map([[handle.ref, 'release-timer']]);
-  const context = vm.createContext({ _wired: new WeakMap(), _publicationQueue: queue,
+  const context = vm.createContext({ _wired: new WeakMap(), _publicationQueue: queue, _sharedHistory: null,
     _streamTransport: stream, _releaseTimers: release,
     _uiWindow: { reset() { reset++; } }, artifactRuntime: { closeRef() { artifacts++; } },
     clearTimeout() { cleared++; }, _push() {}, _scheduleRelease() { throw Error('must not schedule release'); },

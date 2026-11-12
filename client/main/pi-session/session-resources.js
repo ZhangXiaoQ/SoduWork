@@ -109,13 +109,6 @@ function configureSoduWorkRetryPolicy(settingsManager) {
     && !Array.isArray(projectRetry.delayScheduleMs)) {
     overrides.retry.delayScheduleMs = [5000, 15000, 30000, 60000, 120000, 240000];
   }
-  // Pi's default one-minute cap otherwise truncates our later backoff steps.
-  // Respect a user's explicit cap; host schedules remain bounded to five minutes.
-  const schedule = projectRetry.delayScheduleMs ?? globalRetry.delayScheduleMs ?? overrides.retry.delayScheduleMs;
-  if (globalRetry.maxAgentDelayMs == null && projectRetry.maxAgentDelayMs == null && Array.isArray(schedule)) {
-    const longest = schedule.reduce((max, value) => Number.isFinite(value) ? Math.max(max, value) : max, 0);
-    if (longest > 60000) overrides.retry.maxAgentDelayMs = Math.min(300000, Math.ceil(longest));
-  }
   if (!Number.isInteger(provider.maxRetries) && !Number.isInteger(projectProvider.maxRetries)) {
     overrides.retry.provider = { maxRetries: 0, maxRetryDelayMs: 0 };
   }
@@ -196,7 +189,7 @@ async function sessionResources(sdk, cwd, agentDir, skillDirs, appendSystemPromp
   /* ResourceLoader may reload/normalize settings. Apply runtime policies after
      that pass so the values used by AgentSession are the final values. */
   configureSoduWorkRetryPolicy(settingsManager);
-  require('./context-recovery').configure(settingsManager, options?.contextWindow);
+  require('./context-recovery').configure(settingsManager);
   const loaded = resourceLoader.getSkills();
   const skillWarnings = [];
   const skills = verifySkills(dirs, loaded, { optionalSkillDirs: options?.optionalSkillDirs, warnings: skillWarnings });

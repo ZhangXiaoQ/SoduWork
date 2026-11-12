@@ -90,6 +90,7 @@
     get _dismissProposal() { return _dismissProposal; },
     get _ensure() { return _ensure; },
     get _retryOpenChat() { return _retryOpenChat; },
+    get enter() { return enter; },
     get _goalAction() { return _goalAction; },
     get _goalActionPending() { return _goalActionPending; }, set _goalActionPending(value) { _goalActionPending = value; },
     get _hotToolBodies() { return _hotToolBodies; }, set _hotToolBodies(value) { _hotToolBodies = value; },
@@ -387,17 +388,23 @@
   let _sessionCaps = [];
   let _sessionInputs = [];
   function _paintBar() {
+    const remote = _snap?.cloudHandoff?.phase === 'committed';
+    const workspace = remote ? { ..._wd,
+      name: _snap.cloudHandoff.target?.runnerKind === 'work-computer' ? '电脑成果' : '云端成果' } : _wd;
     const wd = document.getElementById('nchatWdName');
-    if (wd) wd.textContent = _wd.name || '选个文件夹';
+    if (wd) wd.textContent = workspace.name || '选个文件夹';
     const el = document.getElementById('nchatWd');
-    if (el) el.title = _wd.dir ? ('AI 就在这儿干活：' + _wd.dir + ' · 点击打开') : '还没选文件夹';
+    if (el) {
+      el.title = _wd.dir || (remote ? workspace.name : '还没选文件夹');
+      el.setAttribute('aria-label', workspace.name || '工作位置');
+    }
     const md = document.getElementById('nchatModeName');
     if (md) md.textContent = (_snap?.nextAccessPolicy || _snap?.accessPolicy) ? WorkComposer.permissionLabel((_snap.nextAccessPolicy || _snap.accessPolicy).mode) : (_mode === 'readonly' ? '只读' : '兼容权限');
     const ability = document.getElementById('nchatAbilityName');
     if (ability) {
       ability.textContent = _sessionCaps.length ? (_sessionCaps.length + ' 项能力') : '基础对话';
     }
-    if (global.ChatChrome) ChatChrome.setWorkspace(_wd);
+    if (global.ChatChrome) ChatChrome.setWorkspace(workspace);
     if (_composerControls) _composerControls.render();
   }
   function _thinkingStatusHtml(busy) {
@@ -627,7 +634,8 @@
     try {
       const result = method === 'permission' && global.AccessControls ? await AccessControls.answer(button, api, answerRef) : await api.answerUi(answerRef, res);
       if (answerEpoch !== _viewEpoch || answerRef !== _ref) return;
-      if (result?.ok === false && typeof petSay === 'function') petSay(result.reason || '权限确认失败，请重试');
+      if (value === 'full' && result?.snapshot) { _snap = result.snapshot; _scheduleRender(); }
+      if (result?.ok === false && !result.cancelled && !result.canceled && typeof petSay === 'function') petSay(result.reason || '权限确认失败，请重试');
     } catch (error) {
       if (answerEpoch === _viewEpoch && answerRef === _ref && typeof petSay === 'function') petSay('权限确认失败，请重试');
     } finally { if (method !== 'permission' && button?.isConnected) button.disabled = false; }
@@ -792,7 +800,8 @@
     if (workCards?.workOnly && typeof _restoreCollaboration === 'function') _restoreCollaboration(_sessionId);
     if (workCards) _workCards?.restoreRequirements?.();
     _restoreRetainedConversationFailure();
-    global.SoduWorkQuotaNotice?.modelChanged?.(_snap?.modelSelection?.model || _model);
+    global.SoduWorkQuotaNotice?.modelChanged?.(_snap?.modelSelection?.model || _model,
+      _snap?.adapterId || _sessionOptions.adapterId || 'pi', document.querySelector('#cpChat .work-composer'));
     _render();
     if (inputFiles.length) _rememberConversationDraft(_sessionId);
     if (previewInput) global.ChatWorkbench?.openInput(previewInput);

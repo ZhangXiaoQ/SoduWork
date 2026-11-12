@@ -2,8 +2,11 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
 const { cleanResources } = require('../build/uninstall-resources.cjs');
+// A short temporary root on an 8.3-enabled Windows volume lets filesystem
+// filters create the deliberately deep fixture before testing the remover.
+const temporaryRoot = path.resolve(process.env.SODUWORK_UNINSTALL_TEST_TMP || os.tmpdir());
 async function fixture(t) {
-  const parent = await fs.mkdtemp(path.join(os.tmpdir(), 'soduwork-uninstall-test-'));
+  const parent = await fs.mkdtemp(path.join(temporaryRoot, 'soduwork-uninstall-test-'));
   const root = path.join(parent, 'installed'), payload = path.join(root, '.soduwork-versions/nsABC.tmp');
   const executable = path.join(payload, 'fixture.exe');
   await fs.mkdir(payload, { recursive: true });
@@ -13,7 +16,7 @@ async function fixture(t) {
   const resource = path.join(payload, 'resources', ...Array(13).fill('中文runtimeabcdefghijklmnop'), 'module.py');
   await fs.mkdir(path.dirname(resource), { recursive: true }); await fs.writeFile(resource, 'fixture');
   t.after(async () => {
-    assert.equal(path.dirname(parent), os.tmpdir()); assert.ok(path.basename(parent).startsWith('soduwork-uninstall-test-'));
+    assert.equal(path.dirname(parent), temporaryRoot); assert.ok(path.basename(parent).startsWith('soduwork-uninstall-test-'));
     await fs.rm(parent, { recursive: true, force: true });
   });
   return { parent, root, payload, executable, outside, resource };
@@ -81,7 +84,7 @@ test('verified short-root I/O removes longer retired Unicode resources without w
   try {
     const query = require('node:child_process').spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
       '[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false);$f=New-Object -ComObject Scripting.FileSystemObject;[Console]::Write($f.GetFolder($env:SODUWORK_TEST_ROOT).ShortPath)'],
-      { env: { ...process.env, SODUWORK_TEST_ROOT: root }, windowsHide: true, encoding: 'utf8' });
+      { env: { ...process.env, SODUWORK_TEST_ROOT: root }, windowsHide: true, encoding: 'utf8', timeout: 10000 });
     assert.equal(query.status, 0, query.stderr);
     const alias = query.stdout.trim();
     assert.ok(path.isAbsolute(alias), 'Windows must return an absolute I/O spelling');

@@ -13,13 +13,31 @@ from app import db, models
 from app.automation_models import ExecutionSession
 from app.services import (ai_exec, artifact_ingest, code_delivery,
                           execution_sessions, execution_settlement,
-                          project_context, storage)
+                          project_context, storage, tasks)
 from sqlalchemy import select
 
 
 class ExecutionSessionRoundsTests(unittest.IsolatedAsyncioTestCase):
     asyncSetUp = _Base.asyncSetUp
     asyncTearDown = _Base.asyncTearDown
+
+    async def test_stopped_then_resumed_chat_updates_list_and_live_task_projection(self):
+        await self.seed(state="stopped")
+        with self.provider({"round": 2, "data": b"# Successful continuation"}):
+            async with db.SessionLocal() as session:
+                await execution_settlement.settle_terminal(session, self.tid, self.ref)
+                stopped = (await tasks.ai_states(session, [self.tid]))[self.tid]
+                self.assertEqual(stopped["state"], "stopped")
+                await self.ingest(session, 2, "running", 1)
+                task = await session.get(models.Task, self.tid)
+                running = (await tasks.task_to_api_live(session, task))["ai"]
+                self.assertEqual(running["state"], "running")
+                self.assertNotIn("error", running)
+                await self.ingest(session, 2, "done", 2)
+                settled = await execution_settlement.settle_terminal(session, self.tid, self.ref)
+                self.assertEqual(settled["task"]["ai"]["state"], "done")
+                self.assertNotIn("error", settled["task"]["ai"])
+                self.assertEqual((await tasks.ai_states(session, [self.tid]))[self.tid]["state"], "done")
 
     async def seed(self, *, round_no=1, state="failed", settlement=None):
         self.tid, self.ref = self.prefix + "-task", self.prefix + "-ref"
@@ -59,6 +77,19 @@ class ExecutionSessionRoundsTests(unittest.IsolatedAsyncioTestCase):
         stack.enter_context(patch.object(code_delivery, "check", AsyncMock(return_value={"applies": True})))
         stack.enter_context(patch.object(project_context, "record_completion", AsyncMock()))
         return stack
+
+    async def test_user_plugin_badges_survive_sync_without_instructions_or_grants(self):
+        await self.seed(state="done")
+        async with db.SessionLocal() as session:
+            execution = await session.scalar(select(ExecutionSession).where(ExecutionSession.task_id == self.tid))
+            await execution_sessions.ingest_event_page(session, execution, [{
+                "seq":1,"kind":"user","text":"summarize", "plugins":[{
+                    "pluginId":"local:summary","name":"Summary","version":"1", "scopeLabel":"本人电脑",
+                    "instructions":"private method", "authorization":"private grant", "path":"private/path"}]}])
+            await session.commit()
+            page = await execution_sessions.read_task(session,self.tid,self.ref)
+            self.assertEqual(page['items'][0]['plugins'], [{
+                "pluginId":"local:summary","name":"Summary","version":"1","scopeLabel":"本人电脑"}])
 
     async def test_failure_resume_success_then_same_filename_updated_without_duplicates(self):
         await self.seed()

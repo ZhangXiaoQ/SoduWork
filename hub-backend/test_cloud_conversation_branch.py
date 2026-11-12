@@ -51,6 +51,8 @@ class CloudBranchTests(unittest.IsolatedAsyncioTestCase):
             async def execute(self, _query):
                 self.calls += 1
                 return Result(task_rows if self.calls == 1 else list(rows.values()))
+            async def scalars(self, _query):
+                return Result([rows["task-mobile"]])
         async def decorate_many(_session, _tasks, apis, _client):
             return apis
         with patch("app.api.cloud_conversations.task_svc.task_to_api", side_effect=lambda task: next(row for row in tasks if row["id"] == task.id)), \
@@ -63,6 +65,7 @@ class CloudBranchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["chats"][0]["location"], "work-computer")
         self.assertFalse(result["chats"][0]["readOnly"])
         self.assertTrue(result["chats"][0]["canSend"])
+        self.assertFalse(result["chats"][0].get("conversationReview"))
 
     async def test_branch_rechecks_owner_and_carries_bounded_context_to_new_runner(self):
         handoff = types.SimpleNamespace(
@@ -96,7 +99,7 @@ class CloudBranchTests(unittest.IsolatedAsyncioTestCase):
         row = types.SimpleNamespace(
             id='account-conversation-1', owner_user_id='user-1',
             source_client_id='desktop-1', deleted=False, revision=7,
-            title='电脑上的工作', source_session_id='desktop-session',
+            title='电脑上的工作', source_session_id='desktop-session', storage_mode='legacy',
         )
 
         class Result:

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
+import logging
 import time
 import uuid
 
@@ -14,6 +14,9 @@ _LOCAL_INVENTORY = {}
 _DEVICES = set()
 _RELAY = asyncio.Queue(maxsize=2048)
 _RELAY_JOB = None
+_RELAY_CLOSE_JOBS = set()
+_STOPPING = False
+log = logging.getLogger("uvicorn.error")
 
 
 class _RemoteSocket:
@@ -272,6 +275,8 @@ def remote_devices():
 
 
 def _relay(node, runner, task, data):
+    if _STOPPING or task not in runner.term_subs:
+        return
     try:
         _RELAY.put_nowait((node, {"kind": "terminal", "runner": runner.id,
                                  "token": runner.cluster_token, "task": task, "data": data}))
@@ -279,9 +284,23 @@ def _relay(node, runner, task, data):
         # Disconnecting forces the terminal to reopen from Runner state rather
         # than displaying a silently truncated byte stream.
         runner.term_subs.pop(task, None)
-        asyncio.create_task(bus.send(node, {"type": "event", "event": {
+        job = asyncio.create_task(_close_relay(node, {"type": "event", "event": {
             "kind": "terminal", "runner": runner.id, "token": runner.cluster_token,
-            "task": task, "data": None}}))
+            "task": task, "data": None}}), name="cluster-terminal-close")
+        _RELAY_CLOSE_JOBS.add(job)
+        job.add_done_callback(_RELAY_CLOSE_JOBS.discard)
+
+
+async def _close_relay(node, packet):
+    try:
+        await bus.send(node, packet)
+    except Exception as exc:
+        # Do not log terminal bytes or credentials from transport exceptions.
+        log.warning("Cluster terminal close failed: %s", type(exc).__name__)
+        try:
+            await on_failure()
+        except Exception as failure:
+            log.warning("Cluster terminal recovery failed: %s", type(failure).__name__)
 
 
 async def relay_loop():
@@ -385,7 +404,8 @@ async def on_failure():
 
 
 async def start():
-    global _RELAY_JOB
+    global _RELAY_JOB, _STOPPING
+    _STOPPING = False
     runner_hub.bind_loop()
     from . import ai_local
     ai_local._HUB_CLUSTER_MODE = bus.enabled
@@ -401,8 +421,20 @@ async def start():
 
 
 async def stop():
+    global _RELAY_JOB, _STOPPING
+    _STOPPING = True
+    jobs = list(_RELAY_CLOSE_JOBS)
     if _RELAY_JOB:
-        _RELAY_JOB.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await _RELAY_JOB
-    await bus.stop()
+        jobs.append(_RELAY_JOB)
+    for job in jobs:
+        job.cancel()
+    try:
+        await asyncio.gather(*jobs, return_exceptions=True)
+    finally:
+        _RELAY_CLOSE_JOBS.difference_update(jobs)
+        _RELAY_JOB = None
+        # A fresh runtime must not replay bytes from stopped terminal sessions.
+        while not _RELAY.empty():
+            _RELAY.get_nowait()
+            _RELAY.task_done()
+        await bus.stop()

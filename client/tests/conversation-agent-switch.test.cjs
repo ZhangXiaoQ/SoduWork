@@ -6,13 +6,23 @@ const { createRunnerRuntimeAdapter, _uuidV5 } = require('../main/agent-runtime/r
 const catalog = require('../main/agent-runtime/runtime-catalog');
 const segments = require('../main/conversation/runtime-segments');
 const sessionArchive = require('../main/pi-session/session');
+const { goalSwitchBlocked } = require('../main/agent-runtime/switchable-conversation');
 const identity = uid => ({ hub: 'http://127.0.0.1:9', clientId: 'test-device', session:
   Buffer.from(JSON.stringify({ typ: 'device', uid, cid: 'test-device', iat: Math.floor(Date.now()/1000)-10, exp: Math.floor(Date.now()/1000)+3600 })).toString('base64url') + '.' + 'a'.repeat(64) });
+
+test('completed goal conversations can switch while active goals remain protected', () => {
+  assert.equal(goalSwitchBlocked({ execution: { configured: false } }), false);
+  assert.equal(goalSwitchBlocked({ execution: { configured: true, active: true } }), true);
+  assert.equal(goalSwitchBlocked({ execution: { configured: true, terminalConfirmed: false, harness: { state: 'idle' } } }), true);
+  assert.equal(goalSwitchBlocked({ execution: { configured: true, terminalConfirmed: true, harness: { state: 'idle' } } }), false);
+  assert.equal(goalSwitchBlocked({ execution: { configured: true, harness: { state: 'completed' } } }), false);
+});
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-agent-switch-')), app = { getPath: () => root };
   const archives = new Map(), runs = new Map(), openings = [], requests = [];
-  let serial = 0, unavailable = '', busy = false, gate = null;
+  let serial = 0, unavailable = '', busy = false, gate = null, strictMissing = false;
+  let absence = { has: false, inflight: false, persisted: false, admissionDurable: true, bootId: 'test-boot' };
   const engine = {
     ...Object.fromEntries(['setArchived', 'isArchived', 'archiveState', 'archiveRoot'].map(k => [k, sessionArchive[k]])),
     probe: async () => ({ ok: true }),
@@ -54,21 +64,24 @@ function fixture(t) {
       return { ok: true, data: { installed: input.key !== unavailable, state: input.key === unavailable ? 'missing' : 'ready',
         accessControl: { ...catalog.runtime(input.key).accessControl, canChangeDuringSession: true } } }; }
     if (op === 'job.dispatch') {
-      const ref = _uuidV5('9af442c8-cd1d-4b91-a668-22da2b2635bf', 'chat:' + input.task.id + ':' + input.cli);
+      const ref = _uuidV5('9af442c8-cd1d-4b91-a668-22da2b2635bf', input.dispatchId || 'chat:' + input.task.id + ':' + input.cli);
       runs.set(ref, { ref, cli: input.cli, taskId: input.task.id, workDir: input.ctx.workDir, state: 'done', title: input.task.title,
         items: [{ seq: 1, kind: 'user', text: input.ctx.conversationUserText },
           { seq: 2, kind: 'say', text: 'Reply ' + input.cli }] });
       return { ok: true, data: { ref } };
     }
     if (op === 'job.comment') { const run = runs.get(input.ref); run.items.push({ seq: run.items.length+1, kind: 'say', text: 'Followup' }); return { ok: true, data: { ok: true } }; }
-    if (op === 'job.session') { const run = runs.get(input.ref); return { ok: true, data: { status: 'done', round: 1, items: (run?.items || []).filter(x => x.seq > (input.since || 0)) } }; }
+    if (op === 'job.session') { const run = runs.get(input.ref);
+      if (!run && strictMissing) return { ok: true, data: { ok: false, error: 'Native session does not exist' } };
+      return { ok: true, data: { status: 'done', round: 1, items: (run?.items || []).filter(x => x.seq > (input.since || 0)) } }; }
+    if (op === 'job.has') { if (absence instanceof Error) throw absence; return { ok: true, data: { ...absence } }; }
     if (op === 'runtime.sessions') return { ok: true, data: { runs: [...runs.values()] } };
     if (op === 'runtime.session.forget') { runs.delete(input.ref); return { ok: true, data: { ok: true } }; }
     if (op === 'job.stop') return { ok: true, data: { ok: true } };
     throw Error('Unexpected ' + op);
   } };
-  function bridge() { return createPiSessionBridge({ app, sessionModule: engine, runnerAdapters: ['opencode', 'qwen', 'codex', 'dsh'].map(id => createRunnerRuntimeAdapter({
-    app, runtimeSpec: catalog.runtime(id), runnerRuntime: runtime,
+  function bridge() { return createPiSessionBridge({ app, sessionModule: engine, runnerAdapters: catalog.runnerRuntimes().map(spec => createRunnerRuntimeAdapter({
+    app, runtimeSpec: spec, runnerRuntime: runtime,
     modelConfig: { fetchModel: async (_id, name) => name === 'denied' ? { ok: false, reason: 'unauthorized model' } :
       { ok: true, model: { id: name || 'model-a', name: name || 'model-a', key: 'fixture-secret', baseUrl: 'http://fixture.invalid' } } },
   })) }); }
@@ -76,6 +89,7 @@ function fixture(t) {
   t.after(async () => { await current.dispose(); fs.rmSync(root, { recursive: true, force: true, maxRetries: 3 }); });
   return { app, root, openings, requests, runs, archives, get bridge() { return current; },
     restart: async () => { await current.dispose(); current = bridge(); },
+    set strictMissing(v) { strictMissing = v; }, set absence(v) { absence = v; },
     set unavailable(v) { unavailable = v; }, set busy(v) { busy = v; }, set gate(v) { gate = v; } };
 }
 
@@ -210,6 +224,194 @@ test('switching to Codex with an empty native directory retains an unknown defau
 const options = f => ({ app: f.app, ref: 'chat-switch', cwd: f.root, identity: identity('alice'), adapterId: 'pi', modelName: 'model-a',
   resolvePlugins: async ids => ({ items: ids.map(pluginId => ({ pluginId, name: 'Meeting', context: 'Fixture plugin context' })) }) });
 async function send(handle, text) { const sent = handle.submit(text, [], {}); assert.equal(sent.accepted, true); const done = await sent.completion; assert.equal(done.ok, true, JSON.stringify(done)); }
+
+async function waitIdle(handle) {
+  for (let n = 0; n < 200; n++) {
+    if (handle.snapshot().status === 'idle' && !handle.inFlight()) return;
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  assert.fail('The restored review conversation did not become idle');
+}
+
+for (const spec of catalog.runnerRuntimes()) test(spec.id + ': controlled receipts survive restart without claiming native admission', async t => {
+  const f = fixture(t); f.strictMissing = true;
+  const handle = (await f.bridge.open(options(f))).session;
+  await send(handle, 'Requirement draft');
+  assert.equal((await handle.selectAgent(spec.id)).ok, true);
+  const id = handle.sessionId;
+  assert.equal(handle.bindTask('requirement', 'Existing requirement').ok, true);
+  handle.appendTaskMessage('user', 'Execute the requirement', [], 'requirement', 'request');
+  handle.appendTaskMessage('assistant', 'Completed delivery', [], 'requirement', 'result');
+  handle.taskExecutionChanged({ taskId: 'requirement', status: 'completed' });
+  await segments.flush(f.app, id);
+  const active = segments.read(f.app, id).active;
+  assert.equal(active.started, false, 'task output is not a native dispatch acknowledgement');
+  await f.restart();
+  const reopened = await f.bridge.open({ ...options(f), ref: 'review-reopen', runtimeConversationId: id });
+  assert.equal(reopened.ok, true, reopened.reason);
+  await waitIdle(reopened.session);
+  assert.match(JSON.stringify(reopened.session.snapshot().messages), /Completed delivery/);
+  assert.equal(f.requests.filter(row => row.op === 'job.dispatch').length, 0);
+  const task = { id: 'requirement', title: 'Existing requirement', ownerClientId: 'test-device',
+    workRouting: { conversationTurn: { conversationId: id } } };
+  let allowed = true, checks = 0;
+  const review = await require('../main/pi-session/acceptance-turn').prepare({
+    identity: identity('alice'), taskId: task.id, requested: { acceptanceExecutionSession: true },
+    runtime: { handle: reopened.session }, request: async () => { checks++;
+      return { task, canDecide: allowed, approvalId: 'approval', artifactVersionId: 'delivery-v1',
+        requirementVersion: 1, criteria: [{ id: 'criterion', label: 'Complete content' }],
+        attachments: [], artifact: { manifest: { text: 'Existing delivery' } } }; } });
+  const reviewSent = reopened.session.submit(review.displayText, [], { beforeTurn: review.beforeTurn, promptText: review.text });
+  assert.equal(reviewSent.accepted, true);
+  assert.equal((await reviewSent.completion).ok, true);
+  assert.equal(checks, 2, 'review authorization is checked again at the turn boundary');
+  const starts = f.requests.filter(row => row.op === 'job.dispatch');
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0].input.cli, spec.id);
+  assert.equal(starts[0].input.ctx.workDir, f.root);
+  assert.match(starts[0].input.task.note, /delivery-v1/);
+  assert.doesNotMatch(starts[0].input.ctx.conversationUserText, /delivery-v1/);
+  assert.ok(f.runs.has(active.sessionId), 'first dispatch retains the segment and its task-output journal');
+  await f.restart();
+  const again = await f.bridge.open({ ...options(f), ref: 'review-again', runtimeConversationId: id });
+  assert.equal(again.ok, true, again.reason);
+  await waitIdle(again.session);
+  await send(again.session, 'One explicit follow-up');
+  assert.equal(f.requests.filter(row => row.op === 'job.dispatch').length, 1);
+  assert.equal(f.requests.filter(row => row.op === 'job.comment').length, 1);
+  allowed = false;
+  const refused = again.session.submit(review.displayText, [], { beforeTurn: review.beforeTurn, promptText: review.text });
+  assert.equal((await refused.completion).ok, false);
+  assert.equal(f.requests.filter(row => row.op === 'job.comment').length, 1, 'revocation cannot start another review');
+});
+
+test('legacy message-count admission is repaired only with durable Runner absence proof', async t => {
+  const f = fixture(t); f.strictMissing = true;
+  const handle = (await f.bridge.open(options(f))).session;
+  assert.equal((await handle.selectAgent('qwen')).ok, true);
+  const id = handle.sessionId;
+  handle.appendTaskMessage('assistant', 'Existing controlled delivery', [], 'requirement', 'result');
+  await segments.flush(f.app, id);
+  const record = segments.read(f.app, id);
+  await segments.save(f.app, { ...record, active: { ...record.active, nativeDispatchId: undefined, started: true } });
+  await f.restart();
+  const opened = await f.bridge.open({ ...options(f), runtimeConversationId: id });
+  assert.equal(opened.ok, true, opened.reason);
+  await waitIdle(opened.session);
+  assert.ok(f.requests.some(row => row.op === 'job.has' && row.input.ref === record.active.sessionId));
+  assert.equal(f.requests.filter(row => row.op === 'job.dispatch').length, 0);
+  assert.match(JSON.stringify(opened.session.snapshot().messages), /Existing controlled delivery/);
+  let current = opened.session;
+  const repaired = segments.read(f.app, id), durations = [];
+  for (let cycle = 0; cycle < 25; cycle++) {
+    await f.restart();
+    const startedAt = performance.now();
+    const next = await f.bridge.open({ ...options(f), ref: 'repeated-open-' + cycle, runtimeConversationId: id });
+    assert.equal(next.ok, true, next.reason);
+    await waitIdle(next.session); current = next.session;
+    durations.push(performance.now() - startedAt);
+    const saved = segments.read(f.app, id);
+    assert.equal(saved.active.sessionId, repaired.active.sessionId);
+    assert.equal(saved.segments.length, repaired.segments.length);
+    assert.deepEqual(saved.prefix, repaired.prefix);
+    assert.equal(current.snapshot().messages.filter(row => JSON.stringify(row).includes('Existing controlled delivery')).length, 1);
+    assert.equal(f.requests.filter(row => row.op === 'job.dispatch').length, 0);
+  }
+  durations.sort((a, b) => a - b);
+  t.diagnostic('Isolated cold open: 25 cycles, p95 ' + durations[23].toFixed(2) + ' ms, max ' + durations[24].toFixed(2) + ' ms');
+  await send(current, 'Analyze only');
+  assert.equal(f.requests.filter(row => row.op === 'job.dispatch').length, 1);
+});
+
+test('legacy native repair remains retryable when the public manifest cannot be committed', async t => {
+  const f = fixture(t); f.strictMissing = true;
+  const handle = (await f.bridge.open(options(f))).session;
+  assert.equal((await handle.selectAgent('qwen')).ok, true);
+  const id = handle.sessionId;
+  assert.equal(handle.bindTask('requirement', 'Existing requirement').ok, true);
+  handle.appendTaskMessage('assistant', 'Durable delivery', [], 'requirement', 'result');
+  await segments.flush(f.app, id);
+  const record = segments.read(f.app, id);
+  await segments.save(f.app, { ...record, active: { ...record.active, nativeDispatchId: undefined, started: true } });
+  await f.restart();
+  const blocked = t.mock.method(segments, 'save', async () => { throw Error('Isolated manifest write failure'); });
+  const failed = await f.bridge.open({ ...options(f), runtimeConversationId: id });
+  assert.equal(failed.ok, false);
+  assert.equal(segments.read(f.app, id).active.sessionId, record.active.sessionId);
+  assert.equal(f.requests.filter(row => row.op === 'job.dispatch').length, 0);
+  blocked.mock.restore();
+  const reopened = await f.bridge.open({ ...options(f), runtimeConversationId: id });
+  assert.equal(reopened.ok, true, reopened.reason);
+  await waitIdle(reopened.session);
+  assert.equal(reopened.session.sessionId, id);
+  assert.match(JSON.stringify(reopened.session.snapshot().messages), /Durable delivery/);
+  assert.ok(reopened.session.taskBindings.some(binding => binding.taskId === 'requirement'));
+  await send(reopened.session, 'Analyze only');
+  assert.equal(f.requests.filter(row => row.op === 'job.dispatch').length, 1);
+});
+
+for (const [name, evidence] of [
+  ['offline', Error('Runner request timed out')],
+  ['old Runner', { has: false }],
+  ['active admission', { has: true, inflight: true, persisted: true, admissionDurable: true, bootId: 'boot' }],
+  ['retained admission', { has: true, inflight: false, persisted: true, admissionDurable: true, bootId: 'boot' }],
+]) test('missing legacy native archive stays fenced with ' + name, async t => {
+  const f = fixture(t); f.strictMissing = true; f.absence = evidence;
+  const handle = (await f.bridge.open(options(f))).session;
+  assert.equal((await handle.selectAgent('qwen')).ok, true);
+  const id = handle.sessionId;
+  handle.appendTaskMessage('assistant', 'Retained delivery', [], 'requirement', 'result');
+  await segments.flush(f.app, id);
+  const record = segments.read(f.app, id);
+  await segments.save(f.app, { ...record, active: { ...record.active, nativeDispatchId: undefined, started: true } });
+  await f.restart();
+  const opened = await f.bridge.open({ ...options(f), runtimeConversationId: id });
+  assert.equal(opened.ok, true, opened.reason);
+  assert.equal(opened.session.submit('Analyze only', []).queued, true);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(f.requests.filter(row => row.op === 'job.dispatch').length, 0);
+  assert.equal(f.requests.filter(row => row.op === 'job.comment').length, 0);
+  assert.equal(segments.read(f.app, id).active.sessionId, record.active.sessionId);
+});
+
+test('a stale unstarted manifest observes its durable native turn before accepting analysis', async t => {
+  const f = fixture(t); f.strictMissing = true;
+  const handle = (await f.bridge.open(options(f))).session;
+  assert.equal((await handle.selectAgent('qwen')).ok, true);
+  await send(handle, 'A native turn admitted before the manifest write');
+  const id = handle.sessionId;
+  await segments.flush(f.app, id);
+  const record = segments.read(f.app, id);
+  await segments.save(f.app, { ...record, active: { ...record.active, started: false } });
+  await f.restart();
+  const opened = await f.bridge.open({ ...options(f), runtimeConversationId: id });
+  assert.equal(opened.ok, true, opened.reason);
+  await waitIdle(opened.session);
+  await send(opened.session, 'Analyze only');
+  assert.equal(f.requests.filter(row => row.op === 'job.dispatch').length, 1);
+  assert.equal(f.requests.filter(row => row.op === 'job.comment').length, 1);
+});
+
+for (const boundary of [{ after: 1, kind: 'message', role: 'assistant', text: 'Native-bound receipt' },
+  { after: 0, kind: 'context-sent' }]) test('local native history prevents recreating an apparently absent segment: ' + boundary.kind, async t => {
+  const f = fixture(t); f.strictMissing = true;
+  const handle = (await f.bridge.open(options(f))).session;
+  assert.equal((await handle.selectAgent('qwen')).ok, true);
+  const id = handle.sessionId;
+  await segments.flush(f.app, id);
+  const record = segments.read(f.app, id);
+  const journal = await require('../main/conversation/task-output-journal').create(f.app, record.active.sessionId);
+  journal.append(boundary.after, boundary); journal.close();
+  await segments.save(f.app, { ...record, active: { ...record.active, nativeDispatchId: undefined, started: true } });
+  await f.restart();
+  const opened = await f.bridge.open({ ...options(f), runtimeConversationId: id });
+  assert.equal(opened.ok, true, opened.reason);
+  assert.equal(opened.session.submit('Analyze only', []).queued, true);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(f.requests.filter(row => row.op === 'job.dispatch').length, 0);
+  assert.equal(f.requests.filter(row => row.op === 'job.comment').length, 0);
+  assert.equal(segments.read(f.app, id).active.sessionId, record.active.sessionId);
+});
 
 function workArchive(f) {
   const row = { id: 'reserved-work', title: '仅表单草稿', adapterId: 'pi', cwd: f.root,

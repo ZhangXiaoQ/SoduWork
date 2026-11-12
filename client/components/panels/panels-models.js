@@ -291,8 +291,11 @@ function _mdBodyHtml(p, s, ms, own, t) {
           (p.authMode === 'none' ? ' checked' : '') + '><span>本地服务无需密钥</span></label>' : '') +
       (!p.personal && p.addressOverridden ? '<button class="md-link md-reset-url" data-preset="' + esc(p.id) +
         '">恢复组织默认地址</button>' : '') +
-    '</div></section><section class="md-settings-section md-credentials">' +
+    '</div>' + (p.kind === 'anthropic'
+      ? '<p class="md-model-help" role="note">Anthropic 协议：连接测试通过也不能用于当前企业模型对话通道。请为该通道配置供应商的 OpenAI 兼容地址与对应密钥；此配置可保留给支持 Anthropic 的 Agent。</p>' : '') +
+    '</section><section class="md-settings-section md-credentials">' +
     '<header class="md-section-heading"><b>访问凭据</b><small>密钥保存后只显示配置状态，不回显明文</small></header>' +
+    '<p class="md-model-help">连接测试优先读取模型列表；列表可访问不代表聊天生成、余额或当前 Agent 的协议兼容性已验证。列表接口不可用时会尝试一个最小聊天请求，可能产生用量。</p>' +
     (p.authMode !== 'none'
       ? '<label class="md-key-label" for="md-key-input">个人 API Key</label>' +
         '<div class="md-keyrow">' +
@@ -389,8 +392,10 @@ function _mdBind(box) {
     _mdTouchProvider(el.getAttribute('data-pname'), { name: el.value })));
   box.querySelectorAll('[data-purl]').forEach(el => el.addEventListener('input', () =>
     _mdTouchProvider(el.getAttribute('data-purl'), { baseUrl: el.value.trim() })));
-  box.querySelectorAll('[data-pkind]').forEach(el => el.addEventListener('change', () =>
-    _mdTouchProvider(el.getAttribute('data-pkind'), { kind: el.value })));
+  box.querySelectorAll('[data-pkind]').forEach(el => el.addEventListener('change', () => {
+    _mdTouchProvider(el.getAttribute('data-pkind'), { kind: el.value });
+    _mdRender();
+  }));
   box.querySelectorAll('[data-pnoauth]').forEach(el => el.addEventListener('change', () => {
     _mdTouchProvider(el.getAttribute('data-pnoauth'), { authMode: el.checked ? 'none' : 'key' });
     _mdRender();

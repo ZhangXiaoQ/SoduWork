@@ -12,8 +12,8 @@ from app.services import library_nfs, library_storage
 class NfsVersionTests(unittest.TestCase):
     def settings(self, version="4.1"):
         return Settings(_env_file=None, library_storage_backend="remote", library_remote_order="nfs,minio",
-                        library_nfs_host="192.0.2.30", library_nfs_port=2049,
-                        library_nfs_export="/exports/soduwork-library", library_nfs_version=version,
+                        library_nfs_host="192.0.2.224", library_nfs_port=2049,
+                        library_nfs_export="/srv/soduwork-shared/uploads", library_nfs_version=version,
                         library_nfs_uid=65534, library_nfs_gid=65534,
                         library_nfs_reserved_port=True)
 
@@ -21,8 +21,8 @@ class NfsVersionTests(unittest.TestCase):
         with patch.object(library_nfs, "get_settings", return_value=self.settings()):
             configuration = library_nfs.configuration()
         self.assertEqual(configuration["version"], "4.1")
-        self.assertEqual(configuration["host"], "192.0.2.30")
-        self.assertEqual(configuration["export"], "/exports/soduwork-library")
+        self.assertEqual(configuration["host"], "192.0.2.224")
+        self.assertEqual(configuration["export"], "/srv/soduwork-shared/uploads")
         self.assertTrue(configuration["reserved_port"])
 
     def test_legacy_integer_three_retains_existing_adapter_configuration(self):

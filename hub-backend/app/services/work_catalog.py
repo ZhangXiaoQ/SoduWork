@@ -74,7 +74,7 @@ SCENARIO_DEFINITIONS = [
      "positionIds": ["p_pm", "p_dev", "p_qa", "p_ops"],
      "intentHints": ["需求变更", "变更需求", "需求调整", "需求迭代", "改需求", "新增规则", "优化功能"],
      "requiredCapabilities": ["repository", "terminal"],
-     "defaultPluginKey": "software-delivery",
+     "defaultPluginKey": "soduwork-change-149",
      "outputContract": {
          "kind": "repository-change",
          "summary": "交付影响分析、固定代码变更、回归证据、审查结论和目标环境发布结果。",
@@ -85,7 +85,7 @@ SCENARIO_DEFINITIONS = [
      "positionIds": ["p_dev", "p_qa", "p_ops"],
      "intentHints": ["bug", "缺陷", "故障", "报错", "异常", "崩溃", "修复 bug", "回归失败"],
      "requiredCapabilities": ["repository", "terminal"],
-     "defaultPluginKey": "project-validation-release",
+     "defaultPluginKey": "soduwork-bugfix-149",
      "outputContract": {
          "kind": "repository-change",
          "summary": "交付稳定复现证据、最小根因修复、回归结果、审查结论和目标环境发布结果。",

@@ -135,6 +135,8 @@ class TargetDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_recovery_reasons_and_compatible_target_list(self):
         node = self.live("recoverable")
+        node.skills_known = True
+        node.skills = ["office", "browser-use"]
         await self.enroll_personal(node)
         cases = [
             ("caps", [], "update_required"),
@@ -167,6 +169,19 @@ class TargetDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([t["id"] for t in ready["targets"]], ["runner:" + node.id + ":codex"])
         self.assertEqual(ready["targets"][0]["agentId"], "codex")
         self.assertEqual(ready["targets"][0]["modelMode"], "account")
+        self.assertTrue(ready["targets"][0]["skillsKnown"])
+        self.assertEqual(ready["targets"][0]["skills"], ["browser-use", "office"])
+
+    async def test_mobile_skill_inventory_uses_same_account_execution_scope(self):
+        other = self.live("own-skill-pc", client_id=self.other_id)
+        other.skills_known, other.skills = True, ["browser-use"]
+        await self.enroll_personal(other)
+        foreign = self.live("foreign-skill-pc", client_id=self.colleague_id)
+        foreign.skills_known, foreign.skills = True, ["private-skill"]
+        data = await self.catalog()
+        self.assertEqual([row["runnerId"] for row in data["targets"]], [other.id])
+        self.assertEqual(data["targets"][0]["skills"], ["browser-use"])
+        self.assertNotIn("private-skill", str(data))
 
     async def test_admin_and_other_own_device_keep_personal_boundaries(self):
         self.live("current", client_id=self.client_id)

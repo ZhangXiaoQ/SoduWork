@@ -655,3 +655,4 @@ async def screen_media(websocket: WebSocket):
     finally:
         if grant_id:
             await _media.remove(grant_id, websocket)
+

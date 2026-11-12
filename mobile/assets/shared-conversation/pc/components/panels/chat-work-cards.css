@@ -1,9 +1,0 @@
-/* Historical work cards preserve the request and creation result; mount an editable form only on explicit expansion. */
-.nchat-work-history { display: grid; gap: 16px; margin-bottom: 16px; min-width: 0; }
-.nchat-work-history[hidden] { display: none; }
-.nchat-work-record { display: grid; grid-template-columns: 1fr auto; gap: 12px; padding: 20px; min-width: 0; }
-.nchat-work-record .nchat-work-prompt { grid-column: 1 / -1; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-3); }
-.nchat-work-record > strong { grid-column: 1; overflow-wrap: anywhere; }
-.nchat-work-record > span { grid-column: 1 / -1; color: var(--ink-3); font-size: var(--font-min-readable,14.5px); }
-.nchat-work-record > button { grid-column: 2; align-self: center; }
-@media (max-width: 600px) { .nchat-work-record { grid-template-columns: 1fr; } .nchat-work-record > button { grid-column: 1; justify-self: start; } }

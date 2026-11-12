@@ -12,11 +12,12 @@ if (typeof electron === 'string') {
   const { app, BrowserWindow, ipcMain } = electron;
   const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
   const { pathToFileURL } = require('node:url'), assert = require('node:assert/strict');
-  const client = path.resolve(__dirname, '..'), out = path.resolve(client, '../outputs/chat-composer-resize-20261001');
+  const client = path.resolve(__dirname, '..'), out = path.resolve(client, '../outputs/client-history-skills-layout-20261110/composer-resize');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-composer-resize-'));
-  const baseline = process.argv.includes('--baseline'), name = baseline ? 'baseline' : 'current';
-  const report = { ok: false, baseline, boundary: 'Real renderer/preload/IPC and pointer drag; synthetic session and model catalog; network blocked.', layouts: [], cases: [], errors: [] };
-  let win;
+  const baseline = process.argv.includes('--baseline'), columnsOnly = process.argv.includes('--columns-only');
+  const name = baseline ? 'baseline' : columnsOnly ? 'columns' : 'current';
+  const report = { ok: false, baseline, boundary: 'Real renderer/preload/IPC and pointer drag; synthetic session and model catalog; network blocked.', layouts: [], columns: [], cases: [], errors: [] };
+  let win, openedWorkdirs = 0;
   fs.mkdirSync(out, { recursive: true }); app.setPath('userData', path.join(root, 'profile'));
   const read = file => fs.readFileSync(path.join(client, file), 'utf8');
   const js = source => win.webContents.executeJavaScript(source, true);
@@ -58,10 +59,29 @@ if (typeof electron === 'string') {
     assert.equal(await js(`document.querySelector('.nchat').classList.contains('ncw-resizing')`), false);
   }
   async function geometry() {
-    return js(`(()=>{const selectors=['#nchatMore','[data-execution-menu]','#nchatRuntime','#nchatWd','#nchatMode','#nchatMeta','.nmodel-button','#nchatMic','#nchatSend'];const box=document.querySelector('.nbox').getBoundingClientRect(),main=document.querySelector('.nchat-main').getBoundingClientRect();
+    return js(`(()=>{const selectors=['#nchatMore','[data-execution-menu]','#nchatRuntime','#nchatWd','#nchatMode','#nchatMeta','.nmodel-button','#nchatSend'];const box=document.querySelector('.nbox').getBoundingClientRect(),main=document.querySelector('.nchat-main').getBoundingClientRect();
       const controls=selectors.map(selector=>{const e=document.querySelector(selector),r=e.getBoundingClientRect();return{selector,left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height,hit:e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)),visible:e.checkVisibility(),inside:r.left>=box.left-1&&r.right<=box.right+1&&r.top>=box.top-1&&r.bottom<=box.bottom+1}});
       const overlaps=[];for(let a=0;a<controls.length;a++)for(let b=a+1;b<controls.length;b++){const x=controls[a],y=controls[b];if(Math.min(x.right,y.right)-Math.max(x.left,y.left)>1&&Math.min(x.bottom,y.bottom)-Math.max(x.top,y.top)>1)overlaps.push([x.selector,y.selector]);}
       const permission=document.querySelector('#nchatMode'),label=permission.querySelector('b'),s=getComputedStyle(document.querySelector('.nbox'));return{viewport:innerWidth,mainWidth:main.width,composerWidth:box.width,queryWidth:box.width-parseFloat(s.borderLeftWidth)-parseFloat(s.borderRightWidth),toolbarHeight:document.querySelector('.wc-toolbar').getBoundingClientRect().height,controls,overlaps,overflow:document.documentElement.scrollWidth>innerWidth+1,risk:permission.classList.contains('wc-permission-risk'),permissionClipped:label.scrollWidth>label.clientWidth+1,pendingVisible:document.querySelector('.nchat-access-pending').checkVisibility(),input:document.querySelector('#nchatInput').value};})()`);
+  }
+  async function checkColumns(scenario) {
+    const measured = await js(`(()=>{
+      const box=selector=>{const e=document.querySelector(selector),r=e.getBoundingClientRect();return{left:r.left,right:r.right,width:r.width,scrollWidth:e.scrollWidth,clientWidth:e.clientWidth}};
+      const composer=box('.nbox'),list=box('#nchatList'),reply=box('#nchatList .nmsg.ai .ntext'),user=box('#nchatList .nmsg.user');
+      const blocks=[...document.querySelectorAll('#nchatList pre,#nchatList table')].map(e=>{const r=e.getBoundingClientRect();return{tag:e.tagName,left:r.left,right:r.right,overflow:getComputedStyle(e).overflowX,scrollWidth:e.scrollWidth,clientWidth:e.clientWidth}});
+      return{viewport:innerWidth,composer,list,reply,user,blocks,documentOverflow:document.documentElement.scrollWidth>innerWidth+1,streamOverflow:document.querySelector('#nchatScroll').scrollWidth>document.querySelector('#nchatScroll').clientWidth+1};
+    })()`);
+    report.columns.push({ ...scenario, ...measured });
+    for (const key of ['list', 'reply']) {
+      assert.ok(Math.abs(measured[key].left - measured.composer.left) < 1, key + ' left edge: ' + JSON.stringify(measured));
+      assert.ok(Math.abs(measured[key].right - measured.composer.right) < 1, key + ' right edge: ' + JSON.stringify(measured));
+    }
+    assert.ok(Math.abs(measured.user.right - measured.composer.right) < 1, 'User bubbles share the right column edge');
+    assert.ok(measured.user.left >= measured.composer.left, 'User bubbles remain within the shared column');
+    assert.equal(measured.documentOverflow, false); assert.equal(measured.streamOverflow, false);
+    assert.equal(measured.blocks.length, 2, 'Production Markdown renders both code and table probes');
+    assert.ok(measured.blocks.every(row => row.left >= measured.composer.left - 1 && row.right <= measured.composer.right + 1 && row.overflow === 'auto'), JSON.stringify(measured.blocks));
+    assert.ok(measured.blocks.some(row => row.scrollWidth > row.clientWidth), 'Wide content scrolls within its own block');
   }
   function check(g) {
     assert.deepEqual(g.overlaps, [], JSON.stringify(g));
@@ -71,7 +91,7 @@ if (typeof electron === 'string') {
     assert.ok(Math.max(...centers) - Math.min(...centers) <= 1, 'Every control stays on one row: '+JSON.stringify(g));
     assert.ok(g.toolbarHeight <= 52, 'Footer height must not grow after dragging');
     assert.ok(precedes('#nchatMore', '[data-execution-menu]') && precedes('[data-execution-menu]', '#nchatMode') && precedes('#nchatMode', '#nchatWd'), 'Add, execution, access, workspace order');
-    assert.ok(precedes('.nmodel-button', '#nchatRuntime') && precedes('#nchatRuntime', '#nchatMic'), 'Model, Agent, voice order');
+    assert.ok(precedes('.nmodel-button', '#nchatRuntime') && precedes('#nchatRuntime', '#nchatSend'), 'Model, Agent, send order');
     assert.ok(box('.nmodel-button').width <= 120.5, 'Compact model trigger');
     assert.ok(g.controls.every(row => row.visible && row.inside && row.width >= 15 && row.height >= 15 && row.hit), JSON.stringify(g));
     assert.equal(g.overflow, false); assert.equal(g.risk, true); assert.equal(g.permissionClipped, false);
@@ -88,10 +108,14 @@ if (typeof electron === 'string') {
     const bounds = await js(`(()=>{const e=document.querySelector(${JSON.stringify(selector)}),r=e.getBoundingClientRect();return{visible:e.checkVisibility(),left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:innerWidth,height:innerHeight,overflow:e.scrollWidth>e.clientWidth+1}})()`);
     assert.ok(bounds.visible && bounds.left >= -1 && bounds.right <= bounds.width + 1 && bounds.top >= -1 && bounds.bottom <= bounds.height + 1 && !bounds.overflow, JSON.stringify({ selector, bounds }));
   }
-  const model = { name: 'long-model', label: 'fixture-coding-large-model-enterprise-long-model-name', contextWindow: 128000, contextWindowKnown: true };
+  const model = { name: 'long-model', label: 'dev-coding-large-agent-soduwork-enterprise-long-model-name', contextWindow: 128000, contextWindowKnown: true };
   const capability = { supported: true, schema: 'soduwork.access-policy/v1', modes: ['standard', 'readonly', 'full'], canChangeDuringSession: true, changeTakesEffect: 'next-turn' };
   const state = { status: 'idle', adapterId: 'codex-harness', displayName: 'Codex Harness Enterprise Long Agent',
-    messages: [{ role: 'user', text: 'Isolated layout sample', done: true }, { role: 'assistant', done: true, blocks: [{ kind: 'text', text: 'Existing conversation is preserved.', done: true }] }], tools: [],
+    messages: [{ role: 'user', text: 'Isolated layout sample', done: true }, { role: 'assistant', done: true, blocks: [{ kind: 'text', text:
+      '## Shared conversation column\n\nExisting conversation is preserved.\n\n' +
+      '```javascript\nconst example = "' + 'long-code-segment-'.repeat(40) + '";\n```\n\n' +
+      '| Name | Description | Result |\n| --- | --- | --- |\n| A | ' + 'wide-table-cell-'.repeat(35) + ' | Preserved |\n\n' +
+      Array.from({ length: 8 }, (_, i) => 'Paragraph ' + i + ': streaming, history, and the current draft keep their original contents.').join('\n\n'), done: true }] }], tools: [],
     usage: { input: 28000, output: 200 }, accessPolicy: { mode: 'full', revision: 1 }, accessControl: capability,
     modelSelection: { name: model.name, model }, thinking: { supported: true, enabled: true, canDisable: true }, execution: { running: false, queue: [], turnQueue: {} } };
   app.whenReady().then(async () => {
@@ -105,7 +129,8 @@ if (typeof electron === 'string') {
     ipcMain.handle('work-preview-show', (_e, options) => ({ ok: true, state: { tabId: options.tabId, url: options.url, loading: false } }));
     for (const [channel, value] of Object.entries({ 'pi-session-history': { ok: true, chats: [] }, 'pi-session-outputs': { ok: true, files: [], artifacts: [] },
       'pi-session-runtimes': { ok: true, runtimes: [{ id: state.adapterId, modelMode: 'managed' }] },
-      'pi-session-release': { ok: true }, 'work-preview-hide': { ok: true }, 'work-preview-destroy': { ok: true }, 'pi-session-open-session-workdir': { ok: true }, 'access-preferences-get': { ok: true } })) ipcMain.handle(channel, () => value);
+      'pi-session-release': { ok: true }, 'work-preview-hide': { ok: true }, 'work-preview-destroy': { ok: true }, 'access-preferences-get': { ok: true } })) ipcMain.handle(channel, () => value);
+    ipcMain.handle('pi-session-open-session-workdir', () => { openedWorkdirs++; return { ok: true }; });
     ipcMain.handle('pi-session-set-access-mode', () => ({ ok: true, snapshot: state }));
     ipcMain.handle('pi-session-artifact-action', (_e, _ref, _id, action) => action === 'read'
       ? { ok: true, text: '# 成果阅读位置\n\n' + Array.from({ length: 70 }, (_, i) => '## Section ' + i + '\n\n内容保留，不因全屏重建。').join('\n\n') }
@@ -136,7 +161,31 @@ if (typeof electron === 'string') {
     // The add menu uses the same installed-plugin normalizer as the live shell.
     for (const file of ['components/panels/compose-candidate-navigation.js', 'components/panels/chat-plugin-mention-model.js',
       'components/panels/chat-plugin-mention.js']) await js(read(file) + '\nvoid 0;');
+    await js(read('components/panels/panels-chat-chrome.js') + '\nvoid 0;');
     await js(`NativeChat.enter('','resize-fixture',{adapterId:'codex-harness'})`); await until(`NativeChat.sessionInfo().ref==='resize-fixture'`);
+    assert.equal(await js(`document.querySelector('#nchatMic').checkVisibility()`), false,
+      'the existing unsupported voice control stays hidden');
+    if (!baseline) {
+      await until(`document.querySelector('#nchatList table') && document.querySelector('#nchatList pre')`);
+      await js(`document.querySelector('#nchatScroll').dataset.scrollFollow='paused';void 0;`);
+      for (const [width, zoom] of [[1366,1],[900,1],[480,1],[390,1],[320,1],[1366,1.25],[900,1.25],[480,1.5]]) {
+        win.setContentSize(width, 900); win.webContents.setZoomFactor(zoom); await delay(180);
+        await checkColumns({ width, zoom, surface: 'conversation' });
+        if (width === 1366 && zoom === 1 || width === 390) await shot('column-' + width);
+      }
+      win.webContents.setZoomFactor(1); win.setContentSize(1366, 900); await delay(180);
+      const response = state.messages.at(-1);
+      for (const streaming of [true, false]) {
+        state.status = streaming ? 'streaming' : 'idle'; state.execution.running = streaming;
+        response.done = !streaming; response.blocks[0].done = !streaming;
+        if (streaming) response.blocks[0].text += '\n\nThe live reply continues in the same column.';
+        win.webContents.send('pi-session-event', { ref: 'resize-fixture', kind: 'snapshot', snapshot: structuredClone(state) });
+        await until(`document.querySelector('#nchatList').textContent.includes('The live reply continues')`);
+        await delay(150); await checkColumns({ width: 1366, zoom: 1, surface: streaming ? 'streaming' : 'settled' });
+      }
+      report.cases.push('Transcript, Markdown and right-aligned user messages share the composer edges at desktop/narrow widths and 100/125/150% zoom; code and tables retain internal scrolling.');
+      if (columnsOnly) { assert.deepEqual(await js('errors'), []); assert.deepEqual(report.errors, []); report.ok = true; return; }
+    }
     await js(`ChatWorkbench.openLink('https://isolated.invalid/preview');void 0;`);
     await until(`document.querySelector('[data-wb-resize]')?.checkVisibility()`);
     win.webContents.debugger.attach('1.3'); await win.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true });
@@ -152,7 +201,7 @@ if (typeof electron === 'string') {
       win.webContents.send('pi-session-event', { ref: 'resize-fixture', kind: 'snapshot', snapshot: structuredClone(state) }); await delay(140);
       for (const ratio of [.5, .3, .7]) {
         await drag(ratio); const g = await geometry(); report.layouts.push({ width, locale, pending, ratio, ...g }); check(g);
-        await checkLabels();
+        await checkLabels(); await checkColumns({ width, locale, pending, ratio, surface: 'split' });
         assert.equal(g.pendingVisible, pending);
         if (ratio === .3 || width === 1920 && ratio === .7) await shot(`${width}-${locale}-${pending ? 'pending' : 'full'}-${ratio}`);
       }
@@ -176,8 +225,12 @@ if (typeof electron === 'string') {
     await click('.nmodel-button'); await until(`document.querySelectorAll('[data-model-name]').length===1`); await popup('.nmodel-pop'); await shot('model-menu');
     await click('[data-model-name="long-model"]'); await until(`document.querySelector('.nmodel-pop').hidden`);
     await click('#nchatMore'); await popup('#nchatMorePop'); await shot('add-menu'); await click('#nchatMore');
-    await click('#nchatWd'); await click('#nchatMeta'); await popup('.nctx-pop'); await click('#nchatMeta');
-    report.cases.push('Narrow-column permission, model, add, workspace and context controls are actually mouse-clickable through production handlers/preload; model selection returns through controlled IPC.');
+    assert.deepEqual(await js(`(()=>{const e=document.querySelector('#nchatWd');return{tag:e.tagName,tabIndex:e.tabIndex,cursor:getComputedStyle(e).cursor}})()`),
+      { tag: 'SPAN', tabIndex: -1, cursor: 'default' });
+    await click('#nchatWd'); assert.equal(openedWorkdirs, 0, 'the existing workspace label is display-only');
+    await click('[data-chat-open-location]'); assert.equal(openedWorkdirs, 1, 'the header retains explicit folder access');
+    await click('#nchatMeta'); await popup('.nctx-pop'); await click('#nchatMeta');
+    report.cases.push('Narrow-column permission, model, add and context controls remain clickable; workspace is a static non-focusable label with no open/change action, while the independent header still opens its original location.');
     await drag(.7); check(await geometry()); await drag(.3); check(await geometry());
     // A real Markdown document gives us a persistent scrollable preview. Only
     // the artifact read boundary is stubbed; rendering and resizing are production.

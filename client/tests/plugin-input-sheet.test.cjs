@@ -7,6 +7,23 @@ const path = require('node:path');
 const sheet = require('../components/panels/plugin-input-sheet');
 const mention = require('../components/panels/chat-plugin-mention');
 
+test('plain text payload uses composer content without guessing unrelated or ambiguous fields', () => {
+  const field = {key: 'text', type: 'textarea', label: '待整理文本', required: true};
+  const seed = '今天完成登录页；明天测试资料库；下载失败问题由小王排查。';
+  const plan = mention.prepareConversationInputs([field], seed, {});
+  assert.equal(plan.ready, true);
+  assert.equal(plan.values.text, seed);
+  assert.deepEqual(plan.inferredKeys, ['text']);
+  assert.equal(mention.prepareConversationInputs([field], '', {}).ready, false);
+  assert.equal(mention.prepareConversationInputs([field], seed, {text: 'Explicit input'}).values.text, 'Explicit input');
+  const ambiguous = mention.prepareConversationInputs([field,
+    {...field, key: 'content', label: 'Other content'}], seed, {});
+  assert.equal(ambiguous.ready, false);
+  assert.deepEqual(ambiguous.inferredKeys, []);
+  const other = mention.prepareConversationInputs([{...field, key: 'recipientText', label: 'Recipient'}], seed, {});
+  assert.equal(other.ready, false);
+});
+
 const root = path.join(__dirname, '..');
 const read = (...parts) => fs.readFileSync(path.join(root, ...parts), 'utf8');
 
@@ -41,6 +58,15 @@ test('real plugin resolution submits inferred original goal in the workflow payl
   const prepared = await picker.resolve('chat', '', raw, { attachmentNames: ['input.txt'] });
   assert.equal(prepared.text, raw);
   assert.equal(prepared.items[0].inputValues.goal, raw);
+  const textPicker = window.ChatPluginMention.create({ input: node(), host: node(), catalog: async () => ({ items: [{
+    pluginId: 'local:text', name: '文本整理', key: 'text', personal: true, enabled: true, installed: true,
+    conversationUse: {available: true}, inputs: [{key: 'text', label: '待整理文本', type: 'textarea', required: true}],
+  }] }) });
+  await textPicker.select('local:text', () => true, {keepText: true});
+  const textPrepared = await textPicker.resolve('chat', '', raw);
+  assert.equal(textPrepared.text, raw);
+  assert.equal(textPrepared.items[0].inputValues.text, raw);
+  textPicker.destroy();
   const changed = raw + '后续修改';
   assert.equal((await picker.resolve('chat', '', changed)).items[0].inputValues.goal, changed,
     'an inferred goal from a refused send must not replace the edited original on retry');

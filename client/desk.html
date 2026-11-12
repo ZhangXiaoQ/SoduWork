@@ -3,9 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <title>SoduWork · 工作台</title>
-<!-- Main workspace with native window controls. The workspace shell routes requirements, approvals, AI desks, and personal settings; terminals and multi-session consoles may open separately. URL panel and view parameters select the window role and active page. Keep these windows non-topmost, integrate the menu with native title-bar controls, and use the macOS system menu and traffic lights where available. Legacy main processes retain a separate menu row. Transparent overlays belong to requirement and desktop-pet views; desk-window.css suppresses panel-drawn window controls here. Do not load pet internals or app/app.js: their rendering and polling side effects belong to the original window and must run once. -->
+<!-- Primary workspace with native window controls. Requirements, approvals, AI work and personal settings share the workspace shell; terminals and multiplexed consoles open separately as needed. The panel query selects the window role and view selects the workspace page.
+     Workspace and tool windows are not always on top. Menus share the title bar, while native buttons handle close/maximize and blank title-bar space supports dragging. macOS uses native menus and traffic lights. Legacy main processes retain the system title bar and a separate menu row. Only requirement and pet views use transparency. desk-window.css hides panel-drawn window controls.
+     Do not load pet-ui, task-area or characters here: they belong to the pet window. Do not load app/app.js here: recurring task processing, update checks and notifyReady must run only once to avoid duplicate changes to real data. -->
 <script>
-/* Set the window role on the root element before the first paint so desk-window.css applies the correct layout without flashing overlay styles. */
+/* Select the window role before the first paint to prevent an overlay-style flash.
+   desk-window.css uses this attribute on the root element to select the main panel. */
 (function(){
   var q=new URLSearchParams(location.search);
   var p=q.get('panel')||'workspace';
@@ -17,23 +20,23 @@
   document.documentElement.setAttribute('data-desk-panel',p);
   document.documentElement.setAttribute('data-window-menu','');
   window.__deskPanel=p;
-  /* Restore navigation only within this process lifetime; do not read a prior process's page from localStorage. */
+  /* Restore navigation only within this process; do not read stale localStorage views. */
   var requestedView=q.get('view')||'';
   var v=(requestedView&&T[requestedView]) ? requestedView : '';
   if(p==='workspace'&&!v)v='create';
   if(p==='workspace')document.documentElement.setAttribute('data-workspace-view',v||'create');
-  /* Initial open parameters use the URL because desk-open IPC may arrive before its listener is installed. */
+  /* Read initial arguments from the URL because desk-open IPC may precede listener registration. */
   window.__deskArgs={panel:p,view:v,taskId:q.get('taskId')||'',providerId:q.get('providerId')||'',teamEntry:q.get('teamEntry')||'',
                      chatId:q.get('chatId')||'',workspaceRestore:q.get('workspaceRestore')||'',tab:q.get('tab')||'',newSession:q.get('newSession')==='1',
                      approvalId:q.get('approvalId')||'',approvalView:q.get('approvalView')||'',console:q.get('console')==='1',
                      createRequirement:q.get('createRequirement')==='1'};
-
-
-
-
+  /* Set the page-specific title here: the document title overrides BrowserWindow's
+     initial title. This head script runs after the title element is parsed and
+     before the window appears, keeping different panels identifiable. */
   window.__soduworkWindowTitle={label:p==='workspace'?'':T[p],detail:''};
   document.title=p==='workspace'?'SoduWork':'SoduWork · '+T[p];
-  /* The loading title follows the selected page and is applied after DOMContentLoaded. */
+  /* Keep the loading title specific to this page. Populate it after DOMContentLoaded,
+     when the placeholder element is available. */
   document.addEventListener('DOMContentLoaded',function(){
     var b=document.getElementById('deskBlankTitle');
     if(b)b.textContent=T[p];
@@ -44,6 +47,7 @@
 <link rel="stylesheet" href="components/client-auth/client-auth.css">
 <link rel="stylesheet" href="components/client-auth/quota-notice.css">
 <link rel="stylesheet" href="components/client-auth/account-center.css">
+<link rel="stylesheet" href="components/client-auth/legal-html.css">
 <link rel="stylesheet" href="components/panels/panels-base.css">
 <link rel="stylesheet" href="components/panels/im-remote.css">
 <link rel="stylesheet" href="components/panels/panels-session-memory.css">
@@ -79,7 +83,7 @@
 <link rel="stylesheet" href="components/panels/panels-connections.css">
 <link rel="stylesheet" href="components/panels/model-capabilities.css">
 <link rel="stylesheet" href="components/panels/panels-runners.css">
-<!-- Shared requirement lifecycle components for details, AI desks, and human review. -->
+<!-- Requirement details, the AI workspace and human review share the same task lifecycle components. -->
 <link rel="stylesheet" href="components/panels/task-trace-view.css">
 <link rel="stylesheet" href="components/panels/task-context-view.css">
 <link rel="stylesheet" href="components/panels/task-trace-rail-view.css">
@@ -90,7 +94,7 @@
 <link rel="stylesheet" href="components/panels/panel-forms.css">
 <link rel="stylesheet" href="components/panels/panels.css">
 <link rel="stylesheet" href="components/panels/panels-forward-plugin.css">
-<!-- Native conversation rendering connected to the local Pi runtime. -->
+<!-- Native chat connects directly to local Pi, replacing the former embedded pi-web-ui iframe. -->
 <link rel="stylesheet" href="components/panels/panels-chat.css">
 <link rel="stylesheet" href="components/panels/chat-crew.css">
 <link rel="stylesheet" href="components/panels/code-workbench.css">
@@ -109,11 +113,11 @@
 <link rel="stylesheet" href="components/reports/work-briefs.css">
 <link rel="stylesheet" href="components/gantt/gantt.css">
 <link rel="stylesheet" href="vendor/xterm/xterm.css">
-<!-- Load after component styles so the global cursor policy takes precedence. -->
+<!-- Load after component styles so the global cursor policy wins: arrows on hover, pointers only on visible handles. -->
 <link rel="stylesheet" href="theme/cursor.css">
-<!-- Load after component styles to override panel centering, corners, shadows, and custom window controls. -->
+<!-- Load after component styles to override panel centering, rounded corners, shadows and custom window controls. -->
 <link rel="stylesheet" href="desk-window.css">
-<!-- Shared workspace typography, headings, controls, and empty states; each page retains its layout. -->
+<!-- Workspace styling normalizes typography, headings, controls and empty states without taking over page layouts. -->
 <link rel="stylesheet" href="theme/workspace-experience.css">
 <link rel='stylesheet' href='components/panels/work-composer.css'>
 <link rel='stylesheet' href='components/panels/chat-session-controls.css'>
@@ -128,15 +132,17 @@
 <link rel="stylesheet" href="theme/workspace-page-heads.css">
 <link rel="stylesheet" href="components/client-auth/personal-account.css">
 <style>
-  /* Normal windows have an opaque background and fill their content area. */
+  /* Fill this standard window with an opaque background. */
   html,body{margin:0;padding:0;height:100%;background:var(--bg-1);overflow:hidden}
   body{font-family:var(--font-ui);color:var(--ink)}
-  /* The AI desk fills this window rather than floating above it. Remove overlay positioning and shadows, and keep its stacking order below settings, notices, skins, and team panels. */
+  /* The workspace fills the window without overlay positioning or shadows.
+     Keep its z-index below settings, notices, skins and team panels; the former
+     value of 66 obscured panels at levels 60, 64 and 65. */
   #deskRoot{position:absolute;inset:0}
   .desk-panel.show{position:absolute;inset:0;z-index:1;opacity:1;pointer-events:auto;box-shadow:none;border-radius:0}
-  /* A closed AI desk must disappear; full-window positioning applies only while its show class is active. */
+  /* Hide the collapsed workspace so it cannot cover other panels after closeAIDesk(). */
   .desk-panel:not(.show){display:none}
-  /* Keep a loading or empty state visible when only a secondary page is open. */
+  /* Provide a background placeholder while a secondary page is opening. */
   .desk-blank{
     position:absolute;inset:0;z-index:0;display:flex;flex-direction:column;
     align-items:center;justify-content:center;gap:10px;color:var(--ink-4);
@@ -146,7 +152,7 @@
   .desk-blank span{font-size:max(var(--font-min-readable, 14.5px), calc(var(--text-sm) * var(--font-scale,1)))}
   .desk-blank svg{width:46px;height:46px;stroke:var(--ink-5,var(--ink-4));stroke-width:1.4;fill:none;
     stroke-linecap:round;stroke-linejoin:round;opacity:.5}
-  /* This window uses a bottom-right toast for transient messages. */
+  /* Show bubble feedback as a bottom-right toast in this window. */
   .desk-toast{
     /* Match the pet bubble feedback layer so dialog backdrops do not hide status/error text. */
     position:fixed;right:18px;bottom:16px;z-index:10070;max-width:460px;
@@ -167,17 +173,17 @@
 <link rel="stylesheet" href="theme/enlarged-theme.css">
 </head>
 <body>
-<!-- Window background shown while a page loads. desk-boot replaces the status text with a specific error if loading fails and keeps the window open for diagnosis. -->
+<!-- Window fallback while requirements and team identity load. On boot failure, desk-boot replaces this span with the specific error and keeps the window open for diagnosis. -->
 <div class="desk-blank" id="deskBlank">
   <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 20h8M12 18v2"/><path d="M7.5 9.5h5M7.5 13h9"/></svg>
   <b id="deskBlankTitle">SoduWork</b>
   <span id="deskBlankHint">正在载入…</span>
 </div>
 <div id="deskRoot"></div>
-<!-- Requirement details container used by the AI desk's open action. Secondary views are centered because this window has no dock anchor. -->
+<!-- The workspace sidebar uses this task-detail container. Without it, openDetail silently returns. Secondary views open centered, as requested. -->
 
 
-<!-- Shared panel containers moved from index.html. Notification and history panels create their DOM dynamically and only need their scripts and styles loaded. -->
+<!-- These three sections moved from index.html during window extraction. The notice center and history board are created dynamically; only their scripts and styles need to be loaded here. -->
 <section class="panel personal-account-panel" id="personalAccountPanel" aria-labelledby="personalAccountTitle">
   <header class="ws-page-head personal-account-head"><h1 id="personalAccountTitle">个人信息</h1><p>管理个人资料、账号安全与登录设备</p></header>
   <div class="personal-account-body">
@@ -195,14 +201,14 @@
 <div class="panel" id="settingsPanel">
   <button class="panel-close" id="settingsClose">✕</button>
   <div class="set-page-head ws-page-head"><span class="set-page-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="m10 3-.5 2-2 .9-1.9-.5-2 3.4L5 10.3v2.4l-1.4 1.5 2 3.4 1.9-.5 2-.9.5 2h4l.5-2 2-.9 1.9.5 2-3.4-1.4-1.5v-2.4l1.4-1.5-2-3.4-1.9.5-2-.9L14 3Z"/></svg></span><div class="set-page-title"><span class="set-page-kicker" data-i18n="eyebrow.preferences">PREFERENCES</span><span class="set-page-main-title" data-i18n="settings">设置</span><span class="set-page-sub" data-i18n="settingsSub">管理客户端、工作目录与桌面体验</span></div></div>
-  <!-- Desktop shortcuts can each be hidden independently; the main window and tray remain available. -->
+  <!-- Persistent desktop widgets are shortcuts to the main window. Each can be closed independently; closing all widgets leaves tray and workspace functionality available. -->
   <div class="set-group set-half"><div class="k">桌面显示</div>
     <label class="chk-inline"><input type="checkbox" id="dockVisibleChk" checked>贴在屏幕右边的快捷竖条</label>
     <label class="chk-inline"><input type="checkbox" id="petVisibleChk" checked>桌面上的 SoduWork 小球</label>
     <label class="chk-inline"><input type="checkbox" id="trayVisibleChk" checked>右下角状态栏里的图标</label>
     <div class="set-note">这三件都是桌面上的快捷入口，关掉只是不显示——需求、通知、团队都在这扇主窗口里照常用。
       托盘图标右键也能改这几项。<b id="trayOffNote" style="display:none;font-weight:400">关掉图标后，只能从这儿把它打开；SoduWork 起来时会自己打开主窗口。</b></div></div>
-  <!-- Appearance settings contain skin selection and desktop visibility controls. -->
+  <!-- Appearance settings combine skins and desktop visibility to keep the navigation rail compact. -->
   <div class="set-group set-half"><div class="k">外观</div>
     <div class="hub-row"><span class="set-cur" id="skinCurName">—</span><button id="skinOpenBtn" class="hub-save">更换皮肤</button></div>
     <div class="set-note">调整 SoduWork 形象与整体配色。</div></div>
@@ -237,7 +243,7 @@
   </div>
 </div>
 
-<!-- Keyboard shortcuts use the shared workspace shell and a scrollable categorized list. -->
+<!-- Shortcuts use the workspace shell with categories inside the scrollable shortcut list. -->
 <section class="shortcuts-page" id="shortcutsPanel" hidden aria-labelledby="shortcutsPageTitle">
   <header class="shortcuts-page-head">
     <div class="shortcuts-page-heading"><h1 id="shortcutsPageTitle">快捷键</h1><p>点击快捷键可修改，支持恢复默认。</p></div>
@@ -309,7 +315,7 @@
   <div class="tp-body" id="teamBody"></div>
 </div>
 
-<!-- Requirement creation in a normal window. desk-window.css removes the former overlay backdrop and expands the form to fill the window. -->
+<!-- Task creation uses an ordinary window. desk-window.css makes the former overlay transparent and expands the modal to fill the window. -->
 <div class="mask" id="addMask">
 
     <div class="modal modal-wide">
@@ -317,7 +323,7 @@
       <div class="add-page-head ws-page-head"><div class="add-page-title"><span class="add-page-kicker" data-i18n="eyebrow.create_task">CREATE ISSUE</span>创建需求 <span class="add-page-sub">把目标交给团队或 AI，并持续跟踪结果</span></div></div>
 
 
-      <!-- Two columns keep core fields on the left and supplementary fields on the right, with all fields visible without expanding another section. -->
+      <!-- Two columns keep all fields visible: core task fields on the left, reminders, source, requester, recurrence and attachments on the right. Avoid an expanding advanced-options section. -->
 
       <div class="add-cols">
 
@@ -351,7 +357,7 @@
 
         <div class="add-col add-col-side">
 
-          <!-- Completion mode, repository, workflow, and execution runtime are separate parts of the same contract. -->
+          <!-- Completion method, project, workflow and execution runtime share one contract but must not be collapsed into one selector. -->
           <div class="field add-go" id="addGoField" style="display:none">
             <div class="add-go-head">
               <span><b>创建后怎么处理</b><small>仅创建、直接交给 Agent，或按企业工作方法自动推进</small></span>
@@ -394,7 +400,7 @@
 
   </div>
 
-<!-- Context menu for attachments, outputs, and requirement cards. -->
+<!-- Context menus for task attachments, outputs and requirement board cards. -->
 <div class="ctx-menu" id="ctxMenu"></div>
 
 <script src="api-library-local.js"></script>
@@ -403,11 +409,13 @@
 <script src="core/token-quota.js"></script>
 <script src="components/client-auth/quota-notice.js"></script>
 <script src="api.js"></script>
+<script src="components/client-auth/legal-html.js"></script>
 <script src="components/client-auth/account-ui.js"></script>
 <script src="components/client-auth/email-auth.js"></script>
 <script src="components/client-auth/account-verification.js"></script>
 <script src="components/client-auth/account-center.js"></script>
 <script src="components/client-auth/client-auth.js"></script>
+<script src="components/client-auth/legal-updates.js"></script>
 <script src="components/panels/task-priority.js"></script>
 <script src="core/task-sync.js"></script>
 <script src="core/store-lifecycle.js"></script>
@@ -456,14 +464,14 @@
 <script src="core/user.js"></script>
 <script src="core/skin-registry.js"></script>
 <script src="core/drag.js"></script>
-<!-- Cross-window entry routing and synchronization of configuration, skins, notices, and requirements. -->
+<!-- Cross-window bridge: Entry routes open locally here; settings, skins, notices and requirements remain synchronized. -->
 <script src="core/win-bridge.js"></script>
 <script src="core/task-conversation-navigation.js"></script>
 <script src="components/gantt/gantt.js"></script>
-<!-- Load the split panel modules together; loading defines functions without rendering panels. -->
+<!-- Load the extracted panel modules together because they reference each other. Loading defines functions without rendering. -->
 <script src="components/panels/panels-icons.js"></script>
 <script src="components/panels/panels-session-memory.js"></script>
-<!-- Requirement lifecycle components shared by detail, AI desk, and human-review views. -->
+<!-- Shared task lifecycle components for details, AI work and human review. -->
 <script src="components/panels/task-trace-execution-details.js"></script>
 <script src="components/panels/task-trace-rail-view.js"></script>
 <script src="components/panels/task-context-view.js"></script>
@@ -553,7 +561,7 @@
 <script src="components/panels/custom-agents.js"></script>
 <script src="components/panels/panels-codeacct.js"></script>
 <script src="components/panels/panels-usage.js"></script>
-<!-- Unified creation routes input to a requirement confirmation card or a native local Pi conversation. Load ComposeDraft and NativeChat before the composer. -->
+<!-- Unified creation routes one input to a task confirmation card or native local Pi chat. Load ComposeDraft and NativeChat before the composer. -->
 <script src='components/panels/work-intent.js'></script>
 <script src='components/panels/work-composer.js'></script>
 <script src="components/panels/panels-compose-runtime.js"></script>
@@ -594,7 +602,7 @@
 <script src="components/panels/chat-tool-details.js"></script>
 <script src="components/panels/panels-chat-status.js"></script>
 
-<!-- Conversation output previews use vendored marked and highlight.js; see vendor/markdown/README.md. -->
+<!-- Render Markdown outputs with marked and highlight code with highlight.js; see vendor/markdown/README.md for vendored dependencies. -->
 <script src="vendor/markdown/marked.umd.js"></script>
 <script src="vendor/markdown/highlight.min.js"></script>
 <script src="vendor/markdown/hljs-theme.js"></script>
@@ -668,7 +676,7 @@
 <script src="components/panels/compose-surface.js"></script>
 <script src="components/settings/access-preferences.js"></script>
 <script src="components/panels/panels-compose.js"></script>
-<!-- AI desk narrative depends on top-level bindings from panels-desk.js and must load after it. -->
+<!-- The workspace sidebar narrative depends on panels-desk.js top-level state and must load after it. -->
 <script src="components/panels/panels-desk-agent.js"></script>
 <script src="components/panels/panels-aidesk-office.js"></script>
 <script src="components/shared/execution-tool-args.js"></script>
@@ -677,9 +685,9 @@
 <script src="vendor/xterm/xterm.js"></script>
 
 <script src="components/panels/console.js"></script>
-<!-- Multi-session console depends on console.js state, rendering helpers, and openConsole. -->
+<!-- The multiplexed console monitors several tasks and depends on console.js state, kind, gauge and openConsole helpers. -->
 <script src="components/panels/console-multi.js"></script>
-<!-- Skin state is shared by both windows; the skin selection grid is specific to this workspace. -->
+<!-- Skins separate the shared model layer from the skin-grid UI, which is loaded only in this window. -->
 <script src="components/skin-manager/skin-model.js"></script>
 <script src="components/skin-manager/skin-manager.js"></script>
 <script src="components/settings/client-update-view.js"></script>
@@ -697,6 +705,7 @@
 <script src="components/workspace/workspace-chat-list.js"></script>
 <script src="components/workspace/workspace-shell.js"></script>
 <script src="components/workspace/workspace-navigation.js"></script>
+<script src="components/workspace/workspace-apps.js"></script>
 <script src="components/workspace/window-menu.js"></script>
 <script src="components/workspace/global-search-core.js"></script>
 <script src="components/workspace/global-search-sources.js"></script>

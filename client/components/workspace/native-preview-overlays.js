@@ -4,7 +4,7 @@
   // visibility once per document, rather than maintaining a list in each tab.
   // Older menus predate ARIA popup roles. Keep their concrete containers here
   // until they adopt the same semantic contract as newly added overlays.
-  const OVERLAYS = 'dialog,[aria-modal="true"],[role="dialog"],[role="alertdialog"],[role="menu"],[role="listbox"],[popover],[data-native-preview-overlay],.ntool-drawer,.pui-layer,.tt-modal-mask,.wc-popover,.cp-modelpop,.ws-rail-popover,.cap-add-menu,.library-menu,.cp-skill-menu';
+  const OVERLAYS = 'dialog,[aria-modal="true"],[role="dialog"],[role="alertdialog"],[role="menu"],[role="listbox"],[popover],[data-native-preview-overlay],.ntool-drawer,.pui-layer,.tt-modal-mask,.wc-popover,.cp-modelpop,.ws-rail-popover,.cap-add-menu,.library-menu,.cp-skill-menu,.nchat-summary';
   const SLOTS = '[data-native-preview-tab]';
   const MODAL = 'dialog[open],[aria-modal="true"],[data-native-preview-overlay],.ntool-drawer,.pui-layer,.tt-modal-mask';
   function create(window, send) {
@@ -15,7 +15,10 @@
       const style = window.getComputedStyle(node);
       return style.display !== 'none' && style.visibility !== 'hidden' && style.visibility !== 'collapse';
     };
-    const overlaps = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+    // Fractional layout arithmetic can put adjacent edges a few millionths of
+    // a pixel apart. Such rounding noise must not hide a neighboring native view.
+    const overlaps = (a, b) => Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.01 &&
+      Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.01;
     function sync() {
       queued = false;
       if (disposed) return;

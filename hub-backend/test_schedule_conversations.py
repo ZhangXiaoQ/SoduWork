@@ -56,6 +56,20 @@ class ConversationProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.schedule.note = 'later edit'
         await self.prepare(); self.assertEqual(self.run.receipt['conversationInput'], envelope)
 
+    async def test_saved_creation_request_executes_work_instead_of_recreating_plan(self):
+        note = '创建晨报，每天09:00，只回复 AUTO-OK，不调用工具、不读写文件、不联网，先暂停保存。'
+        self.schedule.note = note
+        self.schedule.enabled = False
+        await self.prepare()
+        text = self.run.receipt['conversationInput']['text']
+        self.assertTrue(text.startswith('【执行已有自动化的本轮工作】'))
+        self.assertIn('不要再次创建本自动化', text)
+        self.assertIn('不修改计划的启停状态', text)
+        self.assertIn(note, text)
+        self.assertFalse(self.schedule.enabled)
+        self.assertEqual(self.schedule.note, note)
+        self.assertEqual(self.run.receipt['conversationInput']['personalPlugin'], {})
+
     async def test_envelope_prefers_model_selected_on_schedule_over_client_default(self):
         self.schedule.model_name = 'schedule-model'
         await self.prepare()

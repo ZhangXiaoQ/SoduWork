@@ -169,6 +169,67 @@
       var result = await invoke('outputStatus', { outputKey: deliveryKey(manifest) });
       return { ok: true, delivery: result?.item?.id ? deliveryReceipt(result.item, manifest) : null };
     };
+    function taskDeliveryManifest(receipt) {
+      if (receipt?.state !== 'synced' || !receipt.delivery?.id) return null;
+      // Hub packages support preview/download. Only a PC library receipt proves
+      // that the user saved this exact version into the computer library.
+      return Object.assign({}, receipt.delivery, { source: 'local' });
+    }
+    function assertDeliverySelection(receipt, selection) {
+      if (!selection) return;
+      if (selection.deliveryId && selection.revision) {
+        if (receipt.delivery?.id === selection.deliveryId && receipt.delivery?.revision === selection.revision) return;
+      } else if (Number.isSafeInteger(selection.round) && selection.round > 0 && selection.executionRef &&
+          receipt.round === selection.round && receipt.executionRef === selection.executionRef) return;
+      throw failure('LIBRARY_DELIVERY_CHANGED', '成果已变化，请重新打开后保存');
+    }
+    async function selectedTaskDelivery(taskId, selection) {
+      if (selection?.deliveryId && selection.revision) {
+        const result = await remote.getDelivery(selection.deliveryId);
+        return { state: 'synced', delivery: result.delivery };
+      }
+      return remote.getTaskDelivery(taskId);
+    }
+    api.getTaskLibraryDeliveryStatus = async function (taskId, selection) {
+      var requestScope = scope();
+      var receipt = await selectedTaskDelivery(taskId, selection);
+      assertScope(requestScope);
+      assertDeliverySelection(receipt, selection);
+      var manifest = taskDeliveryManifest(receipt);
+      if (!manifest) return { ok: true, delivery: null };
+      var saved = await api.getLibraryDeliveryStatus(manifest);
+      assertScope(requestScope);
+      return Object.assign({}, saved, { manifest: manifest });
+    };
+    api.saveTaskLibraryDelivery = async function (taskId, selection) {
+      var requestScope = scope();
+      var receipt = await selectedTaskDelivery(taskId, selection);
+      assertScope(requestScope);
+      assertDeliverySelection(receipt, selection);
+      if (!receipt.delivery && receipt.retryable) receipt = await remote.syncTaskDelivery(taskId);
+      assertScope(requestScope);
+      assertDeliverySelection(receipt, selection);
+      var manifest = taskDeliveryManifest(receipt);
+      if (!manifest) throw failure('LIBRARY_DELIVERY_PENDING', receipt.error || '成果正在收集，请稍后重试');
+      var saved = await api.getLibraryDeliveryStatus(manifest);
+      assertScope(requestScope);
+      if (saved.delivery) return Object.assign({}, saved, { manifest: manifest });
+      var got = await remote.readLibraryBinary(receipt.delivery.id);
+      assertScope(requestScope);
+      if (got.blob?.size !== manifest.size) throw failure('LIBRARY_DELIVERY_INVALID', '成果读取不完整，请重试');
+      var data = await dependencies.blobToBase64(got.blob);
+      assertScope(requestScope);
+      // A verified historical receipt stays valid when a later turn completes.
+      // Recheck its immutable identity and authorization, never replace it with the latest package.
+      var latest = selection ? { state: 'synced', delivery: (await remote.getDelivery(manifest.id)).delivery }
+        : await remote.getTaskDelivery(taskId);
+      assertScope(requestScope);
+      if (latest.state !== 'synced' || latest.delivery?.id !== manifest.id || latest.delivery?.revision !== manifest.revision)
+        throw failure('LIBRARY_DELIVERY_CHANGED', '成果已变化，请重新打开后保存');
+      var result = await api.saveLibraryDelivery({ manifest: manifest, filename: manifest.filename,
+        contentType: got.blob.type, data: data });
+      return Object.assign({}, result, { manifest: manifest });
+    };
     api.getLibraryOutputStatus = function (outputKey, file) {
       return invoke('outputStatus', { outputKey: outputKey, name: file?.name || file?.filename, size: file?.size, sha256: file?.sha256 });
     };

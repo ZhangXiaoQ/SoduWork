@@ -131,7 +131,7 @@ class Harness2BridgeTests(unittest.TestCase):
                   patch.object(acp_bridge.AcpBridge, "start"),
                   patch.object(acp_bridge.AcpBridge, "close"),
                   patch.object(acp_bridge.AcpBridge, "request", side_effect=[
-                      {"protocolVersion": 1}, {"sessionId": "native"}, {}])):
+                      {"protocolVersion": 1}, {"sessionId": "native"}, {}, {}])):
                 with self.assertRaisesRegex(bridge.Harness2Error, "完成"):
                     bridge.execute("Task", directory, "", "work", False, sys.executable,
                                    output=lambda _event: None)
@@ -172,46 +172,29 @@ class Harness2BridgeTests(unittest.TestCase):
 
     def test_executor_config_ignores_personal_global_config_without_moving_sessions(self):
         from app.services import harness2_runtime as runtime, local_base
-        from app.services.opencode_access import Guard
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            personal = root / "personal" / "opencode" / "opencode.json"
-            personal.parent.mkdir(parents=True)
-            original = b'not valid JSON: personal config must stay untouched'
+            personal = root / 'personal.json'
+            original = b'private user configuration'
             personal.write_bytes(original)
-            injected = {
-                "SODUWORK_DATA_ROOT": str(root / "untrusted-root"),
-                "XDG_CONFIG_HOME": str(personal.parent.parent),
-                "XDG_DATA_HOME": str(root / "existing-sessions"),
-                "OPENCODE_DB": str(root / "existing.db"),
-                "HOME": str(root / "existing-home"),
-                "OPENCODE_CONFIG_CONTENT": '{"model":"company/fixture","permission":{"edit":"deny"}}',
-            }
-            cfg = {"llm": {"base": "http://127.0.0.1/v1", "key": "fixture", "model": "fixture"}}
-            with (patch.object(local_base, "_env_for", return_value=dict(injected)),
-                  patch.object(local_base, "_data_root", return_value=str(root / "runner")),
-                  patch.object(local_base, "_opencode_bin", return_value=sys.executable)):
-                result = runtime.environment({}, cfg)
-            self.assertEqual(result["SODUWORK_DATA_ROOT"], str(root / "runner"))
-            config_home = Path(result["XDG_CONFIG_HOME"])
-            self.assertTrue(config_home.is_relative_to(root / "runner"))
-            self.assertTrue(config_home.is_dir())
-            self.assertEqual(list(config_home.iterdir()), [])
-            for key in ("XDG_DATA_HOME", "OPENCODE_DB", "HOME"):
-                self.assertEqual(result[key], injected[key])
-            config = json.loads(result["OPENCODE_CONFIG_CONTENT"])
-            self.assertEqual(config.pop("agent"), {"build": {"prompt": runtime.EXECUTOR_PROMPT}})
-            self.assertEqual(config, json.loads(injected["OPENCODE_CONFIG_CONTENT"]))
+            injected = {'SODUWORK_DATA_ROOT': str(root / 'untrusted'),
+                        'XDG_CONFIG_HOME': str(root / 'personal'),
+                        'XDG_DATA_HOME': str(root / 'existing'),
+                        'OPENCODE_CONFIG': str(personal), 'OPENCODE_DB': 'private.db',
+                        'OPENCODE_CONFIG_CONTENT': '{"model":"private"}',
+                        runtime.EXECUTOR_ENV: 'forbidden-opencode'}
+            cfg = {'llm': {'base': 'http://127.0.0.1/v1', 'key': 'fixture', 'model': 'fixture'}}
+            with (patch.object(local_base, '_env_for', side_effect=AssertionError('No executor delegation')),
+                  patch.object(local_base, '_opencode_bin', side_effect=AssertionError('No OpenCode discovery')),
+                  patch.object(local_base, '_data_root', return_value=str(root / 'runner'))):
+                result = runtime.environment(injected, cfg)
+            self.assertEqual(result['SODUWORK_DATA_ROOT'], str(root / 'runner'))
+            self.assertEqual(result['XDG_CONFIG_HOME'], injected['XDG_CONFIG_HOME'])
+            self.assertEqual(result['XDG_DATA_HOME'], injected['XDG_DATA_HOME'])
+            self.assertFalse(any(key.startswith('OPENCODE_') for key in result))
+            self.assertNotIn(runtime.EXECUTOR_ENV, result)
+            self.assertEqual(json.loads(result[runtime.MODEL_ENV]), cfg['llm'])
             self.assertEqual(personal.read_bytes(), original)
-            guard = Guard({"edit": "deny"}, "readonly")
-            try:
-                guarded = guard.environment(result)
-                config = json.loads(guarded["OPENCODE_CONFIG_CONTENT"])
-                self.assertEqual(config["model"], "company/fixture")
-                self.assertIn(guard.path.as_uri(), config["plugin"])
-                self.assertEqual(guarded["XDG_CONFIG_HOME"], str(config_home))
-            finally:
-                guard.close()
 
     def test_bridge_prepares_executor_config_even_for_an_already_running_parent(self):
         bridge = self.bridge()
@@ -235,10 +218,9 @@ class Harness2BridgeTests(unittest.TestCase):
                   patch.object(bridge, "execute", side_effect=execute)):
                 code = bridge.main(["--cwd", str(root), "--probe"])
             self.assertEqual(code, 0)
-            self.assertTrue(Path(captured["XDG_CONFIG_HOME"]).is_relative_to(root / "runner"))
-            self.assertTrue(Path(captured["XDG_CONFIG_HOME"]).is_dir())
-            self.assertEqual(json.loads(captured["OPENCODE_CONFIG_CONTENT"])["agent"]["build"]["prompt"],
-                             runtime.EXECUTOR_PROMPT)
+            self.assertEqual(captured["XDG_CONFIG_HOME"], str(root / "personal"))
+            self.assertNotIn("OPENCODE_CONFIG_CONTENT", captured)
+            self.assertNotIn(runtime.EXECUTOR_ENV, captured)
 
     def test_scratch_directory_is_bound_to_runner_session(self):
         bridge = self.bridge()
@@ -299,108 +281,76 @@ class Harness2BridgeTests(unittest.TestCase):
                 self.assertNotIn("SODUWORK_HARNESS2_CONTINUE", runtime.environment({}, mismatch, key))
 
     def test_full_process_refines_then_executes_once_and_resumes_native_session(self):
+        from tests.test_harness2_native_executor import NativeExecutorTests
         from app.services import harness2_runtime as runtime
-        requests = []
-
-        class Model(BaseHTTPRequestHandler):
-            def do_POST(self):
-                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-                requests.append(body)
-                system = body["messages"][0]["content"]
-                content = (json.dumps({"files": {"systemprompt.md": "Verify fixture result precisely."},
-                                       "notes": "Check the real result."})
-                           if "SODUWORK_HARNESS2_EDIT" in system
-                           else "Inspect the request, produce the output, and verify it.\n" * 20)
-                input_tokens = sum(len(row["content"].encode("utf-8"))
-                                   for row in body["messages"]) // 3
-                payload = json.dumps({"choices": [{"message": {"content": content},
-                                                   "finish_reason": "stop"}],
-                                      "usage": {"prompt_tokens": input_tokens,
-                                                "completion_tokens": 637}}).encode()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(payload)
-
-            def log_message(self, *_args):
-                pass
-
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Model)
-        worker = threading.Thread(target=server.serve_forever, daemon=True)
-        worker.start()
-        try:
-            with tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                work = root / "中文 workspace"
-                work.mkdir()
-                (work / "acp").write_bytes(Path(__file__).with_name("harness2_acp_peer.py").read_bytes())
-                env = {key: value for key, value in os.environ.items()
-                       if key not in {"SODUWORK_APPROVAL_CHANNEL", "SODUWORK_RUNTIME_IMAGES"}}
-                env.update({
-                    runtime.MODEL_ENV: json.dumps({"base": f"http://127.0.0.1:{server.server_port}/v1",
-                                                  "key": "fixture-secret", "model": "fixture",
-                                                  "reasoning": True, "thinkingFormat": "zai",
-                                                  "supportsReasoningEffort": True,
-                                                  "thinkingLevelMap": {"low": "low", "high": "max"}}),
-                    runtime.ROOT_ENV: str(root / "private"),
-                    runtime.EXECUTOR_ENV: sys.executable,
-                    "PYTHONUTF8": "1",
-                })
-                command = [sys.executable, str(Path(runtime.__file__).with_name("harness2_bridge.py")),
-                           "--cwd", str(work)]
-                # Match a Runner turn's multilingual host context, not just the
-                # short question shown in the conversation bubble.
-                prompt = ("Only operate in the fixture workspace.\n"
-                          + "保留用户约束、会话权限与完整原文。Verify the evidence.\n" * 500
-                          + "Create the requested fixture result.\nKeep this final constraint intact.")
-                self.assertGreater(len(prompt.encode("utf-8")), 33000)
-                first = subprocess.run(command, input=prompt,
-                                       env=env, text=True, encoding="utf-8", capture_output=True, timeout=30)
-                self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
-                events = [json.loads(line) for line in first.stdout.splitlines()]
-                self.assertTrue(any(row.get("sessionID") == "harness2-native-fixture" for row in events))
-                self.assertEqual(len(requests), 7)
-                self.assertGreater(max(len(json.dumps(row["messages"], ensure_ascii=False).encode("utf-8"))
-                                       for row in requests), 48000)
-                usage = [row["part"]["tokens"] for row in events if row.get("type") == "step_finish"
-                         and "tokens" in row.get("part", {})]
-                self.assertEqual(len(usage), 7)
-                self.assertGreater(sum(row["input_tokens"] + row["output_tokens"] for row in usage), 12000)
-                self.assertTrue(all(row["max_tokens"] == 32768 for row in requests))
-                self.assertTrue(all(row["model"] == "fixture" and row["reasoning_effort"] == "low"
-                                    for row in requests))
-                self.assertEqual((work / "delivered.txt").read_text(), "actual bridge write")
-                received = (work / "received.txt").read_text(encoding="utf-8")
-                self.assertIn("Verify fixture result precisely.", received)
-                self.assertTrue(received.endswith(prompt))
-                self.assertNotIn("fixture-secret", first.stdout + first.stderr)
-                for path in (root / "private").rglob("*"):
+        helper = NativeExecutorTests()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / 'delivered.txt'
+            def respond(body):
+                if not body.get('tools'):
+                    system = body['messages'][0]['content']
+                    text = (json.dumps({'files': {'systemprompt.md': 'Verify fixture result precisely.'},
+                                        'notes': 'Check real results.'})
+                            if 'SODUWORK_HARNESS2_EDIT' in system else 'Inspect the request, produce the output, and verify it.\n' * 20)
+                    value = helper.response(text)
+                    value['usage'] = {'prompt_tokens': sum(len(row['content'].encode('utf-8'))
+                        for row in body['messages']) // 3, 'completion_tokens': 637}
+                    return value
+                last_user = max(i for i, m in enumerate(body['messages']) if m['role'] == 'user')
+                results = [m for m in body['messages'][last_user:] if m['role'] == 'tool']
+                writable = any(t['function']['name'] == 'write_file' for t in body['tools'])
+                if writable and not results:
+                    return helper.response(calls=[helper.call('write_file', {
+                        'path': str(target), 'content': 'actual native write'}, 'write-' + str(last_user))])
+                return helper.response('Verified native result')
+            with helper.endpoint(respond) as (model, requests):
+                model.update(reasoning=True, thinkingFormat='zai', supportsReasoningEffort=True,
+                             thinkingLevelMap={'low': 'low', 'high': 'max'})
+                env = {k: v for k, v in os.environ.items() if k != 'SODUWORK_APPROVAL_CHANNEL'}
+                env.update({runtime.MODEL_ENV: json.dumps(model), runtime.ROOT_ENV: str(root / 'private'),
+                            runtime.EXECUTOR_ENV: 'must-never-be-started.exe', 'PYTHONUTF8': '1'})
+                command = [sys.executable, str(Path(runtime.__file__).with_name('harness2_bridge.py')), '--cwd', directory]
+                prompt = ('Only operate in the fixture workspace.\n'
+                          + '保留用户约束、会话权限与完整原文。Verify the evidence.\n' * 500
+                          + 'Create the requested fixture result.\nKeep this final constraint intact.')
+                self.assertGreater(len(prompt.encode('utf-8')), 33000)
+                sid = ''
+                for turn in range(3):
+                    readonly = turn == 2
+                    args = command + (['--mode', 'plan', '--probe', '--refine'] if readonly else
+                                      ['--session', sid] if sid else [])
+                    before = len(requests)
+                    child = subprocess.run(args, input=prompt, env=env, text=True, encoding='utf-8',
+                                           capture_output=True, timeout=30)
+                    self.assertEqual(child.returncode, 0, child.stdout + child.stderr)
+                    events = [json.loads(line) for line in child.stdout.splitlines()]
+                    current = next(e['sessionID'] for e in events if e.get('sessionID'))
+                    if turn == 1:
+                        self.assertEqual(current, sid)
+                    sid = current
+                    batch = requests[before:]
+                    planning = [r for r in batch if not r.get('tools')]
+                    self.assertEqual(len(planning), 7)
+                    self.assertGreater(max(len(json.dumps(row['messages'], ensure_ascii=False).encode('utf-8'))
+                                           for row in planning), 48000)
+                    self.assertTrue(all(row['max_tokens'] == (8192 if 'SODUWORK_HARNESS2_EDIT' in row['messages'][0]['content'] else 4096)
+                                        and row['reasoning_effort'] == 'low' and row['stream'] is True
+                                        and row['model'] == 'fixture' for row in planning))
+                    self.assertEqual(len([r for r in batch if r.get('tools')]), 1 if readonly else 2)
+                    native = next(r for r in batch if r.get('tools'))
+                    text = next(m for m in reversed(native['messages']) if m['role'] == 'user')['content'][0]['text']
+                    self.assertTrue(text.endswith(prompt))
+                    self.assertIn('Verify fixture result precisely.', text)
+                    usage = [e for e in events if e.get('type') == 'step_finish' and e.get('part', {}).get('tokens')]
+                    self.assertEqual(len(usage), len(batch))
+                    self.assertGreater(sum(row['part']['tokens'].get('input_tokens', 0)
+                                           + row['part']['tokens'].get('output_tokens', 0) for row in usage), 12000)
+                    self.assertNotIn(model['key'], child.stdout + child.stderr)
+                    self.assertEqual(target.read_text(), 'actual native write')
+                for path in (root / 'private').rglob('*'):
                     if path.is_file():
-                        self.assertNotIn("fixture-secret", path.read_text(encoding="utf-8"))
-                second = subprocess.run([*command, "--session", "harness2-native-fixture"],
-                                        input="Continue this same session.", env=env, text=True,
-                                        encoding="utf-8", capture_output=True, timeout=30)
-                self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
-                self.assertEqual(len(requests), 14, "Every user turn exercises the selected harness, including native session reuse")
-                second_events = [json.loads(line) for line in second.stdout.splitlines()]
-                self.assertTrue(any(row.get("sessionID") == "harness2-native-fixture" for row in second_events))
-                self.assertIn("<harness2_instructions>", (work / "received.txt").read_text(encoding="utf-8"))
-                readonly_work = root / "readonly"
-                readonly_work.mkdir()
-                (readonly_work / "acp").write_bytes(Path(__file__).with_name("harness2_acp_peer.py").read_bytes())
-                readonly = subprocess.run([sys.executable, command[1], "--cwd", str(readonly_work),
-                                           "--mode", "plan", "--probe", "--refine"], input="Read only.",
-                                          env={**env, "HARNESS2_FIXTURE_READONLY": "1"},
-                                          text=True, encoding="utf-8", capture_output=True, timeout=30)
-                self.assertEqual(readonly.returncode, 0, readonly.stdout + readonly.stderr)
-                self.assertFalse((readonly_work / "delivered.txt").exists())
-                self.assertEqual(len(requests), 21)
-                self.assertTrue(all(row["model"] == "fixture" and row["reasoning_effort"] == "low"
-                                    for row in requests))
-        finally:
-            server.shutdown()
-            server.server_close()
-            worker.join(2)
+                        self.assertNotIn(model['key'], path.read_text(encoding='utf-8'))
 
 
 if __name__ == "__main__":

@@ -6,7 +6,8 @@ const path = require('path');
 /* Validate persisted history directories before handing them to Pi. A
    conversation may outlive a renamed project, disconnected share, or old
    machine path; the archive remains authoritative while execution falls
-   back to the current SoduWork workspace. */
+   back to the current SoduWork workspace. Renderer options cannot relocate
+   an existing conversation away from its persisted working directory. */
 module.exports = function resumeCwd(app, resume, fallback) {
   const candidate = String(resume && resume.cwd || '').trim();
   if (candidate) {

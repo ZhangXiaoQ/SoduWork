@@ -3,6 +3,8 @@
   'use strict';
   const cards = new Set();
   let current = null, owner = '', revision = 0, refreshFlight = null;
+  let selections = new WeakMap();
+  const composerCards = new WeakMap();
   const tx = value => global.SoduWorkI18n?.translateText?.(value) || value;
   const locale = () => global.SoduWorkI18n?.getLocale?.() || 'zh-CN';
   const scope = () => {
@@ -11,14 +13,20 @@
     const config = api?.hubConfig?.();
     return [config?.hub || '', user?.id || ''].join('|');
   };
-  const copy = () => global.SoduWorkQuota.copy(current, tx, locale());
+  const copy = card => global.SoduWorkQuota.copy({ ...current,
+    personalModelsAllowed: current?.personalModelsAllowed === true && selections.get(card)?.adapterId === 'pi' }, tx, locale());
+  const personalSelectionAllowed = card => {
+    const selected = selections.get(card);
+    return selected?.adapterId === 'pi' && selected.model?.quotaVersion === 2 &&
+      selected.model.quotaScope === 'personal' && global.SoduWorkQuota.allowsPersonal?.(current);
+  };
   const setText = (node, value) => { if (node.textContent !== value) node.textContent = value; };
 
   function render(card) {
-    const show = current?.exceeded === true;
+    const show = current?.exceeded === true && !personalSelectionAllowed(card);
     card.hidden = !show;
     if (!show) return;
-    const value = copy();
+    const value = copy(card);
     setText(card.querySelector('[data-quota-title]'), value.title);
     setText(card.querySelector('[data-quota-guidance]'), value.guidance);
     setText(card.querySelector('[data-quota-summary]'), tx('额度详情'));
@@ -48,7 +56,7 @@
 
   function update(detail = {}) {
     const nextOwner = scope();
-    if (owner !== nextOwner) { owner = nextOwner; current = null; refreshFlight = null; revision++; }
+    if (owner !== nextOwner) { owner = nextOwner; current = null; selections = new WeakMap(); refreshFlight = null; revision++; }
     if (detail.quota && typeof detail.quota === 'object') {
       const next = detail.quota;
       const selected = current?.model || current?.requestedModel;
@@ -92,7 +100,7 @@
   function mount(composer) {
     if (!composer?.parentElement) return null;
     const previous = composer.previousElementSibling;
-    if (previous?.classList.contains('soduwork-quota-card')) return previous;
+    if (previous?.classList.contains('soduwork-quota-card')) { composerCards.set(composer, previous); return previous; }
     const card = document.createElement('aside');
     card.className = 'soduwork-quota-card'; card.hidden = true;
     const element = (tag, attributes, children = []) => {
@@ -112,14 +120,18 @@
       element('p', { class: 'quota-card-feedback', 'data-quota-feedback': '', role: 'status', 'aria-live': 'polite' }),
     );
     card.querySelector('[data-quota-refresh]').addEventListener('click', refresh);
-    composer.before(card); cards.add(card); paint();
+    composer.before(card); cards.add(card); composerCards.set(composer, card); paint();
     return card;
   }
 
-  function modelChanged(selection) {
+  function modelChanged(selection, adapterId = '', surface) {
+    const composer = composerCards.has(surface) ? surface : surface?.querySelector?.('.work-composer');
+    const card = composer && composerCards.get(composer);
+    if (card) selections.set(card, { model: selection && typeof selection === 'object' ? selection : null, adapterId });
+    else if (!selection) selections = new WeakMap();
     if (!current) return;
     const modelSpecific = /^(model_exhausted|model_not_allowed)$/.test(current.reason || '');
-    if (current.exceeded && !modelSpecific) return;
+    if (current.exceeded && !modelSpecific) { paint(); return; }
     const model = typeof selection === 'string' ? selection : selection?.id || '';
     const provider = selection?.quotaProvider || '';
     const rows = (current.models || []).filter(row => row.model === model && (!provider || row.provider === provider));
@@ -144,7 +156,7 @@
     paint();
     return refresh();
   }
-  function reset() { current = null; refreshFlight = null; owner = scope(); revision++; paint(); }
+  function reset() { current = null; selections = new WeakMap(); refreshFlight = null; owner = scope(); revision++; paint(); }
   global.addEventListener('soduwork-data-scope-changed', reset);
   global.addEventListener('soduwork-locale-change', paint);
   global.SoduWorkQuotaNotice = { mount, update, show, reset, refresh, refreshIfBlocked, markRestored, modelChanged };

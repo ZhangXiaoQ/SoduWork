@@ -31,6 +31,17 @@ function sources(directory) {
   });
 }
 
+function localImports(source) {
+  const modules = [...source.matchAll(/(?:from\s*|import\s*\(?\s*|@import\s*)['"]([^'"]+)['"]/g)].map(match => match[1]);
+  const workers = [...source.matchAll(/new\s+Worker\s*\(\s*new\s+URL\s*\(\s*(['"])([^'"]+)\1\s*,\s*import\.meta\.url/g)].map(match => match[2]);
+  return [...modules, ...workers].filter(value => value.startsWith('.'));
+}
+
+test('admin module graph follows bundled worker URLs as well as static and lazy imports', () => {
+  assert.deepEqual(localImports("import x from './a.js'; import('./b.js'); new Worker(new URL('./parse.worker.js', import.meta.url), { type: 'module' });"), ['./a.js', './b.js', './parse.worker.js']);
+  assert.deepEqual(localImports("new URL('./not-a-worker.js', import.meta.url); new Worker(new URL('https://external.test/x.js', import.meta.url));"), []);
+});
+
 test('retired approval and admin page implementations are removed, not only hidden', () => {
   for (const file of retired) assert.equal(fs.existsSync(path.join(root, file)), false, file);
 });
@@ -39,8 +50,7 @@ test('every admin source module is reachable and every local import resolves', (
   const files = sources(path.join(root, 'hub-frontend/src')), graph = new Map();
   const pending = [...files], known = new Set(files);
   for (const file of pending) {
-    const imports = [...fs.readFileSync(file, 'utf8').matchAll(/(?:from\s*|import\s*\(?\s*|@import\s*)['"]([^'"]+)['"]/g)]
-      .map(match => match[1]).filter(value => value.startsWith('.'));
+    const imports = localImports(fs.readFileSync(file, 'utf8'));
     graph.set(file, imports.map(value => {
       const target = path.resolve(path.dirname(file), value);
       const resolved = [target, target + '.js', target + '.jsx', target + '.css']

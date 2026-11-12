@@ -56,6 +56,12 @@ if (typeof electron === 'string') {
     const appOneContents = appOne.webContents, chromeTwoContents = chromeTwo.webContents;
     await until(() => appOne.webContents.getTitle() === 'Isolated app' && appTwo.webContents.getTitle() === 'Isolated app', 'apps loaded');
     await until(() => !composerOne.webContents.isLoading() && !composerTwo.webContents.isLoading(), 'composers loaded');
+    for (const composer of [composerOne, composerTwo]) {
+      assert.ok(composer.webContents.getURL().endsWith('app-composer-launcher.html'), 'unused composer starts with lightweight launcher');
+      await js(composer.webContents, 'document.querySelector("button").click()');
+      await until(() => composer.webContents.getURL().includes('/composer.html') && !composer.webContents.isLoading(), 'conversation loads on demand');
+      await js(composer.webContents, 'soduWorkAPI.workPreview.composerSetMode({expanded:false})');
+    }
     await js(appOne.webContents, 'window.lifecycleMarker="one";draft.value="app-one draft"');
     await js(appTwo.webContents, 'window.lifecycleMarker="two";draft.value="app-two draft"');
     await js(composerOne.webContents, 'draft.value="composer-one draft"');

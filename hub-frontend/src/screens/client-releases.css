@@ -71,7 +71,7 @@
 
 .cr-time { color: var(--ink-3); font-size: max(var(--font-min-readable, 14.5px), 12.5px);
   font-variant-numeric: tabular-nums; }
-.cr-actions { text-align: right; }
+.cr-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; text-align: right; }
 
 .cr-empty { border: 1px solid var(--line); border-radius: 13px; background: var(--surface);
   padding: 30px 20px; text-align: center; }

@@ -74,7 +74,7 @@
     if (bridge && typeof bridge.choosePackage === 'function') {
       try {
         const picked = await bridge.choosePackage();
-        if (!picked || picked.canceled) return;
+        if (!picked || picked.canceled) { callbacks.cancel?.(); return; }
         if (picked.kind === 'draft') await callbacks.local(picked.body, await api.preflightPluginDraft(picked.body));
         else {
           const bytes = Uint8Array.from(atob(picked.content), c => c.charCodeAt(0));
@@ -91,10 +91,10 @@
       }
     }
     const input = document.createElement('input');
-    input.type = 'file'; input.accept = '.json,.zip,.soduwork-plugin,application/json,application/zip';
+    input.type = 'file'; input.accept = '.json,.zip,.soduwork-plugin,.soduwork-plugin,.soduwork-plugin,application/json,application/zip';
     input.addEventListener('change', async () => {
       const file = input.files && input.files[0];
-      if (!file) return;
+      if (!file) { callbacks.cancel?.(); return; }
       try {
         if (file.size > MAX_PACKAGE_BYTES) throw new Error('插件文件超过10MB，请精简资源后重试');
         if (/\.json$/i.test(file.name || '')) {
@@ -103,6 +103,7 @@
         } else await callbacks.archive(file, await preflightArchive(api, file));
       } catch (error) { callbacks.error(error); }
     });
+    input.addEventListener('cancel', () => callbacks.cancel?.());
     input.click();
   }
   const repairs = new Set();

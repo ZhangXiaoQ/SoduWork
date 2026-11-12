@@ -1,0 +1,92 @@
+'use strict';
+const electron=require('electron');
+if(typeof electron==='string'){
+  const env={...process.env};for(const key of ['ELECTRON_RUN_AS_NODE','NODE_OPTIONS','ELECTRON_NO_ATTACH_CONSOLE','CHROME_CRASHPAD_PIPE_NAME','CHROME_CRASHPAD_PIPE_HANDLE'])delete env[key];
+  const result=require('node:child_process').spawnSync(electron,[__filename],{env,windowsHide:true,stdio:'inherit',timeout:45000});process.exit(result.status??1);
+}
+const {app,BrowserWindow}=electron,fs=require('node:fs'),path=require('node:path'),os=require('node:os'),assert=require('node:assert/strict');
+const {pathToFileURL}=require('node:url'),root=fs.mkdtempSync(path.join(os.tmpdir(),'soduwork-import-loading-'));
+app.setPath('userData',path.join(root,'profile'));app.disableHardwareAcceleration();let win;
+const report={ok:false,evidence:root,boundary:'Production Chromium import dialog and picker adapter; deferred fixture IPC; no native picker, account or package install.'};
+app.whenReady().then(async()=>{
+  const asset=file=>pathToFileURL(path.resolve(__dirname,'..',file)).href;
+  fs.writeFileSync(path.join(root,'index.html'),'<!doctype html><meta charset="utf-8">'+
+    ['theme/variables.css','components/panels/panels-capabilities.css','components/panels/panels-apps.css'].map(file=>'<link rel="stylesheet" href="'+asset(file)+'">').join('')+
+    ['components/panels/panels-plugin-maker-utils.js','components/panels/panels-apps.js'].map(file=>'<script src="'+asset(file)+'"></script>').join(''));
+  win=new BrowserWindow({show:false,width:900,height:700,webPreferences:{contextIsolation:true,sandbox:true,backgroundThrottling:false}});
+  await win.loadFile(path.join(root,'index.html'));const js=code=>win.webContents.executeJavaScript(code);
+  const wait=async(code)=>{for(let i=0;i<100;i++){if(await js(code))return;await new Promise(r=>setTimeout(r,10));}throw Error('Timeout: '+code);};
+  await js('window.picks=[];window.checks=[];window.soduWorkAPI={personalPlugins:{choosePackage:()=>new Promise((resolve,reject)=>picks.push({resolve,reject}))}};window.SoduWorkAPI={preflightPluginDraft:()=>new Promise((resolve,reject)=>checks.push({resolve,reject})),preflightPluginArchive:()=>new Promise((resolve,reject)=>checks.push({resolve,reject}))};void 0');
+  const begin=()=>js('void installAppPackage()');
+  const visible='!appsModalLayer.hidden';
+  await begin();assert.equal(await js(visible),true,'modal appears before selection/read finishes');
+  assert.equal(await js('appsModalLayer.getAttribute("aria-busy")'),'true');
+  assert.equal(await js('!!document.querySelector("#appsModalBody progress:not([value])")'),true);
+  await wait('picks.length===1');
+  await js('picks[0].resolve({kind:"draft",body:{name:"Slow package",version:"1.0.0"}})');
+  await wait('checks.length===1');assert.equal(await js('!!document.getElementById("appsModalInstall")'),false);
+  await js('checks[0].resolve({ok:true,manifest:{name:"Slow package",version:"1.0.0"}})');
+  await wait('!!document.getElementById("appsModalInstall")');
+  assert.equal(await js('appsModalLayer.hasAttribute("aria-busy")'),false);
+  assert.match(await js('appsModalBody.textContent'),/Slow package/);
+  await begin();await wait('picks.length===2');await js('closeAppsModal();picks[1].resolve({kind:"draft",body:{name:"late"}})');
+  await wait('checks.length===2');await js('checks[1].resolve({ok:true,manifest:{name:"late"}})');
+  await new Promise(r=>setTimeout(r,30));assert.equal(await js(visible),false,'late check cannot reopen closed dialog');
+  await begin();await wait('picks.length===3');
+  await begin();await wait('picks.length===4');
+  await js('picks[2].reject(Error("stale error"))');await new Promise(r=>setTimeout(r,30));
+  assert.equal(await js('appsModalLayer.getAttribute("aria-busy")'),'true','old error cannot replace new loading');
+  await js('picks[3].reject(Error("read failed"))');await wait('!!document.getElementById("appsModalRetry")');
+  assert.match(await js('appsModalBody.textContent'),/read failed/);
+  await js('document.getElementById("appsModalRetry").click()');await wait('picks.length===5');
+  await js('picks[4].resolve({canceled:true})');await wait('appsModalLayer.hidden');
+  await begin();await wait('picks.length===6');await js('picks[5].resolve({kind:"archive",name:"test.soduwork-plugin",content:"eA=="})');await wait('checks.length===3');
+  await js('checks[2].resolve({ok:false,sourceKind:"personal",personalDraft:{name:"Blocked"},checks:[{ok:false,label:"invalid package"}]})');
+  await wait('appsModalBody.textContent.includes("invalid package")');assert.equal(await js('!!document.getElementById("appsModalInstall")'),false);
+  await begin();await wait('picks.length===7');
+  win.setContentSize(390,650);await new Promise(r=>setTimeout(r,80));
+  assert.equal(await js('document.documentElement.scrollWidth<=innerWidth'),true);
+  fs.writeFileSync(path.join(root,'loading-narrow.png'),(await win.webContents.capturePage(undefined,{stayHidden:true,stayAwake:true})).toPNG());
+  await js('appsModalCancel.click();picks[6].resolve({canceled:true})');
+  await js('delete soduWorkAPI.personalPlugins.choosePackage;window.nativeCreate=document.createElement.bind(document);document.createElement=function(tag){const el=nativeCreate(tag);if(tag==="input"){window.fallbackInput=el;el.click=()=>{};}return el;};void 0');
+  await begin();await wait('!!window.fallbackInput');await js('fallbackInput.dispatchEvent(new Event("cancel"))');await wait('appsModalLayer.hidden');
+  await js('window.fallbackInput=null');await begin();await wait('!!window.fallbackInput');
+  await js('Object.defineProperty(fallbackInput,"files",{value:[new File(["{}"],"test.json",{type:"application/json"})]});fallbackInput.dispatchEvent(new Event("change"))');
+  await wait('checks.length===4');assert.equal(await js('appsModalLayer.getAttribute("aria-busy")'),'true');
+  await js('checks[3].resolve({ok:true,manifest:{name:"Fallback package"}})');await wait('!!document.getElementById("appsModalInstall")');
+  assert.match(await js('appsModalBody.textContent'),/Fallback package/);
+  await js('closeAppsModal();document.createElement=nativeCreate;void 0');
+  for(const file of [...JSON.parse(fs.readFileSync(path.resolve(__dirname,'../core/locales/manifest.json'),'utf8')).map(name=>'locales/'+name),'i18n-dom.js','i18n.js']){
+    await js(fs.readFileSync(path.resolve(__dirname,'../core',file),'utf8')+'\nvoid 0;');
+  }
+  await js('SoduWorkI18n.setLocale("en-US");soduWorkAPI.personalPlugins.choosePackage=()=>new Promise((resolve,reject)=>picks.push({resolve,reject}));void 0');
+  await begin();await wait('picks.length===8');
+  await wait('appsModalSub.textContent==="Preparing app package…"');
+  assert.equal(await js('document.querySelector("#appsModalBody progress").getAttribute("aria-label")'),'Reading app package');
+  assert.equal(await js('/[\\u3400-\\u9fff]/.test(appsModalLayer.innerText)'),false,'English loading has no Chinese UI');
+  await js('SoduWorkI18n.setLocale("zh-CN")');await wait('appsModalSub.textContent==="正在准备应用包…"');
+  await js('SoduWorkI18n.setLocale("en-US");picks[7].resolve({kind:"draft",body:{name:"用户应用",version:"1.0.0"}})');await wait('checks.length===5');
+  await js('checks[4].resolve({ok:true,manifest:{name:"用户应用",version:"1.0.0",description:"用户原文说明"}})');
+  await wait('document.getElementById("appsModalInstall")?.textContent==="Install on this device"');
+  assert.equal(await js('appsModalBody.querySelector("[data-user-content]").textContent'),'用户应用');
+  assert.equal(await js('appsModalBody.querySelector("p[data-user-content]").textContent'),'用户原文说明');
+  report.installEnglishUI=await js('(()=>{const clone=appsModalLayer.cloneNode(true);clone.querySelectorAll("[data-user-content]").forEach(node=>node.remove());return clone.textContent})()');
+  assert.equal(/[\u3400-\u9fff]/.test(report.installEnglishUI),false,'English confirmation preserves Chinese user content but translates host UI');
+  await js('SoduWorkAPI.createPluginDraft=()=>new Promise(resolve=>window.finishInstall=resolve);document.getElementById("appsModalInstall").click();void 0');
+  await wait('document.getElementById("appsModalInstall").textContent==="Installing…"');
+  await js('closeAppsModal();finishInstall({ok:true,plugin:{name:"用户应用"}})');
+  await begin();await wait('picks.length===9');await js('picks[8].reject(Error("fixture read error"))');
+  await wait('document.getElementById("appsModalRetry")?.textContent==="Choose another file"');
+  assert.equal(await js('/[\\u3400-\\u9fff]/.test(appsModalLayer.innerText)'),false,'English read error has no Chinese host UI');
+  await js('closeAppsModal()');
+  await js('confirmAppInstall({}, {ok:true,manifest:{version:"1.0.0"}})');
+  await wait('appsModalBody.textContent.includes("Untitled app")');
+  assert.match(await js('appsModalBody.textContent'),/No description/);
+  assert.equal(await js('/[\\u3400-\\u9fff]/.test(appsModalLayer.innerText)'),false,'missing name and description use localized defaults');
+  await js('closeAppsModal()');
+  report.ok=true;report.cases=['immediate loading before picker/read','confirmation after deferred checks','cancel ignores late success','superseded request ignores late error','inline error and retry selection','native picker cancel closes loading','invalid package cannot install','narrow loading layout','fallback picker cancellation','fallback file read and checks stay in dialog'];
+  report.cases.push('English loading and live locale changes','English confirmation preserves Chinese app name/description','English installation status','English read error and retry');
+  report.cases.push('English fallback app name and description');
+}).catch(error=>{report.error=String(error.stack||error);}).finally(()=>{
+  win?.destroy();fs.writeFileSync(path.join(root,'report.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report));app.exit(report.ok?0:1);
+});

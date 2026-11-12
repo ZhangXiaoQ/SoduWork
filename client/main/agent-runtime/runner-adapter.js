@@ -126,6 +126,8 @@ function _fatalHarnessText(value) {
   const clean = _text(value, 20000);
   const proxy = _proxyError(clean);
   if (proxy) return proxy;
+  if (/^unexpected status\s+404\b/i.test(clean) && /\/v1\/responses\b/i.test(clean))
+    return '当前模型网关不支持 Codex Harness 所需的 Responses 接口，请更换支持 Responses 的模型，或改用 OpenCode、Pi 等底座。';
   return /^(?:unexpected status\s+[45]\d\d\b|request timed out\b|error sending request\b)/i.test(clean)
     ? clean : '';
 }
@@ -278,6 +280,10 @@ function _nativeExecution(adapterId, options) {
 }
 
 function _snapshot(state) {
+  const turn = state.turnQueue?.active();
+  const controlled = turn?.options.controlled && !turn.options.pluginDebug &&
+    state.taskExecutions?.find(row => row.taskId === turn.options.taskId);
+  const controlledView = require('../pi-session/controlled-execution-snapshot.cjs').project(controlled, turn?.id);
   const executing = state.status === 'streaming';
   const running = executing || state.status === 'queued' || Boolean(state.pendingPermissions?.length);
   const now = Date.now();
@@ -294,12 +300,12 @@ function _snapshot(state) {
   const metrics = require('../pi-session/turn-metrics').collector(state, state._turnMetricsCache ||= {}, 0);
   state.messages.forEach(metrics.visit);
   return {
-    status: state.status,
+    status: controlledView?.status || state.status,
     activePlugins: state.activePluginIds ? state.activePluginIds.slice() : [],
     ...(state.thinking ? { thinking: { ...state.thinking, levels: state.thinking.levels.slice() } } : {}),
     ...(state.modelSelection ? { modelSelection: state.modelSelection.view() } : {}),
     ...(state.taskBindings ? state.taskBindings.view() : {}),
-    statusText: state.statusText,
+    statusText: controlledView?.statusText ?? state.statusText,
     messages: state.messages.map((row) => ({ ...row,
       attachments: attachmentContract.publicFiles(row.attachments),
       blocks: Array.isArray(row.blocks) ? row.blocks.map((block) => ({ ...block })) : row.blocks })),
@@ -330,7 +336,7 @@ function _snapshot(state) {
     fileChanges: state.fileChanges || null,
     pendingUi: state.pendingPermissions?.length ? { ...state.pendingPermissions[0], method: 'permission' } : null,
     completion: state.completion ? { ...state.completion } : null,
-    running,
+    running: controlledView ? controlledView.execution.running : running,
     queue,
     queued: queue.length,
     execution: {
@@ -384,6 +390,7 @@ function _snapshot(state) {
         workKind: state.adapterId, updatedAt: state.updatedAt,
         phases: [], tasks: [], progress: [],
       },
+      ...controlledView?.execution,
     },
   };
 }
@@ -414,10 +421,13 @@ async function createRunnerHandle(request, defaults, initialSession) {
   const app = opts.app || defaults.app;
   const identity = opts.identity || request.identity;
   const alias = String(opts.ref || 'chat-' + Date.now().toString(36));
-  const dispatchId = 'chat:' + alias + ':' + adapterId;
+  const dispatchId = String(opts.nativeDispatchId || 'chat:' + alias + ':' + adapterId);
   const predictedRef = _uuidV5(EXECUTION_NAMESPACE, dispatchId);
   const resumedRef = String(opts.resumePath || '');
   const runnerRef = resumedRef || predictedRef;
+  const resumeNative = Boolean(resumedRef && opts.nativeSessionStarted !== false);
+  if (opts.nativeDispatchId && predictedRef !== runnerRef)
+    throw new RuntimeContractError('RUNNER_SEGMENT_IDENTITY_INVALID', '原会话执行状态尚未确认，请稍后再次核实');
   // File discovery is scoped to the conversation, while startedAt tracks the
   // current user turn. Reopened legacy archives follow Pi's workspace recovery.
   let outputSince = resumedRef ? 0 : Date.now();
@@ -495,7 +505,7 @@ async function createRunnerHandle(request, defaults, initialSession) {
     accessPolicy: require('../access-control/policy').normalize(opts.accessPolicy, cwd),
     accessControl,
     pendingPermissions: [],
-    accessRestorePending: Boolean(resumedRef && !opts.accessPolicy),
+    accessRestorePending: Boolean(resumeNative && !opts.accessPolicy),
     nextAccessPolicy: null,
     model: prepared.model, lastExecutionModelId: prepared.model.id,
     agentExecution: _nativeExecution(adapterId, { ...opts, modelName,
@@ -508,7 +518,7 @@ async function createRunnerHandle(request, defaults, initialSession) {
     goalVisible: String(opts.intent || '') === 'goal', goalPaused: false, goalLimit: null,
     selectedSkills: Array.isArray(opts.skillDirs) ? opts.skillDirs.slice() : [],
     capabilityIds: Array.isArray(opts.capabilityIds) ? opts.capabilityIds.slice() : [],
-    status: 'idle', statusText: resumedRef ? '正在接回 ' + displayName + ' 会话…' : '',
+    status: 'idle', statusText: resumeNative ? '正在接回 ' + displayName + ' 会话…' : '',
     messages: [], tools: [], usage: null, contextUsage: null,
     activePluginIds: _pluginIds(opts.activePluginIds),
     contextWindow: preparedContext.contextWindow,
@@ -519,7 +529,7 @@ async function createRunnerHandle(request, defaults, initialSession) {
     runtimeError: '',
     protocolIssue: null,
     seq: 0, step: 0, round: 1, startedAt: 0, updatedAt: Date.now(), lastActivityAt: 0,
-    started: Boolean(resumedRef), dispatchReady: Boolean(resumedRef),
+    started: resumeNative, dispatchReady: resumeNative,
     cancelRequested: false, manualStopRequested: false, stopSent: false,
     queuePosition: 0, queueClass: '', turnSerial: 0,
     disposed: false, polling: false, preparingPlugins: false, timer: null, turnQueue,
@@ -750,8 +760,9 @@ async function createRunnerHandle(request, defaults, initialSession) {
       const isError = !accessCancelled && (typeof item.isError === 'boolean' ? item.isError
         : /error|stderr|\u9519\u8bef/i.test(String(item.tool || '')));
       const resultState = accessCancelled ? 'cancelled' : isError ? 'error' : 'done';
+      const result = isError ? require('../access-control/errors').message(text) : text;
       if (current) {
-        current.result = text;
+        current.result = result;
         current.isError = isError;
         current.state = resultState;
         if (accessCancelled) current.cancelReason = 'access-change';
@@ -761,7 +772,7 @@ async function createRunnerHandle(request, defaults, initialSession) {
         state.tools.push({ ...agentSource.fields({ agentId: adapterId }),
           id: 'runner-' + String(item.seq || state.seq + 1),
           name: String(item.tool || (isError ? 'error' : 'output')),
-          args: {}, partial: '', result: text, isError,
+          args: {}, partial: '', result, isError,
           state: resultState, ...(accessCancelled ? { cancelReason: 'access-change' } : {}),
           after: Math.max(0, state.messages.length - 1),
           startedAt: eventAt, lastProgressAt: eventAt, endedAt: eventAt,
@@ -1602,6 +1613,8 @@ async function createRunnerHandle(request, defaults, initialSession) {
     historyRow() {
       return { ...taskBindings.view(), id: runnerRef, adapterId, title: state.title ||
         (state.goal ? _title(state.goal) : ''),
+        nativeSessionStarted: state.started || taskJournal.nativeHistoryObserved,
+        nativeDispatchId: predictedRef === runnerRef ? dispatchId : '',
         usedHarnesses: require('../conversation/used-harnesses').fromSnapshot(state, adapterId),
         cwd, at: state.updatedAt, count: state.messages.length, state: state.status };
     },
@@ -1774,7 +1787,7 @@ async function createRunnerHandle(request, defaults, initialSession) {
     },
   };
 
-  if (resumedRef) {
+  if (resumeNative) {
     state.startedAt = 0;
     state.status = 'streaming';
     setTimeout(poll, 0);
@@ -1842,21 +1855,22 @@ function getRunnerSessionDetails(runtimeSession) {
   return RUNNER_SESSION_DETAILS.get(runtimeSession) || null;
 }
 
-function _runnerInventory(runtime) {
+function _runnerInventory(runtime, { force = false } = {}) {
   let slot = RUNNER_INVENTORIES.get(runtime);
   if (!slot) {
     slot = { at: 0, runs: [], pending: null, revision: 0 };
     RUNNER_INVENTORIES.set(runtime, slot);
   }
   if (slot.pending) return slot.pending;
-  if (slot.at && Date.now() - slot.at < 750) return Promise.resolve(slot.runs);
+  if (!force && slot.at && Date.now() - slot.at < 750) return Promise.resolve(slot.runs);
   const revision = slot.revision;
   slot.pending = Promise.resolve(runtime.rpc('runtime.sessions', {}, 10000)).then((reply) => {
     if (!reply || reply.ok === false) {
       throw new Error(String(reply && reply.error || '读不到 Runner 会话目录'));
     }
+    if (!Array.isArray(reply.data?.runs)) throw new Error('Runner 会话目录响应无效');
     if (slot.revision === revision) {
-      slot.runs = Array.isArray(reply.data && reply.data.runs) ? reply.data.runs : [];
+      slot.runs = reply.data.runs;
       slot.at = Date.now();
     }
     return slot.runs;
@@ -1885,11 +1899,11 @@ function createRunnerRuntimeAdapter(options) {
   const displayName = String(runtimeSpec.displayName);
   const defaults = { ...opts, runtimeSpec };
   const isChat = row => row.cli === adapterId && /^chat-/.test(String(row.taskId || ''));
-  async function historyRow(row) {
+  async function historyRow(row, metadataOnly = false) {
     return {
       id: row.ref, path: row.ref, adapterId,
-      usedHarnesses: require('../conversation/used-harnesses').merge([adapterId],
-        await taskOutputJournal.usedHarnesses(opts.app, row.ref).catch(() => [])),
+      ...(!metadataOnly ? { usedHarnesses: require('../conversation/used-harnesses').merge([adapterId],
+        await taskOutputJournal.usedHarnesses(opts.app, row.ref).catch(() => [])) } : {}),
       cwd: row.workDir || '', title: row.title || displayName + ' 工作会话',
       createdAt: Math.round(Number(row.started || row.ended || 0) * 1000),
       at: Math.round(Number(row.ended || row.started || 0) * 1000),
@@ -1920,9 +1934,51 @@ function createRunnerRuntimeAdapter(options) {
       return wrapRunnerSession(handle, request, { ok: true }, runtimeSpec);
     },
     async resumeSession(request) {
-      const resumePath = String(_legacyOptions(request).resumePath || '');
+      let options = _legacyOptions(request);
+      const resumePath = String(options.resumePath || '');
       let initialSession = null;
-      if (resumePath) {
+      if (resumePath && (options.verifyLegacySegment || options.nativeSessionStarted === false)) {
+        // Controlled task output does not prove that this native segment was
+        // dispatched. Verify both the archive and durable admission journal;
+        // a timeout, an old Runner or an active admission must remain fenced.
+        let probe;
+        try { probe = await runtime.rpc('job.session', { ref: resumePath, since: 0, limit: 1 }, 5000); }
+        catch (error) { if (_resumeCredentialError(error)) throw error; }
+        const failure = probe?.error || probe?.data?.error;
+        if (_resumeCredentialError(failure)) throw Error(String(failure));
+        if (probe?.ok === true && probe.data?.ok === false && !probe.data?.items?.length) {
+          let proof;
+          try { proof = await runtime.rpc('job.has', { ref: resumePath }, 5000); }
+          catch (_) { /* Missing proof never authorizes a new dispatch. */ }
+          const absent = proof?.ok === true && proof.data?.has === false &&
+            proof.data.inflight === false && proof.data.persisted === false &&
+            proof.data.admissionDurable === true && Boolean(proof.data.bootId);
+          if (absent) {
+            const dormantOptions = { ...options, nativeSessionStarted: false };
+            const dormantRequest = { ...request, native: { ...request.native,
+              runner: { ...request.native?.runner, openOptions: dormantOptions } } };
+            const handle = await createRunnerHandle(dormantRequest, defaults);
+            if (!handle.historyRow().nativeSessionStarted) {
+              if (options.nativeDispatchId) return wrapRunnerSession(handle, request, { ok: true, resumed: true }, runtimeSpec);
+              // Legacy manifests overwrote the original dispatch alias on reopen.
+              // Preserve their controlled transcript in the public conversation
+              // before replacing only the never-admitted native segment.
+              const error = new RuntimeContractError('RUNNER_SEGMENT_NOT_ADMITTED', 'Native segment has no execution admission');
+              error.snapshot = handle.snapshot(); error.taskBindings = handle.taskBindings;
+              handle.close();
+              throw error;
+            }
+            // A local native cursor contradicts absence. Never replace a
+            // previously dispatched segment merely because its archive vanished.
+            handle.close();
+          }
+        }
+        options = { ...options, nativeSessionStarted: true };
+        request = { ...request, native: { ...request.native,
+          runner: { ...request.native?.runner, openOptions: options } } };
+        if (probe?.ok && probe.data?.ok !== false && Array.isArray(probe.data?.items)) initialSession = probe;
+      }
+      if (resumePath && !initialSession) {
         // Check immediately available credential errors, but never wait for a
         // long-polling job.session response before creating the handle. The
         // normal polling loop remains authoritative for delayed responses.
@@ -1947,22 +2003,22 @@ function createRunnerRuntimeAdapter(options) {
       const handle = await createRunnerHandle(request, defaults, initialSession);
       return wrapRunnerSession(handle, request, { ok: true, resumed: true }, runtimeSpec);
     },
-    async historyEntry(id) {
+    async historyEntry(id, { strict = false } = {}) {
       try {
-        const row = (await _runnerInventory(runtime)).find(row => row.ref === id && isChat(row));
+        const row = (await _runnerInventory(runtime, { force: strict })).find(row => row.ref === id && isChat(row));
         return { ok: true, chats: row ? [await historyRow(row)] : [] };
       } catch (error) {
         return { ok: false, reason: String(error && error.message || error), chats: [] };
       }
     },
-    async history(limit = 50) {
+    async history(limit = 50, { strict = false, metadataOnly = false } = {}) {
       try {
-        const runs = await _runnerInventory(runtime);
+        const runs = await _runnerInventory(runtime, { force: strict });
         const selected = runs.filter(isChat).slice(0, Math.max(1, Number(limit) || 50));
         const chats = [];
         // Bound concurrent journal streams when the full sidebar is requested.
         for (let start = 0; start < selected.length; start += 16)
-          chats.push(...await Promise.all(selected.slice(start, start + 16).map(historyRow)));
+          chats.push(...await Promise.all(selected.slice(start, start + 16).map(row => historyRow(row, metadataOnly))));
         return { ok: true, chats };
       } catch (error) {
         return { ok: false, reason: String(error && error.message || error), chats: [] };

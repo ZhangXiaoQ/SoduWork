@@ -126,3 +126,51 @@ test('opening an idle native transcript schedules its first sync without another
   assert.equal(sent.length, 1);
   assert.equal(sent[0].messages[0].text, 'Existing reply');
 });
+
+for (const switchDuringAck of [false, true]) test(`legacy deletion replay stays deleted across restart; account switch=${switchDuringAck}`, async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-sync-tombstone-'));
+  const file = path.join(root, 'outbox.json');
+  const identity = require('../../tests/helpers/platform-session-fixture.cjs').identity();
+  const bob = require('../../tests/helpers/platform-session-fixture.cjs').identity('two');
+  const scope = actor => JSON.stringify([actor.hub, accountScopeKey(actor), actor.clientId]);
+  const key = JSON.stringify([identity.hub, accountScopeKey(identity), identity.clientId, 'native-deleted']);
+  let actor = identity, controller, store = createStore(file);
+  t.after(async () => { await controller?.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const source = { sourceClientId: identity.clientId, sourceSessionId: 'native-deleted', sourceEpoch: 'epoch',
+    sourceRevision: 4, title: 'Deleted source', state: 'idle', deleted: true, messages: [] };
+  store.setSession(key, { ...source, hub: identity.hub, clientId: identity.clientId,
+    ownerKey: accountScopeKey(identity), conversationId: 'account-deleted' });
+  store.enqueue({ id: 'legacy-delete', ownerKey: accountScopeKey(identity), hub: identity.hub,
+    clientId: identity.clientId, conversationId: 'account-deleted', body: source });
+  const foreign = { id: 'account-bob', title: 'Other account', revision: 6 };
+  store.saveDirectory(scope(bob), [foreign], 6);
+  const sent = [], changes = [];
+  const fetch = async (captured, url, request) => {
+    if (request.method === 'POST') {
+      sent.push({ captured, body: JSON.parse(request.body) });
+      if (switchDuringAck) actor = bob;
+      return { ok: true, status: 200, json: async () => ({ ok: true,
+        conversationId: 'account-deleted', sourceRevision: 4 }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ items: [{ ...source,
+      id: 'account-deleted', revision: 10 }], cursor: 10, hasMore: false }) };
+  };
+  controller = create({ app: {}, store, identityOf: async () => actor, fetch });
+  controller.onChange((_id, row) => changes.push(row));
+  assert.equal((await controller.flush()).pending, 0);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].captured, identity);
+  assert.equal(sent[0].body.deleted, true);
+  assert.deepEqual(store.directory(scope(bob)).items, [foreign]);
+  assert.equal(changes.length, switchDuringAck ? 0 : 1);
+  if (!switchDuringAck) assert.equal(changes[0].deleted, true);
+  await controller.close();
+  actor = identity; store = createStore(file);
+  controller = create({ app: {}, store, identityOf: async () => actor, fetch });
+  controller.bind({ sessionId: 'native-deleted', snapshot: () => ({ status: 'idle',
+    messages: [{ role: 'assistant', text: 'Old native transcript remains' }] }) }, identity);
+  assert.equal((await controller.flush()).pending, 0);
+  assert.equal(sent.length, 1, 'a reopened native transcript cannot recreate the deleted source');
+  assert.deepEqual((await controller.history()).chats, []);
+  assert.equal(store.directory(scope(identity)).items.find(row => row.id === 'account-deleted').deleted, true);
+});

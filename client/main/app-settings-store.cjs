@@ -89,7 +89,17 @@ function saveConnection(binding, contributionId, connection) {
     connections[name] = { server: connection.server, url: target.href, credentialKey: key(connection.credentialKey) };
   } else delete connections[name];
   if (JSON.stringify(connections) === JSON.stringify(row.connections || {})) return;
-  write(binding, { ...row, connections, revision: row.revision + 1, updatedAt: new Date().toISOString() });
+  write(binding, { ...row, connections, connectionRevision: row.revision + 1, revision: row.revision + 1, updatedAt: new Date().toISOString() });
+}
+// MCP authority follows its credential and declared inputs, not UI preferences.
+// Per-key versions also reject a credential changed away and then back.
+function mcpRevision(row, installed, credentialKey) {
+  const schema = installed?.jiyong || installed?.localDraft?.jiyong;
+  const keys = [...new Set([credentialKey, 'accountId', ...(schema?.mcp?.bindings || []).map(b => b.parameter)])].sort();
+  return crypto.createHash('sha256').update(JSON.stringify({
+    connection: row.connectionRevision ?? 0, connections: row.connections || {},
+    keys: keys.map(k => [k, row.keyRevisions?.[k] ?? 0, row.values[k]]),
+  })).digest('hex');
 }
 function update(binding, input) {
   const options = normalize(input), row = read(binding);
@@ -99,7 +109,11 @@ function update(binding, input) {
   if (Object.keys(values).length > 100 || Buffer.byteLength(JSON.stringify(values)) > 65536) throw Error('即用设置超过大小限制');
   const secretKeys = [...new Set([...(row.secretKeys || []), ...options.secretKeys, ...Object.keys(values).filter(k => SECRET.test(k) || sensitive(values[k]))])].filter(k => Object.hasOwn(values, k));
   if (JSON.stringify(values) === JSON.stringify(row.values) && JSON.stringify(secretKeys) === JSON.stringify(row.secretKeys)) return publicRecord(row);
-  const next = { ...row, values, secretKeys, revision: row.revision + 1, updatedAt: new Date().toISOString() };
+  const keyRevisions = { ...(row.keyRevisions || {}) };
+  for (const k of new Set([...Object.keys(row.values), ...Object.keys(values)])) {
+    if (JSON.stringify(row.values[k]) !== JSON.stringify(values[k])) keyRevisions[k] = row.revision + 1;
+  }
+  const next = { ...row, values, secretKeys, keyRevisions, revision: row.revision + 1, updatedAt: new Date().toISOString() };
   write(binding, next);
   return publicRecord(next);
 }
@@ -109,4 +123,4 @@ function saveHosted(binding, installed) {
   if (JSON.stringify(row.hosted) === JSON.stringify(hosted)) return;
   write(binding,{...row,hosted});
 }
-module.exports = { configure, normalize, read, get, update, scope, publicRecord, saveConnection, saveHosted };
+module.exports = { configure, normalize, read, get, update, scope, publicRecord, saveConnection, saveHosted, mcpRevision };

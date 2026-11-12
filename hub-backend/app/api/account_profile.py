@@ -27,6 +27,8 @@ from ..services import client_access
 log = logging.getLogger(__name__)
 
 class AccountRoute(APIRoute):
+    conflict_code = "ACCOUNT_CONFLICT"
+    conflict_message = "账号信息发生冲突，请刷新后重试"
     def get_route_handler(self):
         handler = super().get_route_handler()
 
@@ -38,7 +40,7 @@ class AccountRoute(APIRoute):
             except ClientAccessError as exc:
                 raise _access_error(exc) from exc
             except IntegrityError:
-                raise account_security.error(409, "ACCOUNT_CONFLICT", "账号信息发生冲突，请刷新后重试") from None
+                raise account_security.error(409, self.conflict_code, self.conflict_message) from None
         return handle
 
 
@@ -219,13 +221,15 @@ async def change_email(body: EmailChange, client: Client = Depends(authenticated
 
 @router.get("/me/privacy")
 async def privacy(client: Client = Depends(authenticated_client), session: AsyncSession = Depends(get_session)):
+    from ..services.legal_publications import receipt_details
+    evidence = {(item["document"], item["version"]): item for item in await receipt_details(session, client.user_ref)}
     consents = (await session.execute(select(UserConsent).where(UserConsent.user_id == client.user_ref)
                                       .order_by(UserConsent.accepted_at.desc()))).scalars().all()
     requests = (await session.execute(select(AccountPrivacyRequest).where(
         AccountPrivacyRequest.user_id == client.user_ref).order_by(AccountPrivacyRequest.created_at.desc())
         .limit(30))).scalars().all()
     return {"consents": [{"document": row.document, "version": row.version,
-                           "acceptedAt": row.accepted_at.isoformat()} for row in consents],
+                           "acceptedAt": row.accepted_at.isoformat(), **evidence.get((row.document, row.version), {})} for row in consents],
             "documents": (await account_legal.documents(session))["documents"],
             "requests": [account_privacy.public_request(row) for row in requests],
             "scopeSummary": account_privacy.SCOPE_SUMMARY,
@@ -341,12 +345,14 @@ async def delete_account(body: Deletion, client: Client = Depends(authenticated_
 
 @admin_router.get("/account-legal")
 async def admin_legal(session: AsyncSession = Depends(get_session), admin=Depends(require_perm("identity.manage"))):
-    return await account_legal.settings(session)
+    return {**await account_legal.settings(session), "canEdit": bool(admin.is_super)}
 
 
 @admin_router.put("/account-legal")
 async def save_legal(body: LegalSettings, session: AsyncSession = Depends(get_session),
                      admin=Depends(require_perm("identity.manage"))):
+    if not admin.is_super:
+        raise HTTPException(status_code=403, detail="需要超级管理员权限")
     try:
         result = await account_legal.save_settings(session, body.model_dump())
     except ValueError as exc:

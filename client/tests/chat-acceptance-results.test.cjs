@@ -87,6 +87,74 @@ test('approval positions respect native and renderer history windows and untimed
   assert.equal(helper.timeline([entry], [{}, {}, {}, {}])[0].index, 2);
 });
 
+test('direct and requirement-pool approvals follow a completed task output when the gate predates it', () => {
+  const f = fixture();
+  f.window.__teamCap = { meId: 'self' };
+  f.window.TaskTraceApproval = { html: (_rows, _opts, id) => '<button>' + id + '</button>' };
+  f.ctx._collabEntryStatus = () => 'completed';
+  const entries = [
+    { taskId: 'direct-task', nativeTurn: true, task: { createdBy: 'self' }, trace: { approvals: [
+      { id: 'direct:direct-task', action: 'review', status: 'pending', createdAt: 10 },
+    ] } },
+    { taskId: 'pool-task', controlledTurn: true, task: { createdBy: 'self', assigneeUserId: 'self' }, trace: { approvals: [
+      { id: 'pool-review', action: 'review', status: 'pending', createdAt: 25, assignment: { userId: 'self' } },
+    ] } },
+  ];
+  const messages = [
+    { role: 'user', sentAt: 5 },
+    { role: 'assistant', taskId: 'direct-task', taskOutputKey: 'task:direct:result', done: true, sentAt: 20 },
+    { role: 'user', sentAt: 25 },
+    { role: 'assistant', taskId: 'pool-task', taskOutputKey: 'task:pool:result', done: true, sentAt: 40 },
+  ];
+  const helper = f.create();
+  assert.deepEqual(Array.from(helper.timeline(entries, messages), row => row.index), [2, 4]);
+});
+
+test('a pending approval anchor moves after a task output that arrives during streaming', () => {
+  const f = fixture();
+  f.window.__teamCap = { meId: 'self' };
+  f.window.TaskTraceApproval = { html: () => 'Pending' };
+  f.ctx._collabEntryStatus = () => 'completed';
+  const entry = { taskId: 'task', task: { createdBy: 'self' }, trace: { approvals: [
+    { id: 'direct:task', action: 'review', status: 'pending', createdAt: 10 },
+  ] } };
+  const messages = [{ role: 'user', sentAt: 5 }];
+  const helper = f.create();
+  assert.equal(helper.timeline([entry], messages)[0].index, 1);
+  messages.push({ role: 'assistant', taskId: 'task', taskOutputKey: 'task:result', done: true, sentAt: 20 });
+  assert.equal(helper.timeline([entry], messages)[0].index, 2);
+});
+
+test('a review assigned to another executor keeps timestamp ordering', () => {
+  const f = fixture();
+  f.window.__teamCap = { meId: 'reviewer' };
+  f.window.TaskTraceApproval = { html: () => 'Pending' };
+  f.ctx._collabEntryStatus = () => 'completed';
+  const entry = { taskId: 'task', task: { createdBy: 'reviewer', assigneeUserId: 'executor' }, trace: { approvals: [
+    { id: 'review', action: 'review', status: 'pending', createdAt: 10 },
+  ] } };
+  const messages = [
+    { role: 'user', sentAt: 5 },
+    { role: 'assistant', taskId: 'task', taskOutputKey: 'task:result', done: true, sentAt: 20 },
+  ];
+  assert.equal(f.create().timeline([entry], messages)[0].index, 1);
+});
+
+test('an unassigned pool review does not infer the creator as reviewer', () => {
+  const f = fixture();
+  f.window.__teamCap = { meId: 'self' };
+  f.window.TaskTraceApproval = { html: () => 'Pending' };
+  f.ctx._collabEntryStatus = () => 'completed';
+  const entry = { taskId: 'pool-task', task: { createdBy: 'self', assigneeUserId: 'self' }, trace: { approvals: [
+    { id: 'pool-review', action: 'review', status: 'pending', createdAt: 10 },
+  ] } };
+  const messages = [
+    { role: 'user', sentAt: 5 },
+    { role: 'assistant', taskId: 'pool-task', taskOutputKey: 'task:result', done: true, sentAt: 20 },
+  ];
+  assert.equal(f.create().timeline([entry], messages)[0].index, 1);
+});
+
 test('an approval slot follows a stable projected message key when native indices change', () => {
   const f = fixture();
   f.window.TaskTraceApproval = { html: () => '' };

@@ -318,9 +318,8 @@
       '<span title="' + esc(item.name || '') + '">' + esc(item.name || '主成果') + '</span>');
     if (manifest.url) links.push('<a href="' + esc(manifest.url) + '" target="_blank" rel="noreferrer">打开交付地址</a>');
     const action = ((primary.length || supporting.length) && String(artifact.kind) !== 'code' ?
-      '<button data-tfd-action="download">' + (opts.artifactVersionId ? '下载本次固定成果' : '下载当前成果') + '</button>' : '') + (blocker && blocker.action === 'approval' ?
-      '<button data-tfd-action="' + (opts.variant === 'task' ? 'approval-inline-focus' : 'approval') + '">' +
-        (opts.variant === 'task' ? '查看当前审批' : '去人审专区') + '</button>' : '');
+      '<button data-tfd-action="download">' + (opts.artifactVersionId ? '下载本次固定成果' : '下载当前成果') + '</button>' : '') + (blocker && blocker.action === 'approval' && opts.variant !== 'task' ?
+      '<button data-tfd-action="approval">去人审专区</button>' : '');
     return '<section class="tfd-truth is-' + tone(delivery.state) + '"><i></i><div class="tfd-truth-copy">' +
       '<span>DELIVERY TRUTH · ' + esc(label) + '</span><b>' + esc(title) + '</b><small>' + esc(detail) + '</small>' +
       '<p>' + facts.map((item) => '<em>' + esc(item) + '</em>').join('') + '</p></div>' +

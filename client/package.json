@@ -1,13 +1,13 @@
 {
   "name": "soduwork",
   "productName": "SoduWork",
-  "version": "1.13.13",
+  "version": "1.13.15",
   "description": "SoduWork - \u4f01\u4e1a\u7ea7 AI Native \u5de5\u4f5c\u5e73\u53f0",
   "main": "main.js",
   "scripts": {
     "start": "node scripts/start-client.cjs",
     "start:raw": "electron .",
-    "test": "node --test --test-concurrency=1 --test-timeout=120000 tests/*.test.cjs tests/*.test.js main/agent-runtime/*.test.js main/conversation/*.test.js main/pi-session/*.test.js main/conversation/*.test.cjs main/*.test.cjs",
+    "test": "node --test --test-concurrency=1 --test-timeout=120000 tests/*.test.cjs tests/*.test.js main/agent-runtime/*.test.js main/agent-runtime/*.test.cjs main/conversation/*.test.js main/pi-session/*.test.js main/conversation/*.test.cjs main/*.test.cjs",
     "check:branding": "node ../tools/brand-keyword-gate.cjs",
     "check:layout": "node ../tools/check-repository-layout.cjs",
     "check:source-size": "node ../tools/check-source-size.cjs",
@@ -50,7 +50,6 @@
     "electron-builder": "^26.15.3"
   },
   "build": {
-    "npmRebuild": false,
     "appId": "com.soduwork.app",
     "afterPack": "scripts/prepare-installer.cjs",
     "afterSign": "scripts/prepare-installer.cjs",
@@ -64,12 +63,15 @@
       "index.html",
       "desk.html",
       "app-window-chrome.html",
+      "app-composer-launcher.html",
       "sdk/**/*",
       "desk-boot.js",
       "desk-window.css",
       "api.js",
       "api-library-local.js",
       "version.json",
+      "runtime-manifest.json",
+      "distributions.json",
       "update-trust.json",
       "scripts/patch-pi-extension-cache.cjs",
       "THIRD_PARTY_NOTICES.md",
@@ -212,6 +214,7 @@
       ],
       "icon": "icon.png",
       "category": "public.app-category.productivity",
+      "hardenedRuntime": true,
       "identity": null,
       "artifactName": "SoduWork-${version}-mac-${arch}.${ext}",
       "extraResources": [
@@ -233,7 +236,7 @@
       "icon": "build/icons",
       "category": "Office",
       "executableName": "soduwork",
-      "maintainer": "SoduWork <maintainer@example.com>",
+      "maintainer": "SoduWork <soduwork@mdiri.com>",
       "syncDesktopName": true,
       "artifactName": "SoduWork-${version}-linux.${ext}",
       "extraResources": [

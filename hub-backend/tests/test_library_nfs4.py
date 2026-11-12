@@ -8,7 +8,7 @@ from unittest.mock import patch
 from app.services.library_storage import LibraryStorageError
 
 KEY = "library/users/" + "a" * 64 + "/item/object"
-CONFIG = dict(host="192.0.2.30", port=2049, export="/exports/soduwork-library",
+CONFIG = dict(host="192.0.2.224", port=2049, export="/srv/soduwork-shared/uploads",
               version="4.1", uid=65534, gid=65534, timeout=10, reserved_port=True)
 
 
@@ -182,7 +182,7 @@ class LibraryNfs4Tests(unittest.TestCase):
             self.assertEqual(stream.read(), content[50003:])
             self.assertEqual(stream.read(1), b"")
         url, options = self.sdk.connections[0]
-        self.assertEqual(url, "nfs://192.0.2.30/exports/soduwork-library?version=4.1")
+        self.assertEqual(url, "nfs://192.0.2.224/srv/soduwork-shared/uploads?version=4.1")
         self.assertEqual(options, dict(versions=["4.1"], uid=65534, gid=65534, nfs_port=2049,
                                       noresvport=False, connect_timeout=10, operation_timeout=10))
         self.put(b"replacement")
@@ -351,7 +351,7 @@ class LibraryNfs4Tests(unittest.TestCase):
         config = dict(CONFIG, host="2001:db8::1", reserved_port=False, port=12049)
         self.driver.ensure_ready(config)
         url, options = self.sdk.connections[0]
-        self.assertEqual(url, "nfs://[2001:db8::1]/exports/soduwork-library?version=4.1")
+        self.assertEqual(url, "nfs://[2001:db8::1]/srv/soduwork-shared/uploads?version=4.1")
         self.assertTrue(options["noresvport"])
         self.assertEqual(options["nfs_port"], 12049)
         for export in ("/space here", "/%2e%2e", "/uploads?version=3", "/资料"):

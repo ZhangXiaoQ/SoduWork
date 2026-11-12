@@ -29,7 +29,7 @@ if (typeof electron === 'string') {
     for (const f of JSON.parse(read('core/locales/manifest.json'))) await js(read('core/locales/' + f));
     for (const f of ['core/i18n-dom.js', 'core/i18n.js', 'components/panels/agent-brand.js', 'components/panels/work-composer.js', 'components/panels/chat-session-controls.js', 'components/panels/chat-composer-controls.js']) await js(read(f) + '\nvoid 0;');
     await js(`window.support={supported:true,canChangeDuringSession:true,schema:'soduwork.access-policy/v1',modes:['standard','full','readonly']};
-      window.state={ref:'chat-a',adapterId:'codex-harness',displayName:'Codex Harness',accessControl:support,accessPolicy:{mode:'readonly',revision:1},model:{label:'fixture-coding-model'},selection:{name:''}};
+      window.state={ref:'chat-a',adapterId:'codex-harness',displayName:'Codex Harness',accessControl:support,accessPolicy:{mode:'readonly',revision:1},model:{label:'dev-coding-large-agent'},selection:{name:''}};
       window.calls=[];window.waiters=[];window.changes=[];window.notices=[];
       window.soduWorkAPI={conversationSession:{setAccessMode:(ref,mode,revision)=>new Promise(resolve=>{calls.push({ref,mode,revision});waiters.push(resolve);})}};
       WorkComposer.upgradeChat(document.querySelector('#old'));document.querySelector('#nchatWdName').textContent='chat-test-workspace';

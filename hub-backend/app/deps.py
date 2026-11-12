@@ -26,11 +26,19 @@ def identity_only(endpoint):
     return endpoint
 
 
+def quota_prefetch(endpoint):
+    """Prefetch fresh policy for an endpoint that resolves admission itself."""
+    endpoint.__soduwork_quota_prefetch__ = True
+    return endpoint
+
+
 def _needs_ai_quota(request):
     """Keep quota prefetch scoped to the server-declared AI dependency graph."""
     route = request.scope.get("route") if request is not None else None
     if route is None:
         return False
+    if getattr(getattr(route, "endpoint", None), "__soduwork_quota_prefetch__", False):
+        return True
     if not hasattr(route, "_auth_prefetch_quota"):
         pending = [getattr(route, "dependant", None)]
         needed = False
@@ -38,7 +46,7 @@ def _needs_ai_quota(request):
             dependency = pending.pop()
             if dependency is None:
                 continue
-            if dependency.call is current_ai_client:
+            if dependency.call in (current_ai_client, current_model_client):
                 needed = True
                 break
             pending.extend(dependency.dependencies)
@@ -88,15 +96,39 @@ async def authenticated_client(
     return client
 
 
-async def enforce_client_quota(session: AsyncSession, client: Client) -> dict:
+async def enforce_client_access(session: AsyncSession, client: Client):
+    from .services.legal_publications import assert_ai_access
+    published = client.__dict__.pop("_legal_publications_enabled", None)
+    await assert_ai_access(session, str(client.user_ref or ""), publications_enabled=published)
+
+
+async def enforce_client_quota(session: AsyncSession, client: Client, *, conf=None) -> dict:
     try:
         # Consume only this authentication query's rules, never a prior request's cache.
         rows = client.__dict__.pop("_quota_policy_rows", None)
-        status = await client_access.assert_quota(session, str(client.user_ref or ""), policy_rows=rows)
+        await enforce_client_access(session, client)
+        conf = conf or {}
+        status = await client_access.assert_quota(session, str(client.user_ref or ""), policy_rows=rows,
+            provider=conf.get("provider", ""), model=conf.get("model", ""),
+            personal=conf.get("quotaScope") == "personal")
     except client_access.ClientAccessError as exc:
         raise HTTPException(status_code=exc.status, detail=exc.detail()) from exc
     client._token_quota_status = status
     return status
+
+
+async def current_model_client(
+    client: Client = Depends(authenticated_client),
+    session: AsyncSession = Depends(get_session),
+) -> Client:
+    """Authenticate/access-check before resolving a model's server-owned funding."""
+    try:
+        # This preliminary check waives only positive budgets; the endpoint
+        # must resolve real credentials before granting personal admission.
+        await enforce_client_quota(session, client, conf={"quotaScope": "personal"})
+    except client_access.ClientAccessError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail()) from exc
+    return client
 
 
 async def current_client(

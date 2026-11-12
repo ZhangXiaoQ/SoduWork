@@ -139,6 +139,29 @@ test('过程文件默认不进入验收上下文，明确选择后才按附件 I
     requested: { acceptanceAttachmentIds: ['missing'] }, runtime: f.runtime, request: f.request }), /过程文件已变化/);
 });
 
+test('requirement references are mandatory read-only review inputs, separate from optional evidence', async t => {
+  const reference = { id: 'reference-a', filename: '原始参考.md', role: 'input', size: 8 };
+  const f = fixture(t, { attachments: [{ id: 'file-a', filename: '交付物.md' }],
+    optionalAttachments: [reference, { id: 'process-a', filename: '过程.md', role: 'process' },
+      { id: 'old-a', filename: '旧交付.md', role: 'output' }] });
+  for (const acceptanceMode of ['manual', 'auto']) {
+    const turn = await prepare({ identity: {}, taskId: 't',
+      requested: { acceptanceMode, acceptanceAttachmentIds: ['reference-a'] },
+      runtime: f.runtime, request: f.request });
+    assert.deepEqual(turn.attachmentIds, ['file-a', 'reference-a']);
+    assert.deepEqual(turn.referenceAttachmentIds, ['reference-a']);
+    assert.deepEqual(turn.optionalAttachmentIds, []);
+    assert.match(turn.text, /原始参考\.md.*只读参考，不是交付物/);
+    assert.match(turn.displayText, /交付成果\n- 交付物\.md\n\n需求附件\n- 原始参考\.md/);
+    assert.doesNotMatch(turn.displayText, /reference-a|过程\.md|旧交付\.md/);
+    await turn.beforeTurn();
+    reference.id = 'reference-replaced';
+    await assert.rejects(turn.beforeTurn(), /验收版本已变化/);
+    reference.id = 'reference-a';
+  }
+  assert.ok(f.calls.every(call => !call.body), 'preparation must never decide or execute the requirement');
+});
+
 test('自动验收退回时输出返修卡并显示实际返修去向', async t => {
   const f = fixture(t);
   const originalRequest = f.request;

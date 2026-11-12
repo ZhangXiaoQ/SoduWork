@@ -6,6 +6,15 @@
   const acceptanceSessions = new Map();
   let generation = 0;
   const text = value => String(value || '').trim();
+  function remoteExecutionId(payload, task) {
+    const context = task?.workRouting?.executionContext || {};
+    if (payload.navigation === false || payload.reuseCurrent || payload.forceNew ||
+        payload.acceptanceSession || payload.acceptanceExecutionSession ||
+        ['acceptance', 'rework', 'task-add', 'task-create', 'task-dispatch'].includes(payload.source)) return '';
+    return ['requirement', 'bug', 'ticket', 'improvement', 'other'].includes(task?.kind) &&
+      task.status !== 'todo' && context.location?.mode === 'remote' && text(context.runner?.runnerId)
+      ? 'task-execution:' + text(task.id) : '';
+  }
   function taskIds(row) {
     return [row.taskId, ...(row.taskIds || []), ...(row.taskBindings || []).map(x => x.taskId)].map(text);
   }
@@ -36,6 +45,12 @@
     out.repoId = text(out.repoId || source.repoId || source.repo?.id);
     if (source.id) out.task = source;
     if (!out.taskTitle) out.taskTitle = text(source.title);
+    const remoteId = remoteExecutionId(out, source);
+    if (remoteId) {
+      out.chatId = remoteId;
+      out.forceNew = false;
+      return out;
+    }
     /*
      * Create a bound review conversation once and reuse it on repeated opens. When execution
      * and review belong to the same user, prefer the execution conversation and fall back only
@@ -142,7 +157,8 @@
       return out;
     }
     if (!viewing && out.reuseCurrent && info.sessionId) out.chatId = text(info.sessionId);
-    /* In-progress and completed requirements can resume only archives available on this device. When history lookup confirms no archive exists, pass an empty chatId so the controller creates a requirement-scoped conversation instead of reopening a stale mapping. */
+    /* When no local conversation is mapped to an active or completed task,
+       let the controller create a conversation with requirement context. */
     if (!out.chatId && viewing && !out.reuseCurrent && source.status && source.status !== 'todo') {
       out.forceNew = true;
       out.navigation = false;
@@ -206,7 +222,24 @@
       return global.soduWorkAPI?.openDeskWindow?.({panel: 'workspace', view: 'history', requirementId: id}) || false;
     }
     const info = global.NativeChat?.sessionInfo?.() || {};
+    // The main process verifies the exact Hub execution. Local review archives
+    // and a paginated sidebar cannot establish the remote session's identity.
+    const remoteId = remoteExecutionId(payload, task);
+    if (remoteId) payload.chatId = remoteId;
     let history = payload.acceptanceSession && !payload.reuseExecutionSession ? [] : null; // null = archive not consulted (explicit chatId/turnId wins).
+    if (payload.acceptanceSession && !payload.reuseExecutionSession && !payload.chatId && !payload.forceNew) {
+      const sessions = global.soduWorkAPI?.conversationSession || global.soduWorkAPI?.piSession;
+      if (sessions?.history) {
+        const result = await sessions.history();
+        if (seq !== generation) return false;
+        if (result?.ok === false) throw new Error('无法读取验收会话，请重试');
+        const matches = (result?.chats || []).filter(row => !row.archived && !row.deleted &&
+          row.acceptanceReview?.taskRef === id && row.acceptanceReview?.approvalId === text(payload.approvalId) &&
+          row.acceptanceReview?.acceptanceMode === (payload.acceptanceMode || 'manual'));
+        matches.sort((a, b) => Number(b.at || 0) - Number(a.at || 0));
+        if (matches[0]) payload.chatId = matches[0].id;
+      }
+    }
     const hubTurnId = text(task?.workRouting?.conversationTurn?.conversationId);
     /*
      * The active execution archive can be absent from the history projection while the

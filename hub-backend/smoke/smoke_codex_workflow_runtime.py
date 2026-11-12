@@ -39,6 +39,60 @@ def manifest(name: str) -> dict:
         return json.load(stream)
 
 
+def plugin_contracts() -> None:
+    expected_versions = {
+        "soduwork-bugfix-149.json": "1.0.7",
+        "soduwork-change-149.json": "1.0.6",
+    }
+    for filename in ("soduwork-bugfix-149.json", "soduwork-change-149.json"):
+        if is_public_snapshot() and filename == "soduwork-bugfix-149.json":
+            print("SKIP private deployment template:", filename)
+            continue
+        data = manifest(filename)
+        ai_nodes = [node for node in data["workflow"]["nodes"]
+                    if node["type"] in ("ai", "ai_review")]
+        check(filename + " immutable version",
+              data["version"] == expected_versions[filename])
+        check(filename + " all AI nodes use Codex",
+              len(ai_nodes) == 3
+              and all(node["config"].get("agentKind") == "local:codex"
+                      for node in ai_nodes))
+        check(filename + " locks Sol max strict",
+              all(node["config"].get("model") == "gpt-5.6-sol"
+                  and node["config"].get("reasoningEffort") == "max"
+                  and node["config"].get("fallbackMode") == "strict"
+                  for node in ai_nodes))
+        check(filename + " AI is not pinned to deploy runner",
+              all(not node["config"].get("runnerTags") for node in ai_nodes))
+        evaluations = data.get("evaluations") or []
+        check(filename + " declares two representative evaluations",
+              len(evaluations) == 2
+              and all(case.get("criteria") and case.get("expectedOutputs") == [
+                  "scope.requirements", "scope.preflight"]
+                      for case in evaluations), evaluations)
+        if filename == "soduwork-change-149.json":
+            scope = next(node for node in ai_nodes if node["key"] == "scope")
+            implement = next(node for node in ai_nodes if node["key"] == "implement")
+            check(filename + " treats feature delivery as full product work",
+                  "不要求存在可复现缺陷" in scope["config"]["prompt"]
+                  and "不得只实现后端" in implement["config"]["prompt"])
+            check(filename + " evaluates complete and blocked routes",
+                  {case["key"] for case in evaluations} == {
+                      "complete-product-change", "missing-delivery-input"})
+        else:
+            check(filename + " evaluates reproducible and blocked routes",
+                  {case["key"] for case in evaluations} == {
+                      "reproducible-regression", "unreproducible-report"})
+        quality = next(node for node in data["workflow"]["nodes"]
+                       if node["type"] == "quality")
+        commands = [command.get("argv") for command in quality["config"]["commands"]]
+        if filename == "soduwork-bugfix-149.json":
+            check(filename + " uses deterministic monorepo quality gate",
+                  ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                   "-File", "ops/verify-soduwork-quality.ps1"] in commands, commands)
+
+
+
 def route_contracts() -> None:
     prefs = workflow_runs.execution_preferences({
         "agentKind": "local:codex", "model": "gpt-5.6-sol",

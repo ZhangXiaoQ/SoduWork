@@ -31,6 +31,7 @@ function fixture(options = {}) {
     return { hub: 'http://fixture.invalid', clientId, session: claims + '.' + 'a'.repeat(64) };
   })();
   const context = vm.createContext({
+    _sharedHistory: null,
     _cloudHandoff: { observe() {} }, _sessionOwners: null, _discardRenderer() {},
     skillTurn: require('../main/pi-session/skill-turn'), sendIdentityOf: null,
     app: options.app || { getPath: () => emptyStorage }, path, newChatAccess: consent,

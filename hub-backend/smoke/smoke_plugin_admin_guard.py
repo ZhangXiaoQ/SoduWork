@@ -45,7 +45,7 @@ async def main():
     await init_db()
     plugin = am.Plugin(
         id="plugin-admin-guard", org_id="org-a", key="admin-guard",
-        name="企业发布插件", enabled=True, source_kind="personal")
+        name="企业发布插件", enabled=True, source_kind="soduwork")
     version = am.PluginVersion(
         id="plugin-admin-guard-v1", plugin_id=plugin.id, version="1.0.0",
         checksum="admin-guard-v1", trust_state="approved", enabled=True,

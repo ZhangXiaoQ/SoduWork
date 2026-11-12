@@ -288,6 +288,9 @@
           if (state.follow) _scheduleFollow(state);
           _updateScrollButton(state);
         });
+        // Keyboard/composer resizing changes the viewport without changing
+        // the transcript height. Preserve the existing reader-follow policy.
+        state.observer.observe(scroll);
       }
     }
     activeScrollState = state;

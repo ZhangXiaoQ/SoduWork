@@ -45,18 +45,15 @@ class Harness2InteractiveTests(unittest.TestCase):
 
                     def start(native):
                         # Real Guard setup, without starting a process or reading user config.
-                        native.access.agent_environment("opencode", {})
+                        native.access.agent_environment("harness2", {})
 
                     def request(native, method, params):
                         calls.append((method, params))
                         if method == "initialize":
                             return {"protocolVersion": 1, "agentCapabilities": {"loadSession": True}}
                         if method in {"session/new", "session/load"}:
-                            guard = native.access.opencode_guard
-                            options = ([{"value": guard.agent_id}, {"value": guard.profile}]
-                                       if guard else [])
-                            return {"sessionId": "native-id", "configOptions": [
-                                {"id": "mode", "options": options}]}
+                            return {"sessionId": "native-id", "modes": {"availableModes": [
+                                {"id": value} for value in ("standard", "full", "readonly")]}}
                         if method == "session/prompt":
                             return {"stopReason": "end_turn"}
                         return {}
@@ -72,9 +69,9 @@ class Harness2InteractiveTests(unittest.TestCase):
                     capabilities = calls[0][1]["clientCapabilities"]
                     self.assertEqual(capabilities["fs"]["writeTextFile"], writable)
                     self.assertEqual(capabilities["terminal"], writable)
-                    native_modes = [params["value"] for method, params in calls
-                                    if method == "session/set_config_option"]
-                    self.assertEqual(native_modes, ["build"] if policy_mode else [])
+                    native_modes = [params["modeId"] for method, params in calls
+                                    if method == "session/set_mode"]
+                    self.assertEqual(native_modes, [policy_mode or "readonly"])
                     self.assertEqual([method for method, _ in calls].count("session/prompt"), 1)
                     self.assertIn("session/load" if session else "session/new",
                                   [method for method, _ in calls])
@@ -83,7 +80,7 @@ class Harness2InteractiveTests(unittest.TestCase):
         from app.services.acp_access import BridgeAccess, opencode_permissions
         channel = json.dumps({"url": "http://127.0.0.1:1", "token": "fixture",
                               "policy": {"mode": "readonly"}})
-        # Both the OpenCode CLI bridge and Harness construct this same boundary.
+        # Independent Harness execution must preserve the standalone OpenCode guard.
         access = BridgeAccess(channel, agent_name="opencode")
         try:
             env = access.agent_environment("opencode", {})
@@ -145,7 +142,7 @@ class Harness2InteractiveTests(unittest.TestCase):
                     complete.assert_not_called()
                     execute.assert_called_once()
                     forwarded = execute.call_args.args
-                    self.assertEqual(forwarded[1:], (directory, session, mode, True, sys.executable))
+                    self.assertEqual(forwarded[1:], (directory, session, mode, True))
                     self.assertTrue(forwarded[0].endswith(original))
                     if should_refine:
                         self.assertEqual(refine.call_args.args[0], original)
@@ -157,7 +154,7 @@ class Harness2InteractiveTests(unittest.TestCase):
                     events = [json.loads(line) for line in output.getvalue().splitlines()]
                     proof = [event for event in events if event.get("type") == "harness2_probe_complete"]
                     self.assertEqual(proof, ([{
-                        "type": "harness2_probe_complete", "coverage": "execute-v2", "stages": 0,
+                        "type": "harness2_probe_complete", "coverage": "native-execute-v1", "stages": 0,
                     }] if probe else []))
 
     def test_native_failure_is_not_retried_or_converted_to_probe_success(self):
@@ -197,57 +194,26 @@ class Harness2InteractiveTests(unittest.TestCase):
                 code = bridge.main(["--cwd", directory, "--session", "native",
                                     "--probe", "--refine"])
             self.assertEqual(code, 0)
-            execute.assert_called_once_with("Continue", directory, "native", "work", False, sys.executable)
+            execute.assert_called_once_with("Continue", directory, "native", "work", False, model={}, root=str(Path(directory) / "scratch"))
             refine.assert_not_called()
             self.assertNotIn("harness2_probe_complete", output.getvalue())
 
-    def test_unreachable_planner_blocks_user_execution_but_executor_health_probe_remains_available(self):
+    def test_unreachable_planner_and_executor_fail_without_fallback_or_secret_disclosure(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            workspace = root / "中文 workspace"
-            workspace.mkdir()
-            (workspace / "acp").write_bytes(Path(__file__).with_name("harness2_acp_peer.py").read_bytes())
             env = {key: value for key, value in os.environ.items()
-                   if key not in {"SODUWORK_APPROVAL_CHANNEL", "SODUWORK_RUNTIME_IMAGES", runtime.CONTINUE_ENV}}
-            env.update({
-                runtime.EXECUTOR_ENV: sys.executable,
-                runtime.MODEL_ENV: json.dumps({
-                    "base": "http://127.0.0.1:1/v1", "model": "fixture", "key": "fixture-secret"}),
-                runtime.ROOT_ENV: str(root / "scratch"),
-                "SODUWORK_DATA_ROOT": str(root / "runner"),
-                "PYTHONUTF8": "1",
-            })
-            command = [sys.executable, str(Path(bridge.__file__)), "--cwd", str(workspace)]
-            failed = subprocess.run(command, input="Do not substitute a different harness.",
-                                    env=env, text=True, encoding="utf-8", capture_output=True, timeout=15)
-            self.assertEqual(failed.returncode, 2, failed.stdout + failed.stderr)
-            self.assertFalse((workspace / "delivered.txt").exists())
-            self.assertFalse((workspace / "received.txt").exists())
-            self.assertNotIn("fixture-secret", failed.stdout + failed.stderr)
-            command.append("--probe")
-            for extra, prompt in (
-                ([], "Write the requested deliverable."),
-                (["--session", "harness2-native-fixture", "--probe"], "Continue this same session."),
-                (["--session", "harness2-native-fixture", "--mode", "plan"], "Read only."),
-            ):
-                with self.subTest(extra=extra):
-                    readonly = "--mode" in extra
-                    child = subprocess.run(
-                        [*command, *extra], input=prompt, env={**env, **(
-                            {"HARNESS2_FIXTURE_READONLY": "1"} if readonly else {})},
-                        text=True, encoding="utf-8", capture_output=True, timeout=15)
-                    self.assertEqual(child.returncode, 0, child.stdout + child.stderr)
-                    events = [json.loads(line) for line in child.stdout.splitlines()]
-                    self.assertTrue(any(row.get("sessionID") == "harness2-native-fixture" for row in events))
-                    self.assertIn(prompt, (workspace / "received.txt").read_text(encoding="utf-8"))
-                    self.assertNotIn("harness2_instructions", (workspace / "received.txt").read_text(encoding="utf-8"))
-                    self.assertNotIn("fixture-secret", child.stdout + child.stderr)
-                    self.assertNotIn("推演", child.stdout)
-                    if "--probe" in extra:
-                        self.assertIn({"type": "harness2_probe_complete", "coverage": "execute-v2",
-                                       "stages": 0}, events)
-            self.assertEqual((workspace / "delivered.txt").read_text(), "actual bridge write")
-            self.assertTrue((root / "scratch").exists())
+                   if key not in {'SODUWORK_APPROVAL_CHANNEL', runtime.CONTINUE_ENV}}
+            env.update({runtime.EXECUTOR_ENV: 'forbidden-opencode.exe',
+                runtime.MODEL_ENV: json.dumps({'base': 'http://127.0.0.1:1/v1', 'model': 'fixture', 'key': 'fixture-secret'}),
+                runtime.ROOT_ENV: str(root / 'scratch'), 'SODUWORK_DATA_ROOT': str(root / 'runner')})
+            for probe in (False, True):
+                child = subprocess.run([sys.executable, str(Path(bridge.__file__)), '--cwd', directory,
+                                        *(['--probe'] if probe else [])], input='Do not switch runtimes.',
+                                       env=env, text=True, encoding='utf-8', capture_output=True, timeout=15)
+                self.assertEqual(child.returncode, 2, child.stdout + child.stderr)
+                self.assertNotIn('harness2_probe_complete', child.stdout)
+                self.assertNotIn('fixture-secret', child.stdout + child.stderr)
+                self.assertFalse((root / 'delivered.txt').exists())
 
 
 if __name__ == "__main__":

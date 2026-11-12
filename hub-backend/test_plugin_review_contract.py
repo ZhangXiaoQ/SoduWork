@@ -55,7 +55,8 @@ class ReviewModeTests(unittest.TestCase):
                     self.assertTrue(any(x.get('required') and x['kind'] == 'decision' for x in node['outputs']))
 
     def test_bundled_code_delivery_reviews_remain_code_reviews(self):
-        keys = ['engineering-delivery', 'software-delivery', 'project-validation-release']
+        keys = ['engineering-delivery', 'software-delivery',
+                'soduwork-bugfix-149', 'delivery-req-184', 'autonomous-dev-iterator']
         for key in keys:
             manifest = json.loads((Path(__file__).parent/'plugins'/f'{key}.json').read_text(encoding='utf-8-sig'))
             for node in manifest['workflow']['nodes']:

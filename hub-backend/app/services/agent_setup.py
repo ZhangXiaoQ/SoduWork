@@ -39,9 +39,13 @@ from .claude_runtime import account_setup as _claude_account_setup
 
 log = logging.getLogger("uvicorn.error")
 
-# A liveness probe must distinguish model output from the echoed user prompt.
-# Ask the model to concatenate separated fragments so the expected response is never a substring
-# of the prompt itself. Echoed input alone must not satisfy the probe.
+# The probe marker must demonstrate an actual model response.
+# Prompt echo alone must not satisfy the probe.
+# Pi and OpenCode JSON output can echo the user's prompt.
+# For example: {"type":"message_start","message":{"role":"user",...}}.
+# An echoed prompt does not prove the model responded.
+# Construct the expected answer by joining two separately supplied marker halves.
+# Only an actual answer should contain the joined marker.
 _TOK_A = "SODUWORK_"
 _TOK_B = "AGENT_OK"
 _TOKEN = _TOK_A + _TOK_B                    # Keep the complete expected marker absent from the prompt.
@@ -237,7 +241,7 @@ def detect(key: str, *, has_model: bool = True, probes: dict | None = None) -> d
     # Harness uses the host Python executable, which is not proof that its
     # bundled core exists. Other runtimes can also leave metadata behind.
     present = bundled if key == "harness2" else bool(binp or ver or bundled)
-    platform_issue = managed_agents._cpu_compatibility_issue() if key in {"opencode", "harness2"} else ""
+    platform_issue = managed_agents._cpu_compatibility_issue() if key == "opencode" else ""
     runtime_issue = platform_issue or (_runtime_issue(key) if binp else "")
     # npm accepts unsupported engine versions with a warning. Treat an
     # installed CLI on an incompatible Node runtime as unavailable so the
@@ -255,11 +259,6 @@ def detect(key: str, *, has_model: bool = True, probes: dict | None = None) -> d
     if binp and not runtime_issue and spec.get("installer") in {"managed", "native"}:
         if ver_from not in {"managed", "cli", "bundled"}:
             runtime_issue = "Agent 启动自检失败，请检查系统运行库、目录权限或重新安装。"
-    if key == "harness2" and binp and not runtime_issue:
-        # The bundled core needs a working OpenCode process, not just Python.
-        _, executor_source, _ = _version_of("opencode")
-        if executor_source not in {"managed", "cli", "bundled"}:
-            runtime_issue = "OpenCode 执行组件启动自检失败，请检查系统运行库、目录权限或重新安装。"
     if not binp and present and not platform_issue:
         runtime_issue = "保留了安装记录，但找不到执行程序。请点「重装」补齐。"
     installed = bool(binp) and not runtime_issue
@@ -311,11 +310,8 @@ def detect(key: str, *, has_model: bool = True, probes: dict | None = None) -> d
         setup_state = "broken" if present or runtime_issue else "missing"
         if key == "harness2":
             from .harness2_lifecycle import disabled_issue
-            from .local_base import _opencode_bin
             if disabled_issue():
                 setup_state = "disabled"
-            elif bundled and not _opencode_bin() and not platform_issue:
-                setup_state = "setup"
         if setup_state in {"setup", "disabled"}:
             warn_now = ""
     p = (probes if probes is not None else _load_probes()).get(key) or {}

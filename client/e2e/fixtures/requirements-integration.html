@@ -20,6 +20,7 @@ if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(isolatedHub) || !['sender','recipient','
 localStorage.setItem('soduwork_work_hub_environment_v1','development');
 localStorage.setItem('soduwork_work_development_hub_url_v1',isolatedHub);
 localStorage.setItem('soduwork_work_user_id','e2e-'+identity);
+if (libraryWorkRoot) localStorage.setItem('soduwork_work_root', libraryWorkRoot);
 window.fixtureErrors=[];window.fixturePreviews=[];window.fixtureNotices=[];
 window.addEventListener('error',event=>fixtureErrors.push(event.message));
 window.addEventListener('unhandledrejection',event=>fixtureErrors.push(String(event.reason)));

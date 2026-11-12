@@ -197,7 +197,7 @@
     previewPane?.close(); closeMenus(); state.scope = scope;
     state.folderId = history ? 'server-history-root' : '';
     state.folder = history ? { id: state.folderId, name: '历史服务器资料', backend: state.storage, storageOrigin: 'server-history', readOnly: true } : null;
-    state.query = ''; state.filterKind = 'all'; state.selected.clear();
+    state.query = ''; state.filterKind = 'all'; state.selected.clear(); state.selectedFolders.clear();
     state.view = scope === 'trash' ? 'list' : (preference('soduwork_work_library_view') === 'grid' ? 'grid' : 'list');
     root.querySelector('[data-library-search]').value = ''; load();
   }
@@ -220,6 +220,11 @@
     if (d.libraryRoot !== undefined) { enterScope('all'); return; }
     if (d.libraryRetry !== undefined) { loadStorageStatus(); if (state.storage === 'local') load(); return; }
     if (d.libraryView !== undefined) { state.view = d.libraryView === 'list' ? 'list' : 'grid'; if (state.scope !== 'trash') preference('soduwork_work_library_view', state.view); render(); return; }
+    if (d.libraryBatchClear !== undefined) { state.selected.clear(); state.selectedFolders.clear(); render(); return; }
+    if (d.libraryBatchMigrate !== undefined) { await migrateSelected(button); return; }
+    if (d.libraryBatchDelete !== undefined) { await deleteSelected(button); return; }
+    if (d.libraryBatchShare !== undefined) { await shareSelected(button); return; }
+    if (d.libraryBatchChat !== undefined) { await discussSelected(button); return; }
     if (d.libraryFilterKind !== undefined) {
       state.filterKind = d.libraryFilterKind;
       closeMenus();
@@ -355,12 +360,12 @@
     const rows = selectedRows();
     if (!rows.length || batchBusy || state.scope === 'trash') return;
     if (rows.length > MAX_BATCH_ITEMS) { notify('一次最多批量处理 ' + MAX_BATCH_ITEMS + ' 项资料，请减少选择后重试'); return; }
-    const copyRows = rows.filter(row => isClientLocal(row) && !row.extra?.soduworkDelivery);
+    const copyRows = rows.filter(row => isClientLocal(row) && !row.extra?.soduWorkDelivery);
     if (!copyRows.length) { notify('请选择可存储到远端的本机资料'); return; }
     const target = state.storageStatus.remote && state.storageStatus.remote.backend;
     if (state.storageStatusLoading || !target || !state.storageStatus.remote.available) { notify(storageMessage()); return; }
-    const epoch = lifecycleEpoch, skipped = rows.filter(row => isClientLocal(row) && row.extra?.soduworkDelivery).length;
-    const ids = rows.filter(row => !row.extra?.soduworkDelivery).map(row => String(row.id));
+    const epoch = lifecycleEpoch, skipped = rows.filter(row => isClientLocal(row) && row.extra?.soduWorkDelivery).length;
+    const ids = rows.filter(row => !row.extra?.soduWorkDelivery).map(row => String(row.id));
     if (!await openConfirmDialog({
       title: '批量存储到远端？',
       description: '将选中的本机资料保存到远端根目录，同时保留本机文件。',
@@ -1006,7 +1011,7 @@
       });
       const migrateButton = batchToolbar.querySelector('[data-library-batch-migrate]');
       if (migrateButton) {
-        const hasLocalSelection = items.some(item => state.selected.has(item.id) && isClientLocal(item) && !item.extra?.soduworkDelivery);
+        const hasLocalSelection = items.some(item => state.selected.has(item.id) && isClientLocal(item) && !item.extra?.soduWorkDelivery);
         const remoteReady = !state.storageStatusLoading && state.storageStatus.remote.available && !!state.storageStatus.remote.backend;
         migrateButton.hidden = !hasLocalSelection || !remoteReady || state.scope === 'trash';
       }

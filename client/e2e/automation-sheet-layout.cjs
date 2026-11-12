@@ -59,7 +59,7 @@ if (typeof electron === 'string') {
         taskExecutionOptions:async()=>({substrates:[{key:'local:pi',name:'Pi',available:true}],repos:[]}),
         preflightSchedule:async()=>({state:'ready',message:'执行条件已就绪',checks:[{label:'隔离验证，无真实 Runner'}]}),
         createSchedule:async body=>{saves.push(body);return {...body,id:'fixture'}}};void 0;`);
-    for (const file of ['plugin-ui-host', 'schedule-timing', 'work-automation-bindings', 'work-automation-view', 'work-automation-card-state','work-automation-sheet'])
+    for (const file of ['plugin-ui-host', 'schedule-timing', 'panels-forward-select', 'work-automation-bindings', 'work-automation-view', 'work-automation-card-state','work-automation-sheet'])
       await js(fs.readFileSync(path.join(client, 'components/panels', file + '.js'), 'utf8') + '\nvoid 0;');
 
     await run('弹窗只滚动正文，头尾与完整遮罩保持位置', async row => {
@@ -165,13 +165,96 @@ if (typeof electron === 'string') {
         [['SELECT',24],['SELECT',60],['SELECT',60]]);
       await js(`document.querySelector('[name=clockHour]').focus();void 0;`);
       await key('End');
+      assert.ok((await rect('.fwd-select-compact-time')).height <= 220);
+      await key('Enter');
       await js(`document.querySelector('[name=clockMinute]').focus();void 0;`);
       await key('End');
+      assert.ok((await rect('.fwd-select-compact-time')).height <= 220);
+      fs.writeFileSync(path.join(out, 'compact-minute-menu.png'), (await win.webContents.capturePage()).toPNG());
+      await key('Enter');
       assert.equal(await js('document.querySelector("[name=clockHour]").value'), '23');
       assert.equal(await js('document.querySelector("[name=clockMinute]").value'), '59');
       await js(`document.querySelector('[data-waz-save]').click();void 0;`);
       await delay(100);
       assert.deepEqual(await js('({hour:saves.at(-1).atHour,minute:saves.at(-1).atMinute})'), {hour:23,minute:59});
+    });
+    await run('每周和每月多选与可选日期范围保持完整保存', async () => {
+      for (const mode of ['weekly','monthly']) {
+        await open();
+        const before=await js('saves.length');
+        await js(`(()=>{const field=document.querySelector('[name=every]');field.value=${JSON.stringify(mode)};
+          field.dispatchEvent(new Event('change',{bubbles:true}));
+          for(const input of document.querySelectorAll('[name=${mode === 'weekly' ? 'weekdays' : 'monthDays'}]')) {
+            const selected=${mode === 'weekly' ? '[1,3,5]' : '[30,31]'}.includes(Number(input.value));
+            if(input.checked!==selected)input.click();
+          }
+          document.querySelector('[name=startDate]').value='2099-01-01';
+          document.querySelector('[name=endDate]').value='2098-12-31';
+          document.querySelector('[data-waz-save]').click();})()`);
+        assert.equal(await js('saves.length'),before);
+        await js(`(()=>{const end=document.querySelector('[name=endDate]');end.value='2099-12-31';
+          end.dispatchEvent(new Event('input',{bubbles:true}));
+          document.querySelector('[data-waz-${mode === 'weekly' ? 'weekday' : 'monthday'}]').scrollIntoView({block:'center'});})()`);
+        await delay(80);
+        fs.writeFileSync(path.join(out, mode+'-sheet.png'), (await win.webContents.capturePage()).toPNG());
+        await js(`document.querySelector('[data-waz-save]').click();void 0;`);await delay(100);
+        assert.equal(await js('saves.length'),before+1);
+        assert.deepEqual(await js(`(()=>{const v=saves.at(-1);return [v.every,v.${mode === 'weekly' ? 'weekdays' : 'monthDays'},v.startDate,v.endDate]})()`),
+          [mode,mode==='weekly'?[1,3,5]:[30,31],'2099-01-01','2099-12-31']);
+      }
+    });
+    await run('自定义规则保存完整文本，空规则阻止提交；反复打开关闭不残留菜单', async row => {
+      await open();
+      const before=await js('saves.length');
+      await js(`(()=>{const cadence=document.querySelector('[name=every]');cadence.value='custom';
+        cadence.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+      await js(`(()=>{const field=document.querySelector('[name=customRule]');field.value='';
+        field.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('[data-waz-save]').click();})()`);
+      assert.equal(await js('saves.length'),before);
+      assert.equal(await js('document.activeElement.name'),'customRule');
+      const rule='DTSTART;TZID=Asia/Shanghai:20990101T105100\nRRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR;COUNT=10';
+      await js(`(()=>{const field=document.querySelector('[name=customRule]');field.value=${JSON.stringify(rule)};
+        field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+      fs.writeFileSync(path.join(out, 'custom-rule-sheet.png'), (await win.webContents.capturePage()).toPNG());
+      await js(`document.querySelector('[data-waz-save]').click();void 0;`);await delay(100);
+      assert.equal(await js('saves.at(-1).customRule'),rule);
+      row.pressure=await js(`(async()=>{const start=performance.now();
+        for(let i=0;i<50;i++){WorkAutomationSheet.close(true);
+          await WorkAutomationSheet.open({text:'每天18点检查报告'});
+          document.querySelector('[name=clockMinute]').nextElementSibling.querySelector('button').click();
+          WorkAutomationSheet.close(true);}
+        return{ms:performance.now()-start,popups:document.querySelectorAll('.fwd-select-popup').length,
+          controls:document.querySelectorAll('.waz-sheet .fwd-select').length};})()`);
+      assert.equal(row.pressure.popups,0);assert.equal(row.pressure.controls,0);
+    });
+    await run('四种语言下自定义规则和紧凑时间菜单保持完整布局与主题色', async row => {
+      for (const file of JSON.parse(fs.readFileSync(path.join(client,'core/locales/manifest.json'),'utf8')))
+        await js(fs.readFileSync(path.join(client,'core/locales',file),'utf8')+'\nvoid 0;');
+      await js(fs.readFileSync(path.join(client,'core/i18n-dom.js'),'utf8')+'\nvoid 0;');
+      await js(fs.readFileSync(path.join(client,'core/i18n.js'),'utf8')+'\nvoid 0;');
+      row.locales=[];
+      for(const locale of ['zh-CN','en-US','ja-JP','ko-KR']) {
+        await js(`SoduWorkI18n.setLocale(${JSON.stringify(locale)});document.documentElement.dataset.theme='warm';void 0;`);
+        await open();
+        await js(`(()=>{const cadence=document.querySelector('[name=every]');cadence.value='custom';
+          cadence.dispatchEvent(new Event('change',{bubbles:true}));
+          document.querySelector('[name=customRule]').scrollIntoView({block:'center'});})()`);
+        await delay(80);
+        const label=await js('document.querySelector("[name=every] option:checked").textContent');
+        if(locale!=='zh-CN')assert.notEqual(label,'自定义');
+        if(locale==='en-US') {
+          assert.ok(!/[\u4e00-\u9fff]/.test(await js('document.querySelector("[data-waz-custom]").textContent')));
+          assert.ok(!/[\u4e00-\u9fff]/.test(await js('document.querySelector("#wazProbe").textContent')));
+        }
+        await js(`(()=>{const field=document.querySelector('[name=customRule]');
+          field.value='DTSTART;TZID=Asia/Shanghai:20990101T105100\\nRRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR;COUNT=10';
+          field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+        await delay(350);
+        assert.equal(await js('document.querySelector(".waz-form").scrollWidth<=document.querySelector(".waz-form").clientWidth+1'),true);
+        fs.writeFileSync(path.join(out, 'custom-'+locale+'.png'), (await win.webContents.capturePage()).toPNG());
+        row.locales.push({locale,label});
+      }
+      await js(`SoduWorkI18n.setLocale('zh-CN');void 0;`);
     });
     await run('聊天内嵌表单保持自然高度，不增加弹窗内滚动与焦点锁', async () => {
       await open(true);

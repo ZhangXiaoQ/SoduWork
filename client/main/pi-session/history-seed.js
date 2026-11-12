@@ -7,6 +7,24 @@ const goalFinalizer = require('../conversation/goal-finalizer');
 const agentSource = require('../conversation/agent-source.cjs');
 const SCOPE_ENTRY_TYPE = 'soduwork.message.scope';
 
+// Keep financial facts independently of the bounded presentation replay. Do
+// not retain old content/tool payloads just to reconstruct cumulative usage.
+function accountingReceipt(entry, nativeAgentId) {
+  const message = messageTime.storedMessage(entry);
+  if (message?.role !== 'assistant' || !message.usage || typeof message.usage !== 'object') return null;
+  const values = require('../agent-runtime/usage-values');
+  const usage = values.empty();
+  const raw = message.usage.cost?.total === 0 && message.usage.costKnown === undefined
+    ? { ...message.usage, costKnown: false } : message.usage;
+  values.add(usage, raw);
+  const source = require('../conversation/native-agent-source.cjs').fields(message, nativeAgentId);
+  return { usage, at: messageTime.epoch(message.completedAt) || messageTime.epoch(message.timestamp),
+    model: String(message.model || ''), provider: String(message.usageProvider || message.provider || ''),
+    agent: source.sourceAgent?.agentId || '',
+    ...(typeof message.quotaUsageToken === 'string' && message.quotaUsageToken
+      ? { quotaUsageToken: message.quotaUsageToken } : {}) };
+}
+
 function _applyStoredScope(acc, data) {
   const scope = String(data && data.scope || '');
   if (scope === stream.SCOPES.GOAL_EXECUTION) acc.beginGoalTurn();
@@ -30,8 +48,12 @@ function _seed(acc, piSession, options) {
   let legacyGoalStarted = false;
   let finalRestored = false;
   let n = 0;
-  const toolCalls = new Map();
+  const toolCalls = new Map(), accountingHistory = [];
   sequence.forEach((entry, sequenceIndex) => {
+    if (entry?.type === 'message') {
+      const receipt = accountingReceipt(entry, opts.nativeAgentId);
+      if (receipt) accountingHistory.push(receipt);
+    }
     const inTail = sequenceIndex >= tailStart;
     if (entry && entry.type === 'custom') {
       if (entry.customType === SCOPE_ENTRY_TYPE) {
@@ -113,6 +135,11 @@ function _seed(acc, piSession, options) {
       n += 1;
     } catch (e) { /* Skip unreadable entries without discarding the entire history. */ }
   });
+  // Replace rather than append on reseed; replayed tail messages already
+  // belong to this full baseline and must not be counted a second time.
+  acc.state.accountingHistory = accountingHistory;
+  acc.state.accountingMessageFrom = acc.state.messages.length;
+  acc.state.usageRevision = (acc.state.usageRevision || 0) + 1;
   // Display history may include other branches and imported task receipts.
   // Measurement belongs only to the active native branch after compaction.
   let branch = sequence;

@@ -87,10 +87,13 @@ class HostPolicyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([n['id'] for n in offline.json()['environments']], [allowed.id])
 
     async def test_automatic_selection_rechecks_list_and_never_falls_back_to_infra(self):
-        allowed, infra = self.live('fixture'), self.live('trial-infra')
-        client = SimpleNamespace(id=self.client_id)
-        candidates = await handoffs._targets(client, [], {self.org})
-        self.assertEqual(len(candidates), 2)
+        allowed, infra = self.live('142'), self.live('149-infra')
+        await self.enroll_personal(allowed)
+        candidates = (await self.catalog())['targets']
+        self.assertEqual([n['runnerId'] for n in candidates], [allowed.id])
+        # A stale catalog entry must still fail the final deployment allowlist.
+        candidates.append({'id': 'runner:' + infra.id + ':codex',
+                           'runnerId': infra.id, 'agentId': 'codex'})
         self.restrict(allowed.id)
         self.assertEqual([n['runnerId'] for n in handoffs._automatic_targets(candidates)], [allowed.id])
         with patch.object(runner_hub, 'has_capacity', side_effect=lambda node: node is infra):

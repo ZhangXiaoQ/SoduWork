@@ -9,8 +9,8 @@ import asyncio
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
-from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..account_conversation_models import (
@@ -122,9 +122,12 @@ def _conversation_json(row: AccountConversation, client_id: str) -> dict:
         "state": row.state or "idle",
         "archived": bool(row.archived),
         "deleted": bool(row.deleted),
+        "lifecycleRevision": int(row.lifecycle_revision or 0),
         "revision": int(row.revision or 0),
+        "createdAt": _iso(row.created_at),
         "updatedAt": _iso(row.updated_at),
         "sourceRevision": int(row.source_revision or 0),
+        "storageMode": row.storage_mode or "legacy",
         "canView": True,
         # The source device remains the only device that may checkpoint the
         # native session. Every device authenticated to the same account may,
@@ -152,13 +155,14 @@ async def _load_owned(
     conversation_id: str,
     owner: str,
     session: AsyncSession,
+    *,
+    lock: bool = False,
 ) -> AccountConversation:
-    row = await session.scalar(
-        select(AccountConversation).where(
-            AccountConversation.id == conversation_id,
-            AccountConversation.owner_user_id == owner,
-        )
+    query = select(AccountConversation).where(
+        AccountConversation.id == conversation_id,
+        AccountConversation.owner_user_id == owner,
     )
+    row = await session.scalar(query.with_for_update() if lock else query)
     if row is None:
         # Do not reveal whether another account owns the id.
         raise HTTPException(status_code=404, detail="会话不存在或无权访问")
@@ -213,7 +217,7 @@ async def list_account_conversations(
         .group_by(AccountConversationMessage.conversation_id)
     )).all()) if rows else {}
     return {
-        "items": [{**_conversation_json(row, client.id), "messageCount": counts.get(row.id, 0)}
+        "items": [{**_conversation_json(row, client.id), "messageCount": row.message_count if row.storage_mode == "endpoint" else counts.get(row.id, 0)}
                   for row in rows],
         "cursor": int(cursor),
         "hasMore": has_more,
@@ -229,6 +233,9 @@ async def list_account_conversation_messages(
     session: AsyncSession = Depends(get_session),
 ):
     row = await _load_owned(conversation_id, _owner(client), session)
+    if row.storage_mode == "endpoint":
+        from ..services import account_endpoint_history
+        return await account_endpoint_history.page(session, client, row, after, limit)
     messages = list((await session.scalars(
         select(AccountConversationMessage)
         .where(
@@ -261,6 +268,81 @@ async def account_conversation_source(
         "sourceEpoch": row.source_epoch,
         "sourceRevision": int(row.source_revision or 0),
     }
+
+
+@router.post("/{conversation_id}/lifecycle")
+async def update_account_conversation_lifecycle(
+    conversation_id: str,
+    body: dict = Body(default_factory=dict),
+    client: Client = Depends(current_client),
+    session: AsyncSession = Depends(get_session),
+):
+    """Account intent is independent of source-device transcript checkpoints."""
+    action = body.get("action")
+    if not isinstance(action, str) or action not in {"archive", "restore", "delete"}:
+        raise HTTPException(status_code=422, detail="会话操作必须为 archive、restore 或 delete")
+    expected_revision = body.get("expectedRevision")
+    if type(expected_revision) is not int or expected_revision < 1:
+        raise HTTPException(status_code=422, detail="请提供有效的会话目录版本")
+    owner = _owner(client)
+    # Use the same row -> account cursor lock order as source /sync. The source
+    # writer and every device's lifecycle writer serialize against this row.
+    row = await _load_owned(conversation_id, owner, session, lock=True)
+    if row.deleted and action != "delete":
+        raise HTTPException(status_code=410, detail={
+            "code": "ACCOUNT_CONVERSATION_DELETED",
+            "message": "会话已删除，无法归档或恢复",
+            "conversation": _conversation_json(row, client.id),
+        })
+    reached = bool(row.deleted) if action == "delete" else bool(row.archived) == (action == "archive")
+    if reached and int(row.lifecycle_revision or 0) > 0:
+        # A lost receipt may be retried with the old revision, but this is only
+        # a read: it must never reverse a newer archive/restore/delete action.
+        return {"ok": True, "conversation": _conversation_json(row, client.id)}
+    if expected_revision != int(row.revision or 0):
+        raise HTTPException(status_code=409, detail={
+            "code": "ACCOUNT_CONVERSATION_CHANGED",
+            "message": "会话已更新，请刷新后重试",
+            "conversation": _conversation_json(row, client.id),
+        })
+    # SQLite does not implement SELECT FOR UPDATE. Claim the observed version
+    # with an explicit conditional write on every supported database before
+    # allocating a directory revision. ORM dirty-field updates could otherwise
+    # acknowledge a restore without writing archived=False from a stale object.
+    changes = {"deleted": True} if action == "delete" else {"archived": action == "archive"}
+    try:
+        changed = await session.execute(update(AccountConversation).where(
+            AccountConversation.id == conversation_id,
+            AccountConversation.owner_user_id == owner,
+            AccountConversation.revision == expected_revision,
+        ).values(**changes).execution_options(synchronize_session=False))
+    except OperationalError as exc:
+        await session.rollback()
+        if session.get_bind().dialect.name == "sqlite" and any(
+                reason in str(exc.orig).lower() for reason in ("locked", "busy")):
+            raise HTTPException(status_code=409, detail="会话状态更新发生并发冲突，请刷新后重试") from exc
+        raise
+    if changed.rowcount != 1:
+        await session.rollback()
+        latest = await _load_owned(conversation_id, owner, session)
+        raise HTTPException(status_code=409, detail={
+            "code": "ACCOUNT_CONVERSATION_CHANGED",
+            "message": "会话已更新，请刷新后重试",
+            "conversation": _conversation_json(latest, client.id),
+        })
+    await session.refresh(row)
+    # Even a first explicit restore of an active row records intent, allowing
+    # clients to distinguish it from an old source snapshot's default false.
+    row.revision = await _next_directory_revision(owner, session)
+    row.lifecycle_revision = row.revision
+    row.updated_at = _now()
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="会话状态更新发生并发冲突，请刷新后重试") from exc
+    await _publish_account_update(owner, row)
+    return {"ok": True, "conversation": _conversation_json(row, client.id)}
 
 
 def _sync_digest(body: dict) -> str:
@@ -340,6 +422,15 @@ async def sync_account_conversation(
     # this field and keep the legacy append/update semantics for compatibility.
     snapshot_complete = body.get("snapshotComplete") is True
     messages = _validate_messages(body.get("messages"))
+    endpoint_storage = body.get("storageMode") == "endpoint"
+    from ..services import conversation_content
+    if conversation_content.metadata_only() and not endpoint_storage:
+        raise HTTPException(409, "请更新来源电脑，Hub 已停用会话正文同步")
+    if endpoint_storage and (messages or snapshot_complete):
+        raise HTTPException(422, "终端会话只同步目录，不接收正文快照")
+    message_count = body.get("messageCount", 0)
+    if endpoint_storage and (type(message_count) is not int or not 0 <= message_count <= 1_000_000_000):
+        raise HTTPException(422, "会话消息数量无效")
     digest = _sync_digest(body)
     task_projection_id = _text(body.get("taskProjectionId"), "关联需求", 120)
     if task_projection_id:
@@ -359,7 +450,8 @@ async def sync_account_conversation(
         current_source_revision = int(row.source_revision or 0)
         if source_revision < current_source_revision:
             raise HTTPException(status_code=409, detail="同步版本落后于 Hub 当前版本")
-        if source_revision == current_source_revision:
+        endpoint_transition = endpoint_storage and row.storage_mode != "endpoint"
+        if source_revision == current_source_revision and not endpoint_transition:
             if row.source_digest and row.source_digest != digest:
                 raise HTTPException(status_code=409, detail="相同同步版本的内容不一致")
             return {
@@ -378,6 +470,8 @@ async def sync_account_conversation(
             owner_user_id=owner,
             source_client_id=source_client_id,
             source_session_id=source_session_id,
+            archived=archived,
+            deleted=deleted,
         )
         session.add(row)
         await session.flush()
@@ -387,10 +481,15 @@ async def sync_account_conversation(
     row.source_epoch = source_epoch
     row.source_revision = source_revision
     row.source_digest = digest
+    if endpoint_storage:
+        row.storage_mode = "endpoint"
+        row.message_count = message_count
+    elif row.storage_mode == "endpoint":
+        raise HTTPException(409, "会话已使用终端存储，请更新客户端后重试")
     row.title = title
     row.state = state
-    row.archived = archived
-    row.deleted = deleted
+    # Existing lifecycle state belongs to explicit account actions, not a
+    # delayed source snapshot or outbox replay. Deletion remains a tombstone.
     row.updated_at = _now()
     row.revision = await _next_directory_revision(owner, session)
 
@@ -515,6 +614,10 @@ async def branch_account_conversation(
         ("user" if message.role == "user" else "assistant") + ": " + str(message.text or "")
         for message in messages
     ]
+    if row.storage_mode == "endpoint":
+        from ..services import account_endpoint_history
+        lines = [item["role"] + ": " + item["text"]
+                 for item in await account_endpoint_history.context(session, client, row, _MAX_MESSAGES)]
     selected = []
     total = 0
     context_limit = max(0, min(150_000, 190_000 - len(instruction)))
@@ -560,3 +663,4 @@ async def branch_account_conversation(
             **({"targetRunnerKind": target_runner_kind} if target_runner_kind else {}),
         },
     }
+

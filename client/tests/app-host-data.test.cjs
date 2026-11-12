@@ -35,7 +35,7 @@ test('SDK exposes actual readonly bridge calls and bilingual single-theme author
  const calls=[],window={crypto:require('node:crypto').webcrypto,addEventListener(){},soduWorkAppBridge:{request:async(m,p)=>{calls.push(m);return {ok:true};},events:{onTurnSettled(){}}}};window.parent=window;
  vm.runInNewContext(fs.readFileSync(path.resolve(__dirname,'../sdk/soduwork-app.js'),'utf8'),{window,location:{origin:'https://test.invalid'},document:{referrer:'',querySelectorAll:()=>[]},URL,Set,Map,Promise});
  await window.soduWorkApp.user.getCurrent();await window.soduWorkApp.notifications.list();await window.soduWorkApp.conversations.list();await window.soduWorkApp.conversations.messages({id:'s'});await window.soduWorkApp.library.list();await window.soduWorkApp.library.read({id:'f'});assert.equal(calls.length,6);
- const app={isPackaged:false},body=require('../main/app-developer-plugin.cjs').body(app);assert.equal(body.version,'1.6.1');assert.ok(body.resources.some(x=>x.path.endsWith('host-data-sdk.md')));assert.match(body.instructions,/不强制亮暗双模式/);
+ const app={isPackaged:false},body=require('../main/app-developer-plugin.cjs').body(app);assert.equal(body.version,'1.7.1');assert.ok(body.resources.some(x=>x.path.endsWith('app-files.md')));assert.ok(body.resources.some(x=>x.path.endsWith('host-data-sdk.md')));assert.match(body.instructions,/不强制亮暗双模式/);
 });
 
 test('Runner and cloud history use readonly event pages, cursor continuity and owned receipts',async t=>{

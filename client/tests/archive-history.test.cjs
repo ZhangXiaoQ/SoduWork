@@ -33,6 +33,21 @@ test('archive history records all actual runtime sources without promoting an un
   await f.write('unanswered', [header('unanswered'), message('Not answered'), binding('task', 'Task')]);
   assert.deepEqual((await sessions.historyEntry(f.app, 'unanswered')).entry.usedHarnesses, []);
 });
+const moved = dir => ({ type: 'custom', customType: 'soduwork.workspace.moved', data: { version: 1, cwd: dir } });
+
+test('换个文件夹继续：存档投影优先返回最新的工作目录覆盖', async t => {
+  const f = await fixture(t);
+  await f.write('moved-once', [header('moved-once'), message('Question'), moved('D:/new/place')]);
+  assert.equal((await sessions.historyEntry(f.app, 'moved-once')).entry.cwd, 'D:/new/place');
+  /* 多次换目录时，最新一次生效。 */
+  await f.write('moved-twice', [header('moved-twice'), message('Question'),
+    moved('D:/first/place'), moved('D:/second/place')]);
+  assert.equal((await sessions.historyEntry(f.app, 'moved-twice')).entry.cwd, 'D:/second/place');
+  /* 没有换目录记录的会话仍返回存档头部目录。 */
+  await f.write('unmoved', [header('unmoved'), message('Question')]);
+  assert.equal((await sessions.historyEntry(f.app, 'unmoved')).entry.cwd, '/project');
+});
+
 async function fixture(t) {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'soduwork-history-index-'));
   const root = path.join(base, 'pi-agent'), directory = path.join(root, 'sessions', 'project');
@@ -183,6 +198,82 @@ test('archive indexes are isolated by profile and missing/invalid archives do no
   assert.deepEqual(await tracked(path.join(a.base, 'missing')).index.list(), []);
 });
 
+test('strict absence tolerates unrelated malformed archives and verifies moved identities', async t => {
+  const f = await fixture(t), file = await f.write('moved');
+  await f.write('unrelated-broken', [{ type: 'message', message: {} }]);
+  await fs.rename(file, path.join(f.directory, 'renamed.jsonl'));
+  const { index } = tracked(f.root);
+  assert.equal((await index.find('moved', { strict: true })).id, 'moved');
+  assert.equal(await index.find('absent', { strict: true }), null);
+  await fs.unlink(path.join(f.directory, 'renamed.jsonl'));
+  assert.equal(await index.find('moved', { strict: true }), null);
+});
+
+for (const code of ['EACCES', 'EPERM']) test('strict lookup does not treat a ' + code + ' transcript as missing', async t => {
+  const f = await fixture(t);
+  await f.write('denied');
+  const { index } = tracked(f.root, async () => { throw Object.assign(Error('fixture permission failure'), { code }); });
+  assert.equal(await index.find('denied'), null, 'ordinary sidebar lookup retains its tolerant behavior');
+  await assert.rejects(index.find('denied', { strict: true }), { code });
+  await assert.rejects(index.find('denied', { strict: true }), { code }, 'retry retains the failure');
+});
+
+test('strict lookup refuses incomplete directory enumeration instead of proving absence', async t => {
+  const f = await fixture(t);
+  await f.write('denied-directory');
+  const realReadDir = fs.readdir;
+  const realDirectory = await fs.realpath(f.directory);
+  t.mock.method(fs, 'readdir', async (directory, ...args) => {
+    if (path.resolve(directory) === path.resolve(f.directory) || path.resolve(directory) === realDirectory)
+      throw Object.assign(Error('fixture inaccessible directory'), { code: 'EACCES' });
+    return realReadDir(directory, ...args);
+  });
+  const { index } = tracked(f.root);
+  assert.equal(await index.find('denied-directory'), null);
+  await assert.rejects(index.find('denied-directory', { strict: true }), { code: 'EACCES' });
+});
+
+test('strict lookup rejects a corrupt or replaced target even after tolerant lookup cached it', async t => {
+  const f = await fixture(t);
+  const { index } = tracked(f.root);
+  for (const [id, entries] of [['empty-target', []], ['bad-header', [{ type: 'message', message: {} }]],
+    ['replaced-target', [header('different-id'), message('different conversation')]]]) {
+    const file = await f.write(id, entries);
+    assert.equal(await index.find(id), null);
+    await assert.rejects(index.find(id, { strict: true }), { code: 'HISTORY_ARCHIVE_INVALID' });
+    assert.equal(await fs.readFile(file, 'utf8'), encode(entries), 'strict checks never rewrite the archive');
+  }
+});
+
+test('strict lookup keeps a known renamed target identifiable across repeated corrupt reads', async t => {
+  const f = await fixture(t), original = await f.write('renamed-target');
+  const file = path.join(f.directory, 'legacy-name.jsonl');
+  await fs.rename(original, file);
+  const { index } = tracked(f.root);
+  assert.equal((await index.find('renamed-target', { strict: true })).id, 'renamed-target');
+  await fs.writeFile(file, '{broken-json\n');
+  await assert.rejects(index.find('renamed-target', { strict: true }), { code: 'HISTORY_ARCHIVE_INVALID' });
+  await assert.rejects(index.find('renamed-target', { strict: true }), { code: 'HISTORY_ARCHIVE_INVALID' });
+});
+
+test('strict absence does not reuse a tolerant in-flight permission failure', async t => {
+  const f = await fixture(t);
+  await f.write('shared-denied');
+  let release, started;
+  const pending = new Promise(resolve => { release = resolve; });
+  const reading = new Promise(resolve => { started = resolve; });
+  const { index } = tracked(f.root, async () => {
+    started(); await pending;
+    throw Object.assign(Error('fixture permission failure'), { code: 'EPERM' });
+  });
+  const listing = index.list();
+  await reading;
+  const checked = assert.rejects(index.find('shared-denied', { strict: true }), { code: 'EPERM' });
+  release();
+  assert.deepEqual(await listing, []);
+  await checked;
+});
+
 test('directories linked outside the archive root are rejected, including after a cached hit', async t => {
   const f = await fixture(t);
   const file = await f.write('safe');
@@ -196,6 +287,7 @@ test('directories linked outside the archive root are rejected, including after 
   await fs.symlink(outside, f.directory, process.platform === 'win32' ? 'junction' : 'dir');
   assert.equal(await index.find('safe'), null);
   assert.deepEqual(await index.list(), []);
+  await assert.rejects(index.find('safe', { strict: true }), { code: 'HISTORY_ARCHIVE_UNSAFE' });
 });
 
 test('a same-size rewrite and changed model metadata do not alter message activity order', async t => {

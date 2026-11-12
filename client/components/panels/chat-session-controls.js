@@ -49,12 +49,14 @@
       const state = options.state();
       const identity = state.ref || (state.draftOnly ? 'draft:' + state.draftId : '');
       if (lastIdentity !== identity) { lastIdentity = identity; ref = state.ref || ''; generation++; saving = false; request = null; message(); close(); }
-      const id = state.adapterId || '', title = state.displayName || global.AgentBrand?.LABELS[id] || id || 'Agent';
+      const taskRuntime = state.taskRuntime || '';
+      const id = taskRuntime || state.adapterId || '';
+      const title = (taskRuntime ? global.AgentBrand?.LABELS[id] : state.displayName) || global.AgentBrand?.LABELS[id] || id || 'Agent';
       if (badge) {
         badge.title = '本次会话执行底座：' + title;
         badge.setAttribute('aria-label', badge.title); badge.setAttribute('role', 'button');
         if (name && name.textContent !== title) name.textContent = title;
-        if (brand && lastAgent !== id) { lastAgent = id; brand.innerHTML = global.AgentBrand?.html(id, { className: 'runtime-brand' }) || ''; }
+        if (brand && lastAgent !== id) { lastAgent = id; brand.innerHTML = global.AgentBrand?.html(taskRuntime && !global.AgentBrand?.LABELS[id] ? 'custom' : id, { className: 'runtime-brand' }) || ''; }
       }
       const effective = state.nextAccessPolicy || state.accessPolicy;
       const mode = effective?.mode || (state.mode === 'readonly' ? 'readonly' : 'legacy');
@@ -76,7 +78,13 @@
       }
       button.setAttribute('aria-busy', String(saving));
       button.disabled = Boolean(state.cloudHandoff);
-      if (state.cloudHandoff) { label.textContent = '云端权限'; button.title = '权限由云端执行环境管理'; pop.hidden = true; }
+      if (state.cloudHandoff) {
+        const personal = state.cloudHandoff.target?.runnerKind === 'work-computer';
+        label.textContent = personal ? '电脑权限' : '云端权限';
+        button.title = personal ? '权限由所选本人电脑的执行环境管理' : '权限由云端执行环境管理';
+        button.setAttribute('aria-label', label.textContent + '：' + button.title);
+        pop.hidden = true;
+      }
       const current = pop.querySelector('[data-access-current]');
       current.textContent = '当前权限：' + global.WorkComposer.permissionLabel(state.accessPolicy?.mode || (state.mode === 'readonly' ? 'readonly' : 'legacy'));
       pop.querySelectorAll('[data-access-mode]').forEach(row => {

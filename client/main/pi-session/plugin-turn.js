@@ -50,7 +50,7 @@ async function prepare(options, turn, cancelled = () => false, turnContext = {})
       badges: plugins.map(({pluginId, name, version, scopeLabel}) => ({pluginId, name, version, scopeLabel})),
       cleanup, redact, hasSecrets: Boolean(grant?.redact || connectors.hasSecrets),
       augment: text => connectors.augment(context.augment(text, plugins,
-        [resolved.applicationGuide, grant?.guide].filter(Boolean).join('\n\n'))),
+        [resolved.applicationGuide, grant?.guide].filter(Boolean).join('\n\n'), input.pluginInputs)),
     };
   } catch (error) {
     cleanup();

@@ -1,6 +1,9 @@
 /* System-authored capability and requirement copy, shared by renderer and main process. */
 (function (global) {
   const rows = {
+    '切换成果摘要面板': ['Toggle output summary panel', '成果サマリーパネルを切り替え', '산출물 요약 패널 전환'],
+    '关闭成果摘要': ['Close output summary', '成果サマリーを閉じる', '산출물 요약 닫기'],
+    '核对成果并选择验收方式': ['Review outputs and choose a review method', '成果を確認して検収方法を選択', '성과를 확인하고 검수 방식 선택'],
     '过程与验证材料': ['Process and verification materials', '作業過程と検証の資料', '작업 과정 및 검증 자료'],
     '本轮没有可自动核验的交付物，请使用手动验收确认实际结果': ['This delivery has no fixed output for automatic review. Analyze it if needed, then confirm the actual result manually.', 'この納品には自動検収できる固定成果物がありません。必要に応じて分析し、実際の結果を手動で確認してください。', '이 납품 버전에는 자동 검수할 고정 산출물이 없습니다. 필요하면 분석한 뒤 실제 결과를 수동으로 확인하세요.'],
     '模型的单次输出上限已被思考内容用完，尚未生成答复。请检查模型管理中的最大输出量；也可降低模型支持的思考强度或选择其他模型后继续。部分模型不支持关闭思考。已有内容和工具结果已保留，不会自动重复执行。': ['Reasoning used the entire response token limit before an answer was produced. Check the maximum output setting, reduce the reasoning effort if supported, or select another model to continue. Some models cannot disable reasoning. Existing content and tool results are preserved; completed actions will not be repeated automatically.', '回答が生成される前に、思考で1回の出力上限を使い切りました。最大出力設定を確認し、対応する思考強度を下げるか別のモデルを選んで続行してください。思考を無効にできないモデルもあります。既存の内容とツール結果は保持され、完了済みの操作は自動で繰り返されません。', '답변을 생성하기 전에 추론이 단일 출력 한도를 모두 사용했습니다. 최대 출력 설정을 확인하거나, 지원되는 추론 강도를 낮추거나 다른 모델을 선택해 계속하세요. 일부 모델은 추론을 끌 수 없습니다. 기존 내용과 도구 결과는 보존되며 완료된 작업은 자동 반복되지 않습니다.'],

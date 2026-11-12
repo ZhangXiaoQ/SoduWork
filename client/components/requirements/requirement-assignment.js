@@ -114,7 +114,7 @@
       '<div class="fwd-list" id="fwdList"><div class="fwd-loading"><i></i><span>正在核对可执行方式…</span></div></div>' +
       '<div class="fwd-decision" id="fwdDecision"></div>' +
       '<label class="fwd-submission-wrap"><span>交付提交方式</span><select id="fwdSubmissionMode" aria-label="交付提交方式">' +
-      '<option value="">按交付物自动判断（推荐）</option><option value="auto">自动提交验收</option><option value="manual">完成后手动提交验收</option>' +
+      '<option value="">按交付物自动判断（推荐）</option><option value="manual">完成后手动提交验收</option>' +
       '</select><small>有明确输出物时自动提交；没有输出物时默认手动提交。</small></label>' +
       '</section></div>' +
       '<div class="fwd-actions"><span class="fwd-status" id="fwdStatus"></span>' +

@@ -12,20 +12,40 @@
       startupTimeoutSeconds:10,toolTimeoutSeconds:60,enabledTools:[],disabledTools:[]};
     const local = value.type === 'stdio';
     const brand = global.SoduWorkConnectorBrand?.image(template || value) || ctx.warnIcon || '';
-    const fieldMarkup = field => {
-      const saved = value.env?.[field.key] || '';
-      if (field.type === 'boolean') return '<label class="cap-confirm"><input data-connector-field="'+h(field.key)+'" type="checkbox"'+(saved==='true'?' checked':'')+'><span>'+h(field.label)+'<small>仅在你需要创建、修改或发送内容时开启</small></span></label>';
-      return '<label class="cap-field wide"><span>'+h(field.label)+(field.required?'':' <em>选填</em>')+'</span><input class="cap-input" data-connector-field="'+h(field.key)+'" type="'+(field.secret?'password':'text')+'" autocomplete="off" maxlength="16384" value="'+h(saved)+'" placeholder="'+h(field.example||(field.secret?'粘贴授权凭据':''))+'"></label>';
-    };
     const fields = template?.connectionFields || [];
-    const mainFields = fields.filter(x=>x.required && x.type!=='boolean');
+    const bundled = template?.template?.command === 'soduwork-connector' && !value.apiDefinition;
+    const port = bundled && fields.find(field => field.key.endsWith('_PORT') && field.default &&
+      fields.some(other => other.key === field.key.replace(/_PORT$/, '_HOST')));
+    const hostKey = port && port.key.replace(/_PORT$/, '_HOST');
+    const redis = bundled && template.key === 'connector-redis';
+    const fieldMarkup = field => {
+      const raw = value.env?.[field.key];
+      const fallback = (field === port || redis) && !field.secret ? field.default : '';
+      const saved = String(raw === undefined || raw === null || raw === '' ? fallback ?? '' : raw);
+      const tls = redis && field.key === 'REDIS_TLS';
+      if (tls || field.type === 'boolean') {
+        const hint = tls ? '本机未启用 TLS 时可关闭。远程连接或使用 CA 证书时须开启。'
+          : field.key === 'ALLOW_WRITES' ? '仅在你需要创建、修改或发送内容时开启' : '';
+        const checked = saved === 'true' || (tls && Boolean(value.env?.REDIS_CA_PEM));
+        return '<label class="cap-confirm"><input data-connector-field="'+h(field.key)+'" type="checkbox"'+(checked?' checked':'')+'><span>'+h(tls?'使用 TLS':field.label)+(hint?'<small>'+h(hint)+'</small>':'')+'</span></label>';
+      }
+      const paired = field === port || field.key === hostKey;
+      let label = field.label, placeholder = field.example || (field.secret ? '粘贴授权凭据' : '');
+      if (field.key === hostKey) label = '数据库主机';
+      if (redis && field.key === 'REDIS_USER') label = '用户名';
+      if (redis && field.key === 'REDIS_PASSWORD') { label = '密码'; placeholder = ''; }
+      return '<label class="cap-field'+(paired?'':' wide')+'"><span>'+h(label)+(field.required || field === port?'':' <em>选填</em>')+'</span><input class="cap-input" data-connector-field="'+h(field.key)+'" type="'+(field.secret?'password':'text')+'"'+(field === port?' inputmode="numeric"':'')+' autocomplete="off" maxlength="16384" value="'+h(saved)+'" placeholder="'+h(placeholder)+'"></label>';
+    };
+    const mainFields = fields.filter(field => field === port || (field.required && field.type !== 'boolean') ||
+      (redis && ['REDIS_USER','REDIS_PASSWORD','REDIS_TLS'].includes(field.key)));
     const moreFields = fields.filter(x=>!mainFields.includes(x));
+    const address = port ? '<div><div class="connector-db-address">'+fields.filter(field => field.key === hostKey || field === port).map(fieldMarkup).join('')+'</div><small class="connector-inline-note">localhost 指运行连接器的那台电脑。</small></div>' : '';
     const layer = ctx.openModal(initial ? '管理连接' : (template?'连接 '+template.name:'添加连接器'),
       '连接一次，在对话、插件和自动化中使用',
       '<div class="connector-intro"><span class="connector-intro-icon">'+brand+'</span><div><strong>'+h(template?.name||value.name||'远程连接')+'</strong><p>'+h(global.SoduWorkConnectorConfig.summary(template?.description||value.description)||'接入你已经使用的业务工具')+'</p></div></div>'+
       (value.apiDefinition?'<p class="connector-inline-note">'+h(value.apiDefinition.baseUrl)+' · '+Number(value.apiDefinition.tools?.length||0)+' 个接口</p>':'')+
       (!local?'<label class="cap-field"><span>连接地址或配置</span><textarea class="cap-textarea compact" id="capMcpQuickConfig" placeholder="粘贴连接地址或 JSON 配置">'+h(value.url||'')+'</textarea></label><select class="cap-input" id="capMcpQuickChoice" aria-label="选择连接" hidden></select><p class="connector-inline-note" id="capMcpAutoFillStatus" role="status"></p>':'')+
-      '<div class="cap-fields connector-main-fields">'+mainFields.map(fieldMarkup).join('')+'</div>'+
+      '<div class="cap-fields connector-main-fields">'+address+mainFields.filter(field => field !== port && field.key !== hostKey).map(fieldMarkup).join('')+'</div>'+
       '<div data-connector-oauth></div>'+
       (commercial && template.officialDocs?.[0]?'<a class="connector-help" href="'+h(template.officialDocs[0])+'" target="_blank" rel="noopener noreferrer">如何获取授权 <span aria-hidden="true">↗</span></a>':'')+
       '<details class="cap-mcp-advanced connector-advanced"><summary><span>高级设置</span><i>›</i></summary><div class="cap-mcp-advanced-body"><div class="cap-fields">'+
@@ -55,6 +75,11 @@
     let appliedQuick = value.url || '';
     const controls = () => Array.from(layer.querySelectorAll('#capModalBody input, #capModalBody textarea, #capModalBody select'));
     const form = id => layer.querySelector('#'+id);
+    if (initial && options.editName) {
+      const name = form('capMcpName');
+      name.closest('details').open = true;
+      name.focus(); name.select();
+    }
     let auth=null;
     const compose = (enabled = value.enabled) => ({
       ...(auth?.binding()?{oauth:auth.binding()}:{}),
@@ -141,8 +166,21 @@
     function validate(spec) {
       if (!spec.name || !local && !spec.url) throw Error('请先填写连接地址或选择服务');
       if (spec.enabledTools.some(x=>spec.disabledTools.includes(x))) throw Error('同一工具不能同时允许和禁用');
-      const absent=mainFields.find(x=>!auth?.skipField(x.key)&&!String(spec.env[x.key]||'').trim());
+      const absent=mainFields.find(x=>x.required&&!auth?.skipField(x.key)&&!String(spec.env[x.key]||'').trim());
       if (absent) { layer.querySelector('[data-connector-field="'+absent.key+'"]')?.focus();throw Error('请填写'+absent.label); }
+      if (port && (!/^\d{1,5}$/.test(spec.env[port.key]) || Number(spec.env[port.key]) < 1 || Number(spec.env[port.key]) > 65535)) {
+        layer.querySelector('[data-connector-field="'+port.key+'"]')?.focus();
+        throw Error('端口必须是 1 到 65535 之间的整数');
+      }
+      if (redis && spec.env.REDIS_TLS === 'false' && (spec.env.REDIS_CA_PEM ||
+          !['localhost','127.0.0.1','::1'].includes(String(spec.env.REDIS_HOST).toLowerCase()))) {
+        layer.querySelector('[data-connector-field="REDIS_TLS"]')?.focus();
+        throw Error('远程 Redis 或使用 CA 证书的连接需要启用 TLS');
+      }
+      if (redis && spec.env.REDIS_USER && !spec.env.REDIS_PASSWORD) {
+        layer.querySelector('[data-connector-field="REDIS_PASSWORD"]')?.focus();
+        throw Error('填写 Redis 用户名后也需要填写密码');
+      }
     }
     async function inspect(spec, id) {
       const valid=()=>current() && id===ticket && fingerprint(spec)===fingerprint(compose());
@@ -163,6 +201,10 @@
     let authorizing=false;
     async function connect(onlyCheck = false, saveDraft = false) {
       if (!current() || saving || pending || authorizing) return;
+      if (port) {
+        const input = layer.querySelector('[data-connector-field="'+port.key+'"]');
+        if (!input.value.trim()) input.value = String(port.default);
+      }
       if (!local && (form('capMcpQuickConfig').value!==appliedQuick || !form('capMcpUrl').value.trim()) && !applyQuick()) return;
       if(auth){
         authorizing=true;

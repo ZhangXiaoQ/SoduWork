@@ -1,35 +1,35 @@
-# First release scope
+# 首版公开源码范围
 
-**Release scope (English)** · [Companion copy](release-scope.en.md) · [Documentation](README.md)
+**简体中文** · [English](release-scope.en.md) · [文档导航](README.zh-CN.md)
 
-Project copyright is attributed to **MDiRi**. See the root [LICENSE](../LICENSE).
+项目版权归 **MDiRi** 所有，见根目录 [LICENSE](../LICENSE)。
 
-The first release includes the desktop client, Hub, management UI, Runner source, multi-platform source launchers, and generic Docker self-hosting. It retains project-owned office, task, MCP, and capability-authoring guides, generic workflows, isolation checks, and migration tests.
+当前公开源码包括桌面客户端、Hub、管理端、Runner 源码、跨平台源码启动器和通用 Docker 自托管方案。保留本项目自有的办公、任务、MCP 与能力编写指南，以及通用工作流、隔离检查和迁移测试。
 
-Excluded from this distribution:
+以下内容不在公开分发范围内：
 
-- Third-party skill bundles and their display metadata, and upstream platform-plugin reference snapshots.
-- Mobile applications, internal product and architecture records, original brand design files, and validation process material.
-- Non-public business plugins, applications, and their dedicated adapters, integration scripts, prompts, and assets.
-- Business-content synchronization and demo-data seeding tools.
-- Company cluster configuration, deployment pipelines, signing uploads, scheduled backups, and server rollback operations.
+- 第三方技能套件及其展示元数据，以及上游平台插件的参考快照。
+- 移动端应用、内部产品与架构记录、品牌设计源文件和验证过程材料。
+- 非公开业务插件、应用及其专用适配器、集成脚本、提示词和素材。
+- 业务内容同步和演示数据初始化工具。
+- 公司集群配置、部署流水线、签名上传、定时备份和服务端回滚操作。
 
-Generic update-signing and compatibility tools remain. Private keys, upload credentials, and company deployment configuration are excluded.
+保留通用的更新签名和兼容性工具；私钥、上传凭据及公司部署配置不包含在内。
 
-[PUBLIC-SOURCE.json](../tools/distribution/PUBLIC-SOURCE.json) and source checks define the file boundary. Generic model APIs and executor compatibility such as Codex do not imply bundled commercial skills; users supply their own services and permissions. Retained UI, terminal, and model runtime dependencies carry their original licenses.
+[PUBLIC-SOURCE.json](../tools/distribution/PUBLIC-SOURCE.json) 和源码检查共同定义文件边界。通用模型 API 以及对 Codex 等执行底座的兼容，不代表随包提供商业技能；用户需自行配置服务并取得相应权限。保留的界面、终端和模型运行时依赖继续适用各自的原始许可证。
 
-## Runtime and data
+## 运行环境与数据
 
-Local source mode uses isolated SQLite storage and a dedicated desktop profile, listening on loopback by default. It does not load the checkout's `.env`, business databases, or existing model credentials. Model providers and optional execution agents need separate configuration.
+本地源码模式使用隔离的 SQLite 存储和专用桌面配置目录，默认只监听回环地址。它不会加载源码目录中的 `.env`、业务数据库或已有模型凭据。模型服务和可选执行底座需单独配置。
 
-Stop the service and back up the complete data directory before updates. Restore matching source and data backups together when rolling back. Docker team deployments need their own HTTPS, database backups, and access controls; local source mode is not a production deployment.
+更新前先停止服务，并备份完整的数据目录；回滚时同时恢复相匹配的源码和数据备份。Docker 团队部署需要自行配置 HTTPS、数据库备份和访问控制；本地源码模式不等同于生产部署。
 
-## Source and installers
+## 源码与安装包
 
-Desktop installers, native runtimes, third-party models, imported plugins, and container images each need their own provenance, licensing, and runtime validation. Passing the source manifest check does not authorize distribution of those artifacts.
+桌面安装包、原生运行时、第三方模型、导入的插件和容器镜像，均需分别核验来源、许可和实际运行情况。通过源码清单检查不代表这些产物已获准分发。
 
-See the [GitHub workflow guide](../.github/RELEASE.md) for source, Client and Hub pipelines. Client and Hub paths run only after the distribution scope, third-party evidence and upgrade baselines pass preflight. Workflow source does not establish publication clearance or a successful hosted run.
+源码、Client 和 Hub 发布流水线见 [GitHub 工作流指南（英文）](../.github/RELEASE.md)。Client 和 Hub 发布需先通过分发范围、第三方材料及适用的平台验收前置检查；桌面升级依赖旧版安装包基线。工作流源码的存在不代表已获准发布，也不代表已在 GitHub 托管环境运行成功。
 
-Initialize a public repository from a verified source ZIP, or squash the reviewed source into the public branch. Private development history, old tags, and previous artifacts are outside scope; do not turn the original development repository public. `tools/export_source.py` exports only the committed tree, checking every file against the manifest. It omits Git history, untracked files, and dependency caches.
+从已验证的源码 ZIP 初始化公开仓库，或将审查后的源码合并为单个提交放入公开分支。私有开发历史、旧标签和历史产物不在范围内，不要直接公开原始开发仓库。`tools/export_source.py` 只导出当前已提交的文件树，根据压缩包内的文件自动生成 `tools/distribution/SOURCE-MANIFEST.json`、记录源码提交，并验证最终 ZIP。该清单是导出产物，不应提交到 Git；源码包不包含 Git 历史、未提交的改动、未跟踪文件或依赖缓存。
 
-Report only the platforms actually tested. Windows checks do not replace native macOS/Linux validation, and synthetic-data checks do not establish real-model or production acceptance.
+只报告实际验证过的平台。Windows 检查不能替代原生 macOS/Linux 验证，合成数据检查也不能证明真实模型或生产环境已完成验收。

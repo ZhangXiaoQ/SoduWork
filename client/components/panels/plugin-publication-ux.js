@@ -258,12 +258,13 @@
     if (opts.isCurrent && !opts.isCurrent()) return;
     const detail = detailResult && detailResult.plugin || {};
     let draft = detail.localDraft || {};
+    const application = opts.application === true || draft.template === 'app';
     const appCategories = [['office','工具办公'],['game','小游戏'],['robot','机器人'],['other','其他']];
     const publisher = publisherResult && publisherResult.identity || {};
     const authorName = draft.author || detail.authorName || item.authorName || publisher.displayName || publisher.name || '\u0053odo \u4e2a\u4eba\u4f5c\u8005';
     const people = (peopleResult && peopleResult.items || []).slice(0, 500);
     const orgUnits = (peopleResult && peopleResult.orgUnits || []).slice(0, 500);
-    if (!draft.name || !draft.version) throw new Error('个人插件版本不完整，请重新安装后再上传');
+    if (!draft.name || !draft.version) throw new Error(application ? '应用版本不完整，请重新安装后再提交审核' : '个人插件版本不完整，请重新安装后再上传');
     const layer = ctx.openModal(opts.application ? '申请上架' : '上传到企业', item.name + ' · v' + item.version,
       (global.SoduWorkPluginMakerUtils ? global.SoduWorkPluginMakerUtils.resourceMarkup(draft.resources) : '') +
       '<section class="cap-publish-summary"><span><small>\u63d0\u4ea4\u7248\u672c</small><b>' + h(draft.name) + ' \u00b7 v' + h(draft.version) + '</b></span><span><small>' + (draft.template === 'app' ? '开发者' : '作者') + '</small><b>' + h(authorName) + '</b></span></section>' +
@@ -358,8 +359,8 @@
       const userIds = mode === 'users' ? [...layer.querySelectorAll('#capAudienceList input:checked')].map(x => x.value) : [];
       const orgUnitIds = mode === 'org_units' ?
         [...layer.querySelectorAll('#capAudienceUnitList input:checked')].map(x => x.value) : [];
-      if (mode === 'users' && !userIds.length) { ctx.say('至少选择一位可以使用插件的成员'); return; }
-      if (mode === 'org_units' && !orgUnitIds.length) { ctx.say('至少选择一个可以使用插件的团队或部门'); return; }
+      if (mode === 'users' && !userIds.length) { ctx.say(application ? '至少选择一位可以使用应用的成员' : '至少选择一位可以使用插件的成员'); return; }
+      if (mode === 'org_units' && !orgUnitIds.length) { ctx.say(application ? '至少选择一个可以使用应用的团队或部门' : '至少选择一个可以使用插件的团队或部门'); return; }
       this.disabled = true; this.textContent = '正在上传…';
       const categoryControl=layer.querySelector('#capPublishAppCategory');if(categoryControl)categoryControl.disabled=true;
       try {
@@ -377,13 +378,15 @@
           draft, mode, userIds, orgUnitIds, signed.signature, signed.identity);
         if (!current()) return;
         const proof = result && result.preview && result.preview.signature || {};
-        const message = proof.state === 'unknown-key'
+        const message = application ? (proof.state === 'unknown-key'
+          ? '应用已签名并提交审核；管理员确认发布身份后可继续审核上架'
+          : '应用已提交审核，管理员审核发布后按所选范围可用') : proof.state === 'unknown-key'
           ? '插件已签名并进入隔离区；管理员可在版本审查中核对指纹并一键登记发布身份'
           : (result.message || '插件已使用本机发布身份提交企业审核');
         ctx.closeModal(); ctx.say(message); await load(); ctx.refresh();
       } catch (error) {
         if (!current()) return;
-        ctx.say(ctx.errorText(error, '插件没有上传成功'));
+        ctx.say(ctx.errorText(error, application ? '应用没有提交成功' : '插件没有上传成功'));
         if(categoryControl)categoryControl.disabled=false;
         this.disabled = false; this.textContent = '提交审核';
       }

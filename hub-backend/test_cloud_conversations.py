@@ -90,6 +90,114 @@ class CloudConversationTests(unittest.IsolatedAsyncioTestCase):
             data={"options": json.dumps(body if options is None else options)},
             files=[("files", item) for item in files])
 
+    async def test_endpoint_content_releases_policy_lock_before_personal_dispatch(self):
+        from types import MethodType, SimpleNamespace
+        from app.services.runner_content_store import Store
+
+        runner, peer = self.fixture.runner, self.fixture.peer
+        runner.caps.append("conversationContent1")
+        store = Store(str(fixture.WORK / "policy-content"))
+        loop = asyncio.get_running_loop()
+        content_reads = []
+        disable_before_dispatch = False
+
+        async def send_json(message):
+            op = message["op"]
+            if op.startswith("content."):
+                reply = await asyncio.to_thread(store.handle, message)
+                if op == "content.read":
+                    content_reads.append(message["scope"])
+            else:
+                reply = await asyncio.to_thread(peer.call, runner, op, message)
+            runner.resolve(message["id"], reply)
+
+        # Exercise the real transport authorization and its independent database
+        # connection; only the socket and vendor process remain fixtures.
+        runner.ws = SimpleNamespace(send_json=send_json)
+        runner.call = MethodType(runner_hub._Runner.call, runner)
+
+        async def authorized_call(node, op, data, timeout):
+            if op == "job.dispatch" and disable_before_dispatch:
+                from app.automation_models import RunnerNode
+                async with db.SessionLocal() as policy_session:
+                    row = await policy_session.get(RunnerNode, node.id)
+                    row.management_state = "disabled"
+                    await policy_session.commit()
+            return await node.call(op, data, timeout)
+
+        def call_sync(node, op, data, timeout=60):
+            return asyncio.run_coroutine_threadsafe(
+                authorized_call(node, op, data, timeout), loop).result(timeout + 5)
+
+        with patch.object(runner_hub, "call_sync", call_sync):
+            response = await self.create("personal-content-lock")
+            self.assertEqual(response.status_code, 200, response.text)
+            receipt = response.json()
+            self.assertEqual(receipt["phase"], "committed", receipt)
+            self.assertTrue(content_reads)
+            self.assertEqual(peer.calls.count("job.dispatch"), 1)
+            await self.fixture.complete(receipt["ref"])
+            replay = await self.create("personal-content-lock")
+            self.assertEqual(replay.json()["ref"], receipt["ref"])
+            self.assertEqual(peer.calls.count("job.dispatch"), 1)
+
+            message = {"text": "Verify delivery again.", "messageId": "content-policy-follow-up"}
+            follow = await self.http.post(
+                f'/api/v1/tasks/{receipt["taskId"]}/ai-say', json=message)
+            self.assertEqual(follow.status_code, 200, follow.text)
+            self.assertEqual(follow.json()["delivery"], "accepted", follow.text)
+            await self.fixture.complete(receipt["ref"])
+            before = peer.calls.count("job.comment")
+            repeated = await self.http.post(
+                f'/api/v1/tasks/{receipt["taskId"]}/ai-say', json=message)
+            self.assertTrue(repeated.json()["duplicate"], repeated.text)
+            self.assertEqual(peer.calls.count("job.comment"), before)
+
+            # Releasing preparation locks must not authorize a send using the
+            # earlier selection snapshot after an administrator disables it.
+            disable_before_dispatch = True
+            blocked = await self.create("personal-content-revoked")
+            self.assertEqual(blocked.status_code, 200, blocked.text)
+            self.assertEqual(blocked.json()["phase"], "prepared", blocked.text)
+            self.assertTrue(blocked.json()["error"], blocked.text)
+            self.assertEqual(peer.calls.count("job.dispatch"), 1)
+
+    async def test_personal_plugin_first_turn_keeps_hub_conversation_and_deduplication(self):
+        from app.automation_models import RunnerNode
+        runner = self.fixture.runner
+        runner.client_id = "u-plugin-desktop"
+        runner.tags = [runner_hub.CLIENT_TAG]
+        runner.caps = ["handoff1", "desktopCapabilities1", "desktopPluginTurn1", "desktopPluginStart1", "admit1"]
+        async with db.SessionLocal() as session:
+            session.add(models.Client(id=runner.client_id, user_ref=self.fixture.owner.id, auth_state="active"))
+            node = await session.get(RunnerNode, runner.id)
+            node.client_id = runner.client_id
+            await session.commit()
+        await asyncio.to_thread(self.fixture.peer.call, runner, "fixture.desktop", {})
+        selected = [{"pluginId":"local:fixture", "checksum":"a" * 64}]
+        args = dict(plugins=selected, targetRunnerId=runner.id, targetRunnerKind="work-computer")
+        response = await self.create("plugin-normal-chat", files=(("note.txt",b"material"),), **args)
+        self.assertEqual(response.status_code,200,response.text)
+        receipt = response.json()
+        self.assertEqual(receipt["phase"],"committed",receipt)
+        await self.fixture.complete(receipt["ref"])
+        read = await self.http.get('/api/v1/tasks/' + receipt['taskId'] + '/ai-session')
+        self.assertEqual(read.status_code,200,read.text)
+        users = [item for item in read.json()['items'] if item.get('kind') == 'user']
+        self.assertEqual(len(users),1)
+        self.assertEqual(users[0]['text'],'CLOUD_NEW_TEST: write a report')
+        self.assertEqual(users[0]['plugins'][0]['pluginId'],'local:fixture')
+        context = json.loads((fixture.WORK / 'plugin-start-context.json').read_text(encoding='utf-8'))
+        self.assertEqual(context['ref'],receipt['ref'])
+        self.assertTrue(Path(context['cwd']).is_relative_to(fixture.WORK))
+        again = await self.create("plugin-normal-chat", files=(("note.txt",b"material"),), **args)
+        self.assertEqual(again.status_code,200,again.text)
+        self.assertEqual(again.json()['taskId'],receipt['taskId'])
+        self.assertEqual(self.fixture.peer.calls.count('job.dispatch'),1)
+        changed = await self.create("plugin-normal-chat", files=(("note.txt",b"material"),),
+            **{**args,'plugins':[{**selected[0],'checksum':'b' * 64}]})
+        self.assertEqual(changed.status_code,409,changed.text)
+
     async def test_direct_entry_security_idempotency_inputs_and_capacity(self):
         peer, runner = self.fixture.peer, self.fixture.runner
         with self.subTest("validated contract rejects silent downgrades before execution"):
@@ -151,6 +259,15 @@ class CloudConversationTests(unittest.IsolatedAsyncioTestCase):
             users = [item for item in replay.json()["items"] if item.get("kind") == "user"]
             self.assertEqual(len(users), 1, replay.text)
             self.assertEqual(users[0]["text"], "CLOUD_NEW_TEST: write a report")
+            from app.services import execution_sessions
+            original_read = execution_sessions.read_task
+            with patch.object(execution_sessions, 'read_task', wraps=original_read) as read:
+                larger = await self.http.get(f'/api/v1/tasks/{receipt["taskId"]}/ai-session?limit=1000')
+                self.assertEqual(larger.status_code, 200, larger.text)
+                self.assertEqual(read.call_args.kwargs['limit'], 1000)
+                self.assertEqual(larger.json()['items'], replay.json()['items'])
+            excessive = await self.http.get(f'/api/v1/tasks/{receipt["taskId"]}/ai-session?limit=1001')
+            self.assertEqual(excessive.status_code, 422)
             async with db.SessionLocal() as session:
                 settled = await execution_settlement.settle_terminal(session, receipt["taskId"], receipt["ref"])
                 self.assertTrue(settled["ok"], settled)

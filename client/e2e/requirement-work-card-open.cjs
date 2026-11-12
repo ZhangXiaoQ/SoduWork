@@ -29,7 +29,7 @@ app.on('window-all-closed', () => {});
 const report = {ok: false, root, cases: [], requests: [], modelRequests: 0,
   boundary: 'Production reserve/save, openConversation and utilityProcess Pi session; real temporary JSONL archive and loopback Hub/model configuration. No inference request, implicit warmup, user profile or business data is permitted.'};
 const originalFetch = global.fetch;
-let server, hub, current, runtime, bridge, controller, archive, sessionId;
+let server, hub, current, runtime, bridge, controller, archive, sessionId, sharedHistory;
 const taskId = 'isolated-created-requirement';
 function identity() {
   const now = Math.floor(Date.now() / 1000);
@@ -55,6 +55,8 @@ function createRuntime() {
   bridge = require('../main/agent-runtime/pi-session-bridge').createPiSessionBridge({
     app, sessionModule: runtime, runnerAdapters: [],
   });
+  sharedHistory = require('../main/conversation/shared-history.cjs').create({app, session: bridge});
+  bridge.setReplicaHistory(sharedHistory);
   controller = require('../main/conversation/work-conversation-cards').create({app,
     identityOf: async () => current, newCwd: () => cwd,
     session: {...runtime, archivedConversation: async (targetApp, id) =>
@@ -73,7 +75,12 @@ function openHarness() {
     getURL: () => require('node:url').pathToFileURL(path.resolve(__dirname, '../desk.html')).href};
   const event = {sender, senderFrame: sender.mainFrame};
   const context = vm.createContext({app, path, console, setTimeout, clearTimeout,
-    require: localRequire, session: bridge, identityOf: async () => current, sendIdentityOf: null,
+    require: name => {
+      const value = localRequire(name);
+      // Only the account transport is a fixture; retain production ownership checks.
+      return name === '../conversation/history-access' ? {...value, actor: target => value.actor(target, current)} : value;
+    }, session: bridge, identityOf: async () => current, sendIdentityOf: null,
+    _sharedHistory: sharedHistory, _sessionOwners: null,
     taskInput: localRequire('./task-input'), skillTurn: localRequire('./skill-turn'),
     sessionSpec: localRequire('../conversation/session-spec'),
     memories: {context: async () => ({}), attach: async () => {},
@@ -165,7 +172,7 @@ app.whenReady().then(async () => {
   fs.copyFileSync(archive, path.join(output, 'first-open-archive.jsonl'));
   report.cases.push('Production IPC first open authorizes the saved receipt against loopback Hub, opens the real Pi archive in utilityProcess and persists exactly one task binding.');
 
-  await bridge.dispose(); await runtime.dispose(); createRuntime();
+  await bridge.dispose(); await sharedHistory.close(); await runtime.dispose(); createRuntime();
   const reopened = await bounded(openHarness()(taskId), 'cold reopen from persisted binding');
   assert.equal(reopened.ok, true, reopened.reason); assert.equal(reopened.sessionId, sessionId);
   assert.deepEqual(reopened.taskIds, [taskId]);
@@ -173,7 +180,7 @@ app.whenReady().then(async () => {
   // still contain the original task exactly once, with no unrelated identity.
   assert.deepEqual(bindings().at(-1).data.tasks.map(task => task.taskId), [taskId]);
   assert.equal(bindings().at(-1).data.activeTaskId, taskId);
-  await bridge.dispose(); await runtime.dispose(); createRuntime();
+  await bridge.dispose(); await sharedHistory.close(); await runtime.dispose(); createRuntime();
   const beforeColdDenied = fs.readFileSync(archive);
   const coldDenied = await bounded(openHarness()('isolated-other-task'), 'cold reopen rejects another task');
   assert.equal(coldDenied.ok, false); assert.match(coldDenied.reason, /需求|会话|绑定/);
@@ -188,6 +195,7 @@ app.whenReady().then(async () => {
   report.ok = true;
 }).catch(error => {report.error = String(error.stack || error);}).finally(async () => {
   await Promise.resolve(bridge?.dispose()).catch(error => {report.cleanupError = error.message; report.ok = false;});
+  await Promise.resolve(sharedHistory?.close()).catch(error => {report.cleanupError = error.message; report.ok = false;});
   await Promise.resolve(runtime?.dispose()).catch(error => {report.cleanupError = error.message; report.ok = false;});
   if (server) {server.closeAllConnections(); await new Promise(resolve => server.close(resolve));}
   if (report.modelRequests !== 0) {

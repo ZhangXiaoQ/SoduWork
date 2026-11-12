@@ -34,6 +34,7 @@ client/.runtime-cache/
 # Local isolated desktop QA profiles contain account data and caches.
 /client/.codex-runtime-profile-*/
 client/runner/soduwork-runner
+client/runner/soduwork-runner
 
 # Machine-specific, one-off CDP debugging scripts.
 hub-backend/cdp_*.py
@@ -105,7 +106,7 @@ smoke_*.out.txt
 # Machine-specific IDE settings, including IntelliJ and PyCharm, stay out of version control.
 .idea/
 
-# Local development launchers isolate source and installed clients; they are not distributed with the repository.
+# Local launcher isolates source and installed clients; do not distribute it with the repository.
 /start-soduwork-client.ps1
 
 # CI dependency downloads (never publication evidence)

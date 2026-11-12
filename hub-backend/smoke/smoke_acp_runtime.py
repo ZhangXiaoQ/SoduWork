@@ -208,9 +208,9 @@ def main() -> int:
     assert all(agent_execution_options.supports_soduwork_model_kind("local:" + key)
                for key in ("opencode", "pi", "qwen", "dsh", "codex-harness"))
     qwen_runtime = agent_execution_options.runtime_options(
-        "local:qwen", "fixture-coding-large-model")
+        "local:qwen", "dev-coding-large-agent-soduwork")
     assert qwen_runtime == {"kind": "local:qwen",
-                            "model": "fixture-coding-large-model"}
+                            "model": "dev-coding-large-agent-soduwork"}
     assert agent_execution_options.runtime_options(
         "local:qwen", "vendor/coding-model")["model"] == "vendor/coding-model"
     try:

@@ -142,4 +142,15 @@ function assertTask(handle, taskRef) {
   }
   return selected;
 }
-module.exports = { attach, get, assertTask };
+function projectHistory(app, row) {
+  const record = read(app, row.id);
+  if (!record) return row;
+  const review = selection(record);
+  const title = row.reviewBaseTitle || row.title || '需求验收';
+  const at = new Date(Number(row.at) || row.createdAt || 0);
+  const stamp = at.getTime() ? ' · ' + [at.getMonth() + 1, at.getDate()].map(n => String(n).padStart(2, '0')).join('-') +
+    ' ' + [at.getHours(), at.getMinutes()].map(n => String(n).padStart(2, '0')).join(':') : '';
+  return { ...row, reviewBaseTitle: title, acceptanceReview: review,
+    title: (review.acceptanceMode === 'auto' ? '自动验收' : '验收分析') + ' · ' + title + stamp };
+}
+module.exports = { attach, get, assertTask, projectHistory };

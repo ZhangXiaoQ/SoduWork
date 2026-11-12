@@ -120,6 +120,8 @@
     const rawKey = String(field.key || '').trim();
     const exactKey = rawKey.toLowerCase();
     const compactKey = exactKey.replace(/[-_]/g, '');
+    // A plain text payload is a conversation input, not every field ending in Text.
+    if (exactKey === 'text') return 3;
     if (CONVERSATION_INPUT_KEYS.has(exactKey) || CONVERSATION_INPUT_KEYS.has(compactKey)) return 3;
     const tokens = rawKey.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase()
       .split(/[^a-z0-9]+/).filter(Boolean);
@@ -291,6 +293,11 @@
       row && row.slot === 'workspace.navigation');
   }
 
+  function displayText(item, field, translate) {
+    const source = item?.builtIn && (item.locales?.['zh-CN'] || item.locales?.['zh-cn'])?.[field];
+    return String(source && translate ? translate(source) : item?.[field] || '');
+  }
+
   function normalizeCatalog(payload) {
     const iconValue = (item) => {
       const source = item && typeof item === 'object' ? item : {};
@@ -314,6 +321,8 @@
       qualifiedKey: String(item && item.qualifiedKey || item && item.key || ''),
       scope: String(item && item.scope || ''),
       name: String(item && item.name || item && item.key || '企业插件'),
+      builtIn: item.builtIn === true,
+      locales: item.locales,
       icon: iconValue(item),
       description: String(item && item.description || ''),
       version: String(item && (item.conversationVersion || item.version) || ''),
@@ -359,6 +368,6 @@
   return {
     normalizeActions, pluginBuilderAction, commandText, normalizePluginInputs,
     prepareConversationInputs, preparedConversationText, availability, pluginKind,
-    normalizeCatalog, isWorkspaceApp, catalogWarning, retryableGrantFailure,
+    normalizeCatalog, displayText, isWorkspaceApp, catalogWarning, retryableGrantFailure,
   };
 });

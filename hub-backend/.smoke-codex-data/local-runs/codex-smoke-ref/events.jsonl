@@ -1,0 +1,3 @@
+{"kind": "out", "tool": "提示", "text": "Model metadata for `fake-large` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.", "seq": 1, "at": "2026-08-05T06:42:45", "seg": 1}
+{"kind": "step", "tool": "", "text": "第 1 步 · 正在想…", "seq": 2, "at": "2026-08-05T06:42:45", "seg": 1}
+{"kind": "say", "tool": "", "text": "SODUWORK_AGENT_OK", "seq": 3, "at": "2026-08-05T06:42:45", "seg": 1}

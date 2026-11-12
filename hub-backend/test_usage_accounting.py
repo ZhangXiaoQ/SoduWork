@@ -5,10 +5,12 @@ os.environ['CLUSTER_REDIS_URL'] = ''
 
 import unittest
 import asyncio
+from uuid import uuid4
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 from sqlalchemy import select, func
 from sqlalchemy.engine import make_url
+from sqlalchemy.schema import CreateSchema, DropSchema
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from app import models, automation_models
 from app.db import Base
@@ -21,11 +23,20 @@ class UsageAccountingTests(unittest.IsolatedAsyncioTestCase):
         parsed = make_url(url)
         if parsed.get_backend_name() == 'postgresql' and (parsed.host != '127.0.0.1' or not parsed.database.startswith('soduwork_orgmemory_test_')):
             raise RuntimeError('Accounting tests require a new disposable loopback database')
-        self.engine = create_async_engine(url)
+        self.schema = None
+        if parsed.get_backend_name() == 'postgresql':
+            # The fixture has already migrated the full public schema. Keep it
+            # intact; this module registers only the tables it exercises.
+            self.schema = 'usage_case_' + uuid4().hex
+            self.admin_engine = create_async_engine(url)
+            async with self.admin_engine.begin() as connection:
+                await connection.execute(CreateSchema(self.schema))
+            self.engine = create_async_engine(url, connect_args={'server_settings': {
+                'search_path': self.schema, 'statement_timeout': '20000'}})
+        else:
+            self.engine = create_async_engine(url)
         self.factory = async_sessionmaker(self.engine, expire_on_commit=False)
         async with self.engine.begin() as connection:
-            if parsed.get_backend_name() == 'postgresql':
-                await connection.run_sync(Base.metadata.drop_all)
             await connection.run_sync(Base.metadata.create_all)
         self.session = self.factory()
         self.user = models.User(id='usage-owner', username='usage-owner', org_id='org-A')
@@ -37,6 +48,12 @@ class UsageAccountingTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await self.session.close()
         await self.engine.dispose()
+        if self.schema:
+            try:
+                async with self.admin_engine.begin() as connection:
+                    await connection.execute(DropSchema(self.schema, cascade=True))
+            finally:
+                await self.admin_engine.dispose()
         client_access.invalidate_quota()
 
     async def report(self, tokens, model='A', at=None, cost=None, **extra):
@@ -99,6 +116,40 @@ class UsageAccountingTests(unittest.IsolatedAsyncioTestCase):
         daily = (await self.session.scalars(select(models.AIUsageDaily))).all()
         self.assertEqual({(row.billing_user_id, row.org_id, row.total_tokens) for row in daily},
                          {(self.user.id, 'org-A', 150), (other.id, 'org-B', 200)})
+
+    async def test_personal_receipts_preserve_legacy_platform_usage_and_replay_safely(self):
+        from app.services import model_quota
+        at = datetime.now(timezone.utc)
+        legacy = models.AIUsageEvent(
+            idempotency_key='client:' + self.client.id + ':legacy-personal-switch',
+            billing_user_id=self.user.id, client_id=self.client.id,
+            provider='organization', model='old-model', total_tokens=42,
+            input_tokens=42, occurred_at=at,
+        )
+        self.session.add(legacy)
+        await self.session.commit()
+        self.assertEqual(await client_access.monthly_tokens(self.session, self.user.id), 42)
+        conf = {'provider': 'personal-provider', 'model': 'personal-model', 'quotaScope': 'personal'}
+        token = model_quota.usage_token(self.client, conf)
+        payload = {'sourceId': 'legacy-personal-switch', 'agent': 'pi', 'provider': conf['provider'],
+                   'model': conf['model'], 'quotaUsageToken': token, 'occurredAt': at.isoformat(),
+                   'usage': {'input': 47, 'total': 47}}
+        await ledger.from_client(self.session, self.client, payload)
+        await self.session.commit()
+        await ledger.from_client(self.session, self.client, payload)
+        await self.session.commit()
+        self.assertEqual(await client_access.monthly_tokens(self.session, self.user.id), 42)
+        daily = (await self.session.scalars(select(models.AIUsageDaily))).all()
+        self.assertEqual({(row.provider, row.model, row.quota_scope, row.total_tokens) for row in daily},
+                         {('organization', 'old-model', 'platform', 42),
+                          ('personal-provider', 'personal-model', 'personal', 5)})
+        # A signed receipt for another model is not proof for this increment.
+        await ledger.from_client(self.session, self.client, {**payload, 'model': 'other-model',
+            'usage': {'input': 50, 'total': 50}})
+        await self.session.commit()
+        self.assertEqual(await client_access.monthly_tokens(self.session, self.user.id), 45)
+        result = await analytics.overview(self.session, user_id=self.user.id)
+        self.assertEqual(result['summary']['tokens'], 50)
 
     async def test_cross_month_quota_counts_increments_instead_of_session_anchor(self):
         zone = timezone(timedelta(hours=8))

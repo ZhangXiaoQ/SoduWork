@@ -39,7 +39,7 @@ async function fixture(t) {
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
-  const env = { ...process.env, SODUWORK_DISTRIBUTION: 'internal', SODUWORK_CLIENT_PLATFORM: 'linux',
+  const env = { ...process.env, SODUWORK_DISTRIBUTION: 'self-hosted', SODUWORK_CLIENT_PLATFORM: 'linux',
     SODUWORK_CLIENT_ARCH: 'x64', SODUWORK_CLIENT_CHANNEL: 'stable', SODUWORK_CLIENT_RELEASE_NOTES: 'Fixture notes',
     SODUWORK_CLIENT_MINIMUM_VERSION: '1.13.13', SODUWORK_CLIENT_MANDATORY: '0',
     SODUWORK_CLIENT_SIGNING_KEY_FILE: seed, SODUWORK_CLIENT_SIGNING_KEY_ID: keyId, SODUWORK_CLIENT_TRUST_FILE: trustFile,

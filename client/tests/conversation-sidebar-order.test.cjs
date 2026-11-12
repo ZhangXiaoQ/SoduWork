@@ -129,7 +129,8 @@ test('the home rail starts a new conversation and utility pages reclaim the side
   assert.match(shellCss, /\.ws-rail\{[^}]*padding:18px 4px 10px/);
   assert.match(shellCss, /\.ws-rail-button\{[^}]*width:36px;height:36px/);
   assert.match(shellCss, /\.ws-rail-button svg\{width:20px;height:20px/);
-  assert.match(source, /ws-rail-top\">' \+ primary \+ moreMenu/);
+  assert.match(source, /ws-rail-top\">' \+ primary \+ '<div id="wsSidebarApps" class="ws-sidebar-apps"><\/div>' \+ moreMenu/,
+    'administrator app slots follow primary navigation and precede the More menu');
   assert.match(shellCss, /\.ws-rail-more-wrap\{position:relative/);
   /* Keep rail buttons and avatars circular while preserving the active gradient. */
   assert.match(shellCss, /\.ws-rail-button\{[^}]*border-radius:50%/);
@@ -155,15 +156,15 @@ test('history deletion confirms and routes both Pi archives and Runner records',
   assert.match(source, /await dialog\.open\(\{ \.\.\.\(got\.confirm \|\| \{\}\), danger: true \}\)/);
   assert.match(ipc, /active\.inFlight\(\)/);
   assert.match(ipc, /await active\.close\(\)/);
-  assert.match(ipc, /found && found\.notFound/);
+  assert.match(ipc, /allowMissing: !canonicalId/);
   // Pi archives now pass through recycle readiness checks before native delete.
   assert.match(ipc, /trash = trashWithRecovery/);
   assert.match(ipc, /await trash\(shell, piEntry\.path\)/);
-  assert.match(ipc, /session\.findRunnerRow\(id\)/);
+  assert.match(ipc, /session\.findRunnerRow\(id, \{ strict: true \}\)/);
   assert.match(ipc, /session\.forgetRunner\(app, id\)/);
   assert.match(source, /const canDelete = Boolean\(id\) && !c\.pending/);
   const archives = fs.readFileSync(path.join(__dirname, '../main/pi-session/archive-history.js'), 'utf8');
-  assert.match(session, /_historyIndex\(app\)\.find\(wanted\)/);
+  assert.match(session, /_historyIndex\(app\)\.find\(wanted, \{ strict: options\.strict === true \}\)/);
   assert.match(archives, /fs\.promises\.realpath\(root\)/);
   assert.match(archives, /path\.extname\(target\)\.toLowerCase\(\) !== '\.jsonl'/);
   // Load both dialog logic and styling so deletion can request confirmation.

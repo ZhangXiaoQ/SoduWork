@@ -14,7 +14,7 @@ from ..services import runner_hub
 from ..auth import sign_claims, verify_claims
 
 router = APIRouter(prefix="/api/v1/desktop-capabilities", tags=["mobile"])
-OPERATIONS = {"catalog", "library.call", "skill.set", "plugin.get", "plugin.preflight", "plugin.install", "plugin.use"}
+OPERATIONS = {"catalog", "library.call", "conversation.history", "skill.set", "plugin.get", "plugin.preflight", "plugin.install", "plugin.use"}
 
 
 def digest(body):
@@ -62,14 +62,16 @@ async def targets(client=Depends(current_client), session=Depends(get_session)):
             continue
         runner_id = ""
         library_ready = False
+        history_ready = False
         try:
             _, live = await resolve(session, client, row.id)
             runner_id = live.id
             library_ready = "desktopLibrary1" in live.caps
+            history_ready = "desktopHistory1" in live.caps
             ready, reason = True, ""
         except HTTPException as exc:
             ready, reason = False, str(exc.detail)
-        items.append({"id": row.id, "runnerId": runner_id, "name": row.name or "本人电脑", "ready": ready, "libraryReady": library_ready, "reason": reason})
+        items.append({"id": row.id, "runnerId": runner_id, "name": row.name or "本人电脑", "ready": ready, "libraryReady": library_ready, "historyReady": history_ready, "reason": reason})
     return {"items": items}
 
 
@@ -85,6 +87,8 @@ async def request(cid: str, body: dict = Body(...), client=Depends(current_clien
     _, runner = await resolve(session, client, cid)
     if body["operation"] == "library.call" and "desktopLibrary1" not in runner.caps:
         raise HTTPException(409, "请更新并重启这台电脑的 SoduWork 后使用资料库")
+    if body["operation"] == "conversation.history" and "desktopHistory1" not in runner.caps:
+        raise HTTPException(409, "请更新并重启这台电脑的 SoduWork 后访问本地会话")
     packet = {**body, "targetClientId": cid, "ownerUserId": uid}
     authorization = sign_claims({"uid": uid, "cid": cid, "digest": digest(packet)},
                                 ttl_seconds=120, token_type="desktop-capability")

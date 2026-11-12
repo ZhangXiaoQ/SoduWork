@@ -14,6 +14,7 @@ COPY hub-frontend/ ./
 COPY client/core/connector-brand.js /build/client/core/connector-brand.js
 COPY client/assets/connector-brands/ /build/client/assets/connector-brands/
 COPY client/components/panels/connector-config.js /build/client/components/panels/connector-config.js
+COPY client/components/client-auth/legal-html.js client/components/client-auth/legal-html.css /build/client/components/client-auth/
 RUN npm run build
 
 FROM ${NODE_IMAGE} AS node-runtime

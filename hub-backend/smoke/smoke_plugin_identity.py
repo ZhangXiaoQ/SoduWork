@@ -37,7 +37,7 @@ def ok(condition: bool, message: str) -> None:
 def plugin(org_id: str | None, key: str) -> am.Plugin:
     return am.Plugin(
         org_id=org_id, key=key, name=key, description="",
-        source_kind="personal", enabled=False, created_by="smoke")
+        source_kind="soduwork", enabled=False, created_by="smoke")
 
 
 def version(plugin_id: str, number: str, checksum: str) -> am.PluginVersion:
@@ -106,10 +106,10 @@ async def main() -> None:
             description="", source_kind="builtin", created_by="smoke")
         org_a, made_org_a = await plugin_identity.get_or_create_plugin(
             session, org_id="org-a", key="identity-smoke", name="Org A",
-            description="", source_kind="personal", created_by="smoke")
+            description="", source_kind="soduwork", created_by="smoke")
         org_b, made_org_b = await plugin_identity.get_or_create_plugin(
             session, org_id="org-b", key="identity-smoke", name="Org B",
-            description="", source_kind="personal", created_by="smoke")
+            description="", source_kind="soduwork", created_by="smoke")
         await session.commit()
         platform_id = platform.id
         org_a_id = org_a.id

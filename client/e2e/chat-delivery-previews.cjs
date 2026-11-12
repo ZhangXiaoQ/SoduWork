@@ -42,7 +42,7 @@ if (typeof electron === 'string') {
       window.calls=[];window.api={inspectDelivery:async(ref,ids)=>{calls.push(['inspect',ids]);return{ok:true,manifest:{files:[{path:'index.html',size:1}]}}},prepareDelivery:async(ref,ids)=>{calls.push(['prepare',ids]);return{ok:true,manifest:{files:[{path:'index.html',size:1}]}}}};
       messages.addEventListener('click',event=>{if(event.target.closest('[data-delivery-retry],[data-delivery-open],[data-delivery-local]'))void ChatDeliveries.handle(event.target,api)});
       window.render=(html,files,snapshot={},previous=null)=>messages.innerHTML=ChatOutputLinks.decorate(html,files,currentRef,{status:'idle',...snapshot},previous);void 0;`);
-    for (const name of ['library-file-icons.js', 'chat-deliveries.js', 'chat-output-links.js']) await js(fs.readFileSync(path.resolve(__dirname, '../components/panels', name), 'utf8'));
+    for (const name of ['chat-dom-patch.js', 'panels-chat-tools.js', 'library-file-icons.js', 'chat-deliveries.js', 'chat-output-links.js']) await js(fs.readFileSync(path.resolve(__dirname, '../components/panels', name), 'utf8'));
     await js('render(base,[site,shot]);');
     assert.equal(await js('messages.querySelector("[data-delivery-continue]")'), null, 'file actions replace the retired continue shortcut');
     assert.equal(await js('messages.querySelector("[data-delivery-retry]").hidden'),false);
@@ -144,7 +144,7 @@ if (typeof electron === 'string') {
     report.cases.push('Cloud delivery continues in a new local conversation, preserves the draft and rejects changed chat/account');
     await js(`currentRef='cloud-revision';window.archiveCalls=[];
       window.localManifest={revision:'b'.repeat(64),files:[{path:'index.html',size:1},{path:'style.css',size:2}]};
-      SoduWorkAPI.getTaskDelivery=async()=>({delivery:{id:'remote-receipt',revision:'a'.repeat(64),files:localManifest.files}});
+      SoduWorkAPI.getTaskLibraryDeliveryStatus=async()=>({delivery:null,manifest:{revision:'a'.repeat(64),files:localManifest.files}});
       window.archiveApi={cloud:{materialize:async()=>({ok:true,artifacts:[{artifactId:'cached-site',remoteAttachmentId:'remote-page',cloudTaskId:'revision-task',relative:'index.html',name:'index.html'}]})},
         inspectDelivery:async()=>({ok:true,manifest:localManifest}),
         openLocalDelivery:async(ref,ids,options)=>{archiveCalls.push({ref,ids,options});return{ok:true}},
@@ -157,7 +157,7 @@ if (typeof electron === 'string') {
     assert.deepEqual(await js('archiveCalls.map(call=>call.options)'), [
       {bundle:true,revision:'b'.repeat(64)}, {bundle:true,revision:'b'.repeat(64)},
     ], 'a remote receipt revision must not be used to validate a newly materialized local package');
-    await js('delete SoduWorkAPI.getTaskDelivery;currentRef="delivery-chat";');
+    await js('delete SoduWorkAPI.getTaskLibraryDeliveryStatus;currentRef="delivery-chat";');
     report.cases.push('Cloud ZIP actions inspect the materialized local revision and reuse it for both open and reveal');
     await js(`render('<article class="nmsg user">Request</article><article class="nmsg ai" data-output-task="task-a" data-delivery-final="false"><span data-output-image-ref="a.png">A</span></article><article class="nmsg ai" data-output-task="task-a" data-delivery-final="true">A done</article><article class="nmsg ai" data-output-task="task-b" data-delivery-final="true"><span data-output-image-ref="b.png">B</span></article>',[{...shot,artifactId:'image-a',relative:'a.png',name:'a.png',taskId:'task-a'},{...shot,artifactId:'image-b',relative:'b.png',name:'b.png',taskId:'task-b'}]);`);
     assert.deepEqual(await js('Array.from(messages.querySelectorAll("[data-output-image]")).map(node=>[node.dataset.outputImage,node.closest("article").dataset.outputTask])'), [['image-a', 'task-a'], ['image-b', 'task-b']]);

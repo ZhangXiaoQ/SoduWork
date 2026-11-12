@@ -9,10 +9,13 @@
   const EVERY = [
     ['daily', '每天'],
     ['weekly', '每周'],
+    ['monthly', '每月'],
     ['hourly', '每小时'],
     ['once', '指定日期时间 · 仅一次'],
+    ['custom', '自定义'],
   ];
   const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+  const MONTH_DAYS = Array.from({ length: 31 }, (_, index) => index + 1);
   const CAPABILITIES = [
     ['browser', '浏览网页', '优先读取网页结构，适合查询、巡检与填报'],
     ['computer', '操作电脑', '网页无法结构化操作时，使用鼠标键盘完成'],
@@ -33,6 +36,7 @@
   const updateCard = patch => state.card && cards().update(state.card, patch, state.seed);
   function hasSurface() { return Boolean(state.layer); }
   function showLoading(body, text) {
+    global.ForwardSelect?.destroy(body);
     body.innerHTML = '<div class="waz-loading"><i></i><i></i><i></i><span>' + esc(text) + '</span></div>';
   }
   function capture() {
@@ -50,6 +54,7 @@
     if (state.saved) return renderSaved(snapshot.receipt || snapshot.proposal);
     if (snapshot.phase === 'loading') { showLoading(body, '正在整理自动化，请稍候…'); return; }
     if (!snapshot.proposal) {
+      global.ForwardSelect?.destroy(body);
       body.innerHTML = '<div class="waz-error">' + esc(snapshot.error) + '</div><button class="waz-button" data-waz-reparse>重新整理</button>'; return;
     }
     render(snapshot.error);
@@ -142,7 +147,10 @@
     const surface = PluginUIHost.mount({
       id: 'work-automation', host: s.host, anchor: s.anchor,
       className: 'waz-plugin-surface', prompt,
-      onDestroy: () => releaseDialog?.(),
+      onDestroy: () => {
+        global.ForwardSelect?.destroy(surface.content);
+        releaseDialog?.();
+      },
     });
     const node = document.createElement('div');
     node.className = 'waz-layer';
@@ -296,10 +304,51 @@
     select.value = current;
   }
 
+  function selectedNumbers(value, max) {
+    let source = [];
+    if (Array.isArray(value)) source = value;
+    else if (value != null && value !== '') source = [value];
+    return [...new Set(source.map(item => Number(item)).filter(item => Number.isInteger(item) && item >= 1 && item <= max))]
+      .sort((a, b) => a - b);
+  }
+
+  function timingFields(p) {
+    const selectedWeekdays = selectedNumbers(p.weekdays?.length ? p.weekdays : p.weekday, 7);
+    const selectedMonthDays = selectedNumbers(p.monthDays, 31);
+    return '<div class="waz-timing-range" data-waz-range>' +
+      '<div class="waz-field"><span>' + esc(tx('开始日期')) + ' <small>' + esc(tx('可选')) + '</small></span>' +
+        '<input name="startDate" type="date" value="' + esc(p.startDate || '') + '" aria-label="' + esc(tx('开始日期')) + '"></div>' +
+      '<div class="waz-field"><span>' + esc(tx('结束日期')) + ' <small>' + esc(tx('可选')) + '</small></span>' +
+        '<input name="endDate" type="date" value="' + esc(p.endDate || '') + '" aria-label="' + esc(tx('结束日期')) + '"></div>' +
+      '<small class="waz-range-hint">' + esc(tx('留空表示长期有效，结束日期包含当天')) + '</small></div>' +
+      '<div class="waz-field waz-weekday-field" data-waz-weekday>' +
+        '<span>' + esc(tx('星期')) + ' <small>' + esc(tx('可多选')) + '</small></span>' +
+        '<div class="waz-choice-grid">' + WEEKDAYS.map((label, index) =>
+          '<label><input type="checkbox" name="weekdays" value="' + (index + 1) + '"' +
+          (selectedWeekdays.includes(index + 1) ? ' checked' : '') + '><span>' + esc(tx(label)) + '</span></label>').join('') +
+        '</div><input type="hidden" name="weekday" value="' + (selectedWeekdays[0] || 1) + '"></div>' +
+      '<div class="waz-field waz-monthday-field" data-waz-monthday>' +
+        '<span>' + esc(tx('每月日期')) + ' <small>' + esc(tx('可多选')) + '</small></span>' +
+        '<div class="waz-choice-grid waz-month-grid">' + MONTH_DAYS.map(day =>
+          '<label><input type="checkbox" name="monthDays" value="' + day + '"' +
+          (selectedMonthDays.includes(day) ? ' checked' : '') + '><span>' + String(day).padStart(2, '0') + '</span></label>').join('') +
+        '</div><label class="waz-check waz-month-policy"><input type="checkbox" name="monthDayPolicy" value="last_day"' +
+          (p.monthDayPolicy === 'last_day' ? ' checked' : '') + '><span>' + esc(tx('缺少日期时使用当月最后一天')) + '</span></label></div>' +
+      '<div class="waz-field waz-custom-rule-field" data-waz-custom>' +
+        '<span>' + esc(tx('自定义规则')) + ' <small>' + esc(tx('支持 iCalendar RRULE')) + '</small></span>' +
+        '<textarea name="customRule" rows="4" maxlength="4096" spellcheck="false" data-user-content aria-label="' + esc(tx('自定义规则')) + '" placeholder="' +
+          esc(global.ScheduleTiming.customExample(p.timeZone || timeZone())) + '">' +
+          esc(p.customRule || '') + '</textarea>' +
+        '<small>' + esc(tx('可使用 DTSTART 与 RRULE 精确指定开始时间、时区和重复规则')) + '</small>' +
+        '<small>' + esc(tx('支持 HOURLY、DAILY、WEEKLY、MONTHLY，可设置 INTERVAL、COUNT 或 UNTIL')) + '</small>' +
+        '<small>' + esc(tx('按天、周、月重复时，夏令时跳过的时刻顺延，重复时刻执行一次')) + '</small></div>';
+  }
+
   function render(error) {
     const body = state.layer && state.layer.querySelector('#wazBody');
     if (!body) return;
     const restoreView = global.WorkAutomationView.rememberView(body);
+    global.ForwardSelect?.destroy(body);
     const p = state.proposal || proposalOf({}, '');
     const method = methodByKey(p.personalPluginKey);
     const activeCaps = new Set((p.requiredCapabilities || []).concat(methodCaps(method)));
@@ -318,28 +367,25 @@
             esc(checks(p.acceptance).join('\n')) + '</textarea></label>' + attachmentHtml() +
         '</section>' +
         '<section class="waz-section"><div class="waz-section-title"><span>02</span><div>' +
-          '<h3>什么时候触发</h3><p>按下方时区设置执行时间</p></div></div>' +
+          '<h3>' + esc(tx('什么时候触发')) + '</h3><p>' + esc(tx('选择节奏，再设置日期范围、星期或日期和时间')) + '</p></div></div>' +
           '<div class="waz-grid waz-rhythm">' +
-            '<label class="waz-field"><span>执行方式</span><select name="every">' +
-              (!p.every ? '<option value="" selected>请选择执行方式</option>' : '') +
+            '<label class="waz-field"><span>' + esc(tx('执行方式')) + '</span><select name="every">' +
+              (!p.every ? '<option value="" selected>' + esc(tx('请选择执行方式')) + '</option>' : '') +
               EVERY.map(item => '<option value="' + item[0] + '"' +
-                (item[0] === p.every ? ' selected' : '') + '>' + item[1] + '</option>').join('') +
+                (item[0] === p.every ? ' selected' : '') + '>' + esc(tx(item[1])) + '</option>').join('') +
             '</select></label>' +
-            '<label class="waz-field" data-waz-weekday><span>星期</span><select name="weekday">' +
-              WEEKDAYS.map((label, index) => '<option value="' + (index + 1) + '"' +
-                (Number(p.weekday) === index + 1 ? ' selected' : '') + '>' + label + '</option>').join('') +
-            '</select></label>' +
-            '<label class="waz-field" data-waz-once><span>执行日期时间 <b>*</b></span>' +
-              '<input name="runAt" type="datetime-local" step="any" value="' +
+            '<label class="waz-field" data-waz-once><span>' + esc(tx('执行日期时间')) + ' <b>*</b></span>' +
+              '<input name="runAt" type="datetime-local" step="60" value="' +
               esc(global.ScheduleTiming.localInput(p.runAt,p.timeZone || timeZone())) + '"></label>' +
-            '<div class="waz-field" data-waz-clock><span>执行时刻</span><div class="waz-clock-selects">' +
-              '<select name="clockHour" aria-label="小时">' + global.ScheduleTiming.clockOptions(24, p.atHour) + '</select>' +
-              '<span aria-hidden="true">:</span><select name="clockMinute" aria-label="分钟">' +
-              global.ScheduleTiming.clockOptions(60, p.atMinute) + '</select></div><small>滚动选择时间</small></div>' +
-            '<label class="waz-field" data-waz-minute><span>每小时第几分</span>' +
-              '<select name="minute">' + global.ScheduleTiming.clockOptions(60, p.atMinute) + '</select></label>' +
-          '</div><div class="waz-timezone"><i></i><span>' + esc(p.timeZone || timeZone()) +
-          '</span><small id="wazNextRun">保存后由服务端计算下一次执行时间</small></div>' +
+            '<div class="waz-field" data-waz-clock><span>' + esc(tx('执行时刻')) + '</span><div class="waz-clock-selects" data-waz-time-selects>' +
+              '<select name="clockHour" data-forward-select="compact-time" aria-label="' + esc(tx('小时')) + '">' + global.ScheduleTiming.clockOptions(24, p.atHour) + '</select>' +
+              '<span aria-hidden="true">:</span><select name="clockMinute" data-forward-select="compact-time" aria-label="' + esc(tx('分钟')) + '">' +
+              global.ScheduleTiming.clockOptions(60, p.atMinute) + '</select></div><small>' + esc(tx('选择小时和分钟')) + '</small></div>' +
+            '<label class="waz-field" data-waz-minute><span>' + esc(tx('每小时第几分')) + '</span>' +
+              '<select name="minute" data-forward-select="compact-time" aria-label="' + esc(tx('分钟')) + '">' + global.ScheduleTiming.clockOptions(60, p.atMinute) + '</select></label>' +
+          '</div>' + timingFields(p) +
+          '<div class="waz-timezone"><i></i><span data-waz-zone>' + esc(p.timeZone || timeZone()) +
+          '</span><small id="wazNextRun">' + esc(tx('保存后由服务端计算下一次执行时间')) + '</small></div>' +
         '</section>' +
         '<section class="waz-section"><div class="waz-section-title"><span>03</span><div>' +
           '<h3>由谁、在哪里、按什么方法执行</h3><p>保存前会检查 Agent、Runner 与能力授权</p></div></div>' +
@@ -395,6 +441,8 @@
           ((state.agents.length || p.assigneeId) ? '' : ' disabled') + '>创建自动化</button></footer>' +
       '</div></form>';
     paintRhythm();
+    if (global.ForwardSelect) body.querySelectorAll('[data-waz-time-selects], [data-waz-minute]').forEach(root =>
+      global.ForwardSelect.enhance(root));
     restoreView();
     if (!state.saving && !state.card?.snapshot.uncertain) scheduleProbe();
   }
@@ -422,6 +470,10 @@
     const selectedCaps = [...form.querySelectorAll('input[name=capability]:checked')]
       .filter(input => !input.disabled)
       .map(input => input.value);
+    const selectedWeekdays = every === 'weekly' ? [...form.querySelectorAll('input[name=weekdays]:checked')]
+      .map(input => Number(input.value)).filter(Number.isInteger).sort((a, b) => a - b) : [];
+    const selectedMonthDays = every === 'monthly' ? [...form.querySelectorAll('input[name=monthDays]:checked')]
+      .map(input => Number(input.value)).filter(Number.isInteger).sort((a, b) => a - b) : [];
     // Browser FormData intentionally omits disabled controls.  A model select
     // can be temporarily disabled while the execution catalog is refreshing;
     // keep the already selected value in the draft so a refresh/re-render does
@@ -439,7 +491,14 @@
         ? priorDate : global.ScheduleTiming.fromLocalInput(dateInput,zone),
       atHour: every === 'hourly' ? 0 : global.ScheduleTiming.clockNumber(clock[0]),
       atMinute: global.ScheduleTiming.clockNumber(every === 'hourly' ? data.get('minute') : clock[1]),
-      weekday: Math.max(1, Math.min(7, Number(data.get('weekday')) || 1)),
+      weekday: selectedWeekdays[0] || (every === 'weekly' ? null : Math.max(1, Math.min(7, Number(data.get('weekday')) || 1))),
+      weekdays: selectedWeekdays,
+      monthDays: selectedMonthDays,
+      monthDayPolicy: (typeof form.querySelector === 'function' &&
+        form.querySelector('input[name=monthDayPolicy]:checked')) ? 'last_day' : 'skip',
+      startDate: String(data.get('startDate') || ''),
+      endDate: String(data.get('endDate') || ''),
+      ...(every === 'custom' ? { customRule: fullText(data.get('customRule')).trim() } : {}),
       timeZone: (state.proposal && state.proposal.timeZone) || timeZone(),
       assigneeId: cut(data.get('assigneeId'), 160),
       modelName: cut(modelName, 300),
@@ -472,6 +531,13 @@
       atHour: value.atHour,
       atMinute: value.atMinute,
       weekday: value.weekday,
+      weekdays: Array.isArray(value.weekdays) ? value.weekdays :
+        (value.every === 'weekly' ? global.ScheduleTiming.cleanList(value.weekday, 1, 7) : []),
+      monthDays: value.monthDays || [],
+      monthDayPolicy: value.monthDayPolicy || 'skip',
+      startDate: value.every === 'once' || value.every === 'custom' ? null : value.startDate || null,
+      endDate: value.every === 'once' || value.every === 'custom' ? null : value.endDate || null,
+      ...(value.every === 'custom' ? { customRule: fullText(value.customRule).trim() } : {}),
       timeZone: value.timeZone || timeZone(),
       assigneeId: value.assigneeId,
       assigneeType: 'agent',
@@ -499,15 +565,26 @@
     const clock = form.querySelector('[data-waz-clock]');
     const minute = form.querySelector('[data-waz-minute]');
     const once = form.querySelector('[data-waz-once]');
+    const range = form.querySelector('[data-waz-range]');
+    const monthdays = form.querySelector('[data-waz-monthday]');
+    const customRule = form.querySelector('[data-waz-custom]');
+    if (range) range.hidden = every === 'once' || every === 'custom';
     if (weekday) weekday.hidden = every !== 'weekly';
-    if (clock) clock.hidden = every === 'hourly' || every === 'once';
+    if (monthdays) monthdays.hidden = every !== 'monthly';
+    if (customRule) customRule.hidden = every !== 'custom';
+    if (clock) clock.hidden = every === 'hourly' || every === 'once' || every === 'custom';
     if (minute) minute.hidden = every !== 'hourly';
     if (once) once.hidden = every !== 'once';
     const hint = form.querySelector('#wazNextRun');
-    const timingError = global.ScheduleTiming.validate(valueFromForm());
+    const currentTiming = valueFromForm();
+    const timingError = global.ScheduleTiming.validate(currentTiming);
+    const zone = form.querySelector('[data-waz-zone]');
+    if (zone) zone.textContent = every === 'custom'
+      ? global.ScheduleTiming.customTimeZone(currentTiming.customRule, currentTiming.timeZone) : currentTiming.timeZone;
+    if (hint) hint.toggleAttribute?.('data-custom-preview', every === 'custom');
     if (hint) hint.textContent = timingError ? tx(timingError) : every === 'once'
-      ? '在指定时间触发一次，失败按下方设置重试'
-      : '保存后由服务端计算下一次执行时间';
+      ? tx('在指定时间触发一次，失败按下方设置重试')
+      : tx('保存后由服务端计算下一次执行时间');
     const flow = form.elements.flow;
     if (flow) {
       flow.disabled = !form.elements.repoId.value;
@@ -562,6 +639,10 @@
         if (seq !== probeSeq || !state.layer) return;
         const details = (result.checks || []).map(item => item.label).filter(Boolean).join(' · ');
         setProbe(result.state || 'waiting', result.message || '执行条件待确认', details, result.remedy);
+        if (value.every === 'custom') {
+          const nextRun = state.layer.querySelector('#wazNextRun');
+          if (nextRun) nextRun.textContent = tx(global.ScheduleTiming.customPreview(result, value.timeZone));
+        }
       } catch (error) {
         if (seq !== probeSeq || !state.layer) return;
         setProbe('waiting', errorText(error), '自动化仍可保存，运行前请确认服务连接');
@@ -598,7 +679,14 @@
     if (!state.layer || state.saved || state.saving || state.card?.pending || state.card?.snapshot.uncertain) return;
     const value = valueFromForm();
     const invalid = validate(value);
-    if (invalid) { updateCard({ phase: 'error', proposal: value, error: invalid }); return showError(invalid); }
+    if (invalid) {
+      updateCard({ phase: 'error', proposal: value, error: invalid });
+      showError(invalid);
+      if (value.every === 'custom' && global.ScheduleTiming.validate(value) === invalid) {
+        state.layer?.querySelector('[name=customRule]')?.focus?.();
+      }
+      return;
+    }
     const button = state.layer.querySelector('[data-waz-save]');
     const layer = state.layer, seq = state.seq, epoch = identityEpoch, seed = state.seed, record = state.card;
     const current = () => state.layer === layer && state.seq === seq && identityEpoch === epoch && layer.isConnected;
@@ -654,8 +742,11 @@
 
   function renderSaved(saved) {
     const body = state.layer?.querySelector('#wazBody'), value = state.proposal || saved;
-    if (body) body.innerHTML = global.WorkAutomationCardState.savedHtml(value,
-      state.agents.find(item => String(item.id) === String(value.assigneeId)), methodByKey(value.personalPluginKey), esc);
+    if (body) {
+      global.ForwardSelect?.destroy(body);
+      body.innerHTML = global.WorkAutomationCardState.savedHtml(value,
+        state.agents.find(item => String(item.id) === String(value.assigneeId)), methodByKey(value.personalPluginKey), esc);
+    }
   }
 
   function onClick(event) {
@@ -802,6 +893,7 @@
     state.saving = false;
     state.createdId = '';
     state.card = null;
+    if (layer) global.ForwardSelect?.destroy(layer);
     if (layer) layer.classList.remove('entered');
     if (surface) {
       if (silent || surface.inline) surface.destroy();

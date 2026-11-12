@@ -264,7 +264,7 @@ test('only structurally identified plugin.json is indexed; unrelated JSON never 
   assert.equal(drafts.readSession(handle(cwd), shown.artifactId).ok, true);
 });
 
-for (const extension of ['soduwork-plugin']) {
+for (const extension of ['soduwork-plugin', 'soduwork-plugin', 'soduwork-plugin']) {
   test('real exported ' + extension + ' package can be discovered and installed without the Hub', async t => {
     const { cwd, root } = fixture(t);
     const source = { getPath: () => path.join(root, 'source') };

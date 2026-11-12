@@ -1,6 +1,5 @@
-"""Task CRUD, bulk operations, completed-task cleanup, and handoffs, with live notifications to
-affected clients.
-"""
+"""Task CRUD, batch updates, completed-task cleanup and handoffs. Writes publish WebSocket events
+to affected SoduWork clients."""
 import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -11,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 log = logging.getLogger("uvicorn.error")
-_NL = chr(10)          # Newline separator for multiline prompt lists.
+_NL = chr(10)          # Join prompt lists with a literal newline to avoid fragile escaped source edits.
 
 from .. import models
 from ..realtime import hub
@@ -19,7 +18,7 @@ from ..schemas import task_to_api
 from .task_parse_contract import _PARSE_SYSTEM, _apply_scene, _extract_json, _sanitize_parsed
 from .task_parse_sources import _flow_choices, _parse_with_my_model
 
-# Map client camelCase fields to model attributes.
+# Map client camelCase keys to model fields.
 _FIELD_MAP = {
     "assigneeUserId": "assignee_user_id",
     "domainId": "domain_id",
@@ -33,19 +32,18 @@ _FIELD_MAP = {
     "requesterContact": "requester_contact",
 }
 
-# Only requirement-definition fields increment requirement_version.
-# The version protects content edits rather than counting all task writes.
-# Execution progress and orchestration must not invalidate content checks.
-# This avoids false stale-requirement conflicts during review submission.
+# Only definition changes increment requirement_version; this is a content lock.
+# Execution updates such as status, progress and orchestration do not increment it.
+# Otherwise ongoing AI work invalidates current review submissions unnecessarily.
+# Keep content concurrency checks independent of execution progress.
 _REQ_CONTENT_KEYS = {"title", "note", "description", "acceptanceCriteria",
                      "kind", "priority", "tags", "deps"}
 
 
 def stamp_progress(new_list, old_list, uid, uname):
-    """Stamp new progress entries with author identity. Preserve existing authors and match older
-    entries by timestamp so handoffs do not attribute previous contributors' work to the current
-    owner.
-    """
+    """Stamp new progress entries with their author before task handoffs. Preserve existing
+    authors and match historical entries by timestamp so reports never attribute previous work
+    to the current owner."""
     olds = {p.get("at"): p for p in (old_list or []) if isinstance(p, dict)}
     out = []
     for p in (new_list or []):
@@ -61,10 +59,10 @@ def stamp_progress(new_list, old_list, uid, uname):
     return out
 
 
-# Task-information normalization helpers.
+# ---------- Task metadata helpers ----------
 
 def ms_to_dt(ms):
-    """Convert milliseconds to an aware datetime, returning None for missing or invalid values."""
+    """Convert milliseconds to an aware datetime; invalid values return None."""
     if ms is None:
         return None
     try:
@@ -74,9 +72,11 @@ def ms_to_dt(ms):
 
 
 def normalize_output_contract(t: "models.Task") -> bool:
-    """Normalize repository-change contracts to local-file delivery when no real project or
-    repository exists. Such tasks cannot enter code review, merge, and deployment workflows;
-    return whether normalization changed the contract.
+    """Replace repository-only defaults with the actual standalone requirement.
+
+    Keep the source contract for provenance, but do not require commits, merges
+    or deployment records when no code project exists. Also repair earlier
+    normalized contracts that retained those incompatible defaults.
     """
     routing = dict(t.work_routing or {})
     contract = dict(routing.get("outputContract") or {})
@@ -102,9 +102,7 @@ def normalize_output_contract(t: "models.Task") -> bool:
 
 
 def apply_detail(t: "models.Task", data: dict) -> None:
-    """Apply only supplied camelCase detail fields such as priority, due date, tags, assignee, and
-    recurrence to the task.
-    """
+    """Apply only supplied camelCase metadata fields to the task."""
     if data.get("priority"):
         t.priority = data["priority"]
     if "start" in data:
@@ -125,7 +123,7 @@ def apply_detail(t: "models.Task", data: dict) -> None:
         t.recur_at = ms_to_dt(data.get("recurAt"))
     if "remindAt" in data:
         t.remind_at = ms_to_dt(data.get("remindAt"))
-        t.reminded = False   # Rearm the reminder when its scheduled time changes.
+        t.reminded = False   # Rearm a reminder when its time changes.
     if "reminded" in data and data.get("reminded") is not None:
         t.reminded = bool(data.get("reminded"))
     if data.get("domainId") is not None:
@@ -151,9 +149,8 @@ def apply_detail(t: "models.Task", data: dict) -> None:
 
 
 def stamp_actual(t: "models.Task", prev_status: str | None, new_status: str | None) -> None:
-    """Stamp actual start on the first transition into progress and actual finish on completion,
-    filling a missing start too. Change only empty timestamps and preserve manual values.
-    """
+    """Fill actual times on real status transitions. Starting records the first start time;
+    completion also fills a missing start. Never overwrite times already supplied by the user."""
     if not new_status or new_status == prev_status:
         return
     now = datetime.now(timezone.utc)
@@ -167,9 +164,8 @@ def stamp_actual(t: "models.Task", prev_status: str | None, new_status: str | No
 
 
 def default_requester(t: "models.Task", creator_uid, creator_name) -> None:
-    """For delegated tasks without an explicit requester, default to the creator so completion
-    receipts reach the delegator. Personal tasks do not create self-notifications.
-    """
+    """Default delegated tasks to their creator as internal requester. Personal tasks omit this
+    default to avoid notifying the owner about their own work."""
     if t.requester_user_id or t.requester_contact or t.requester_name:
         return  # Preserve an explicitly selected internal or external requester.
     if creator_uid and creator_uid != t.assignee_user_id:
@@ -178,9 +174,7 @@ def default_requester(t: "models.Task", creator_uid, creator_name) -> None:
 
 
 async def resolve_user(session: AsyncSession, uid: str | None):
-    """Resolve a user ID and display-name snapshot, retaining the ID with an empty name when
-    missing.
-    """
+    """Return a user ID and display-name snapshot, or an empty name if missing."""
     if not uid:
         return None, ""
     u = await session.get(models.User, uid)
@@ -190,7 +184,7 @@ async def resolve_user(session: AsyncSession, uid: str | None):
 
 
 async def owner_user(session: AsyncSession, owner_id: str):
-    """Resolve the client's owner ID and display name, or None and empty when unbound."""
+    """Return the client owner ID and display name, or (None, empty string) if unbound."""
     c = await session.get(models.Client, owner_id)
     if c and c.user_ref:
         return await resolve_user(session, c.user_ref)
@@ -198,14 +192,14 @@ async def owner_user(session: AsyncSession, owner_id: str):
 
 
 async def ai_states(session: AsyncSession, task_ids: list[str]) -> dict:
-    """Batch-resolve AI task state from dispatch identity, the matching latest execution session,
-    and artifact receipts. Sessions determine whether execution still runs; preserve historical
-    multica.* compatibility.
-    """
+    """Map tasks to AI execution state and display name. Dispatch events identify the executor,
+    sessions determine execution liveness, and output events confirm returned results. Resolve
+    the latest dispatch reference so pending file transfer does not keep a completed Runner
+    marked active. Retain historical multica.* event compatibility."""
     if not task_ids:
         return {}
     from .. import automation_models as am
-    from . import ai_exec, execution_sessions
+    from . import ai_exec, execution_context, execution_sessions
     rows = (await session.execute(
         select(models.TaskEvent)
         .where(models.TaskEvent.task_id.in_(task_ids),
@@ -234,7 +228,13 @@ async def ai_states(session: AsyncSession, task_ids: list[str]) -> dict:
                 "runnerOnline": detail.get("runnerOnline"),
             }
         elif e.kind == ai_exec.EV_DISPATCH_FAILED:
-            refs.pop(e.task_id, None)
+            # Terminal settlement also uses this event kind. It must not
+            # detach an established session: another turn can resume its ref.
+            # A failed new dispatch still supersedes any older execution.
+            failed_ref = str(detail.get("ref") or "")
+            if not (detail.get("phase") == "execution" and failed_ref and
+                    refs.get(e.task_id) == failed_ref):
+                refs.pop(e.task_id, None)
             out[e.task_id] = {"state": "failed",
                               "name": detail.get("assigneeName") or detail.get("assigneeCli") or "AI",
                               "error": detail.get("error") or "安排执行失败",
@@ -251,24 +251,36 @@ async def ai_states(session: AsyncSession, task_ids: list[str]) -> dict:
     if refs:
         session_rows = list((await session.execute(select(am.ExecutionSession).where(
             am.ExecutionSession.ref.in_(set(refs.values()))))).scalars().all())
-        by_ref = {row.ref: row for row in session_rows}
+        by_ref = {(row.task_id, row.ref): row for row in session_rows}
         for task_id, ref in refs.items():
-            row = by_ref.get(ref)
+            row = by_ref.get((task_id, ref))
             if row is None or task_id not in out:
                 continue
+            # The initial routing draft can predate Runner selection. Publish
+            # the actual execution location with list/realtime metadata so a
+            # sidebar does not need to load each transcript to identify it.
+            context = execution_context.public((row.metadata_ or {}).get("executionContext"))
+            runner = context.get("runner") or {}
+            if runner.get("clientId"):
+                out[task_id]["runnerKind"] = "work-computer"
+            elif runner.get("mode") == "remote":
+                out[task_id]["runnerKind"] = "cloud"
             state = execution_sessions.canonical_state(row.state, "running")
             out[task_id]["executionState"] = state
-            if state == "done":
-                out[task_id]["state"] = "done"
+            if state in {"done", "running", "queued", "dispatching", "working", "streaming"}:
+                out[task_id]["state"] = state
+                for key in ("error", "phase", "phaseName"):
+                    out[task_id].pop(key, None)
             elif state in {"failed", "stopped", "interrupted", "cancelled", "canceled"}:
                 meta = dict(row.metadata_ or {})
-                out[task_id]["state"] = "failed"
+                out[task_id]["state"] = "stopped" if state in {"stopped", "cancelled", "canceled"} else "failed"
                 out[task_id]["error"] = str(meta.get("error") or "AI 执行未完成")[:300]
     return out
 
 
 async def task_to_api_live(session: AsyncSession, task) -> dict:
-    """Technical contract for task to api live."""
+    """Publish the same task and AI-state projection used by list_tasks. Omitting AI state from
+    task.updated would erase the status badge whenever the client replaces its cached task."""
     api = task_to_api(task)
     ai = await ai_states(session, [task.id])
     if task.id in ai:
@@ -280,10 +292,9 @@ async def task_to_api_live(session: AsyncSession, task) -> dict:
 
 async def list_tasks(session: AsyncSession, owner_id: str,
                      *, include_related: bool = False) -> list[dict]:
-    """Executors retrieve their owned tasks; employee clients also read tasks they participate in.
-    Automation-generated tasks remain available through run history and detail endpoints rather
-    than the ordinary requirement pool.
-    """
+    """Executors list local tasks; employees also see tasks they participate in. Automation tasks
+    appear in automation history and task details, outside the ordinary requirement pool. Hub
+    retains them for single-task APIs and execution receipts."""
     client = await session.get(models.Client, owner_id)
     # Scheduled runs have their own run ledger.  Keep their Task identity for
     # execution/artifacts, but never mix those generated rows into the normal
@@ -306,7 +317,7 @@ async def list_tasks(session: AsyncSession, owner_id: str,
     )
     rows = list(res.scalars().all())
     out = [task_to_api(t) for t in rows]
-
+    # Include AI state so cards identify automated work and its progress.
     ai = await ai_states(session, [t["id"] for t in out])
     for t in out:
         if t["id"] in ai:
@@ -335,8 +346,8 @@ async def get_task(session: AsyncSession, owner_id: str, tid: str,
             return None
     elif not task_access.is_owner(t, client):
         return None
-    # Single-task reads and deep links share the list and WebSocket AI-state contract.
-    # Dispatch and failure state must appear without waiting for a full list refresh.
+    # Deep links, refreshes and WebSocket pushes share the same AI-state contract.
+    # Dispatching and failed states must appear without waiting for a list refresh.
     api = await task_to_api_live(session, t)
     if include_related and client is not None:
         from . import task_access
@@ -345,20 +356,18 @@ async def get_task(session: AsyncSession, owner_id: str, tid: str,
     return api
 
 
-
-# Parse a natural-language task request into title, time, assignee, and priority to prefill the form.
-# The user confirms or edits the result. Return {} on missing model configuration, failure, or invalid output so manual entry remains available.
+# Convert natural-language requests into editable structured task fields.
+# AI proposes title, time, assignee and priority for the user to review.
+# Missing models, failures and invalid responses return an empty object for manual entry.
 
 
 async def parse_task_text(session: AsyncSession, text: str, client=None, model: str = "", *, automation=None, instruction=None, attachments=None) -> dict:
-    """Infer task fields plus explainable professional context and a recommended workflow from
-    natural language.
-    """
+    """Infer task fields, an explainable work scenario and a default workflow."""
     from datetime import datetime
     from . import work_catalog, automation_draft, task_parse_selection, task_parse_materials
 
     text = (text or "").strip()
-    # Attachments supplement model context; catalog matching and explicit choices still use the original task instruction.
+    # References inform the model; catalog matching and explicit options use the original request.
     model_input = task_parse_materials.user_input(text, attachments)
     if not text:
         return {}
@@ -419,9 +428,7 @@ async def parse_task_text(session: AsyncSession, text: str, client=None, model: 
 
 
 async def _repo_choices(session: AsyncSession, client) -> list[str]:
-    """List repository names this user may select, for both model suggestions and confirmation
-    forms.
-    """
+    """List project names available to this user for model and manual selection."""
     try:
         from . import task_execution_options
         if client is None or not getattr(client, "id", None):
@@ -468,23 +475,23 @@ async def create_task(
     await task_requirements.apply(session, actor, t, data, creating=True)
     apply_detail(t, data)
     normalize_output_contract(t)
-    # Prefer an explicit creator; default local tasks to the client's owner.
+    # Prefer an explicit creator; local tasks fall back to the client owner.
     cid, cname = creator if creator else (None, "")
     if not cid and origin == "local":
         cid, cname = await owner_user(session, owner_id)
     t.created_by, t.created_by_name = cid, cname
-    # Default an unspecified assignee to the client's owner.
+    # Default unspecified assignees to the client owner across creation paths.
     if t.assignee_user_id is None:
         au, _ = await owner_user(session, owner_id)
         t.assignee_user_id = au
     t.progress = stamp_progress(data.get("progress"), None, cid, cname)
     stamp_actual(t, None, t.status)
-    default_requester(t, cid, cname)   # Use the creator as requester for delegated-task completion receipts.
+    default_requester(t, cid, cname)   # Use the creator as requester for delegated-task receipts.
     session.add(t)
-    # Record who dispatched externally assigned tasks; avoid redundant creation events for personal tasks.
+    # Record who delegated the work; omit redundant events for personal local tasks.
     if origin != "local":
         from . import task_events
-        await session.flush()          # Obtain the task ID first.
+        await session.flush()          # Allocate the ID before recording the event.
         task_events.record(session, t.id, "created", {"source": t.source, "origin": origin}, cname)
     assignment_notice = None
     if origin == "dispatch":
@@ -515,7 +522,9 @@ async def create_task(
 
 
 async def put_local_task(session: AsyncSession, owner_id: str, tid: str, data: dict) -> dict | None:
-    """Idempotently create or update a local task using the client-generated ID. Reject tasks owned by another device or originating from aggregation or assignment so offline PUT operations cannot take ownership or overwrite external data."""
+    """Idempotently create local tasks by client ID; repeated PUTs become updates. This persists
+    the offline queue. Return None for another client's task or externally supplied work so PUT
+    cannot seize ownership or replace the source."""
     from . import task_access
     client = await session.get(models.Client, owner_id)
     current = await session.get(models.Task, tid)
@@ -525,12 +534,12 @@ async def put_local_task(session: AsyncSession, owner_id: str, tid: str, data: d
         return await update_task(session, owner_id, tid, data)
     try:
         return await create_task(session, owner_id, data, origin="local", task_id=tid)
-    except IntegrityError:  # Another window may have inserted the same task during concurrent replay.
+    except IntegrityError:  # Another window may have inserted this ID during concurrent PUT replay.
         await session.rollback()
         current = await session.get(models.Task, tid)
-        # Treat only a confirmed existing identical ID as replay or ID collision.
-        # Preserve unrelated database constraint errors.
-        # Do not misreport migration failures as occupied task identifiers.
+        # Only an existing ID represents replay or an identity conflict.
+        # Preserve other constraint errors so schema-migration failures are not mislabeled
+        # as dispatch failures caused by an occupied task ID.
         if current is None:
             raise
         if not task_access.is_owner(current, client) or current.origin != "local":
@@ -623,7 +632,7 @@ async def update_task(session: AsyncSession, owner_id: str, tid: str, patch: dic
             transition = await task_status.rejection(session, t, requested_status)
             transition.update({"requested": requested_status, "actual": t.status, "applied": False})
         elif requested_status == "doing" and prev_status != "doing":
-            # This is the owner's explicit human take-ownership action. Runner
+            # This is the owner's explicit human claim action. Runner
             # dispatch and queue admission do not pass through this CRUD path.
             from . import repository_issue_access
             await repository_issue_access.record_started(session, t)
@@ -632,9 +641,9 @@ async def update_task(session: AsyncSession, owner_id: str, tid: str, patch: dic
         t.progress = stamp_progress(requested_progress, t.progress, uid_, uname_)
     became_done = bool(has_status and applied and prev_status != "done" and t.status == "done")
     normalize_output_contract(t)
-    # Content-version claims already increment requirement_version in task_requirements.apply.
-    # Do not increment it again for the same edit.
-    # Execution-only updates to state, progress, or orchestration do not change that version.
+    # task_requirements.apply already conditionally increments the content version
+    # under its optimistic lock. Do not double-count it here or increment it for
+    # execution PATCH updates such as status, progress or orchestration.
     if not requirement_edit and set(patch) & _REQ_CONTENT_KEYS:
         t.requirement_version = int(t.requirement_version or 1) + 1
     event_arrival, event_by, assignment_notice = "", "", None
@@ -658,6 +667,8 @@ async def update_task(session: AsyncSession, owner_id: str, tid: str, patch: dic
     if transition:
         api["statusTransition"] = transition
     from . import task_access
+    # Reassignment emits an arrival event for the new executor. The client recognizes
+    # arrival=assign; unchanged assignees remain quiet.
     decorated = task_access.decorate(t, api, client, {}, {})
     decorated.pop("assigneeName", None)
     decorated.pop("executionDeviceName", None)
@@ -786,7 +797,7 @@ async def delete_task(session: AsyncSession, owner_id: str, tid: str) -> dict:
 
 
 async def clear_done(session: AsyncSession, owner_id: str) -> dict:
-    """Clear completed tasks only; preserve cancelled tasks."""
+    """Remove only completed tasks, preserving canceled tasks."""
     from . import task_access
     client = await session.get(models.Client, owner_id)
     res = await session.execute(

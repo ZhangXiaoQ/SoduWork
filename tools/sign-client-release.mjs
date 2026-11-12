@@ -97,11 +97,12 @@ async function main() {
   if (!existsSync(installer)) fail("installer does not exist");
   const name = basename(installer);
   const platform = env("SODUWORK_CLIENT_PLATFORM", "win32");
-  if (!["win32", "darwin", "linux"].includes(platform)) fail("SODUWORK_CLIENT_PLATFORM must be win32, darwin or linux");
+  if (!["win32", "darwin", "linux", "android"].includes(platform)) fail("Unsupported SODUWORK_CLIENT_PLATFORM");
   /* Accept only the current SoduWork installer prefix. */
   const stem = 'SoduWork';
   const stemVersion = '\\d+\\.\\d+\\.\\d+(?:-beta\\.(?:1|[1-9]\\d*))?';
   const patterns = {
+    android: new RegExp(`^${stem}-Mobile-(${stemVersion})\\.apk$`),
     win32: new RegExp(`^${stem}-(${stemVersion})-Setup\\.exe$`),
     darwin: new RegExp(`^${stem}-(${stemVersion})-mac(?:-(x64|arm64))?\\.(dmg|zip)$`),
     linux: new RegExp(`^${stem}-(${stemVersion})-linux(?:-(x64|arm64))?\\.(AppImage|deb|rpm|tar\\.gz)$`),
@@ -112,6 +113,11 @@ async function main() {
   const size = statSync(installer).size;
   if (size < 1024 * 1024) fail("installer is too small");
   const digest = await sha256(installer);
+  // This source distribution supports self-hosted clients only. Private cloud
+  // profiles and their publication receipts are not part of this checkout.
+  if (env("SODUWORK_DISTRIBUTION", "self-hosted") !== "self-hosted") {
+    fail("Only the self-hosted Client distribution is supported by this source tree");
+  }
   if (!dryRun) {
     const receiptPath = resolve(env("SODUWORK_CLIENT_COMPATIBILITY_REPORT", installer + ".compatibility.json"));
     if (existsSync(receiptPath)) {
@@ -129,7 +135,7 @@ async function main() {
   if (!env("SODUWORK_CLIENT_SIGNING_KEY_FILE") || !existsSync(keyFile)) {
     fail("SODUWORK_CLIENT_SIGNING_KEY_FILE is required");
   }
-  const keyId = env("SODUWORK_CLIENT_SIGNING_KEY_ID", "");
+  const keyId = env("SODUWORK_CLIENT_SIGNING_KEY_ID");
   if (!KEY_ID_RE.test(keyId)) fail("SODUWORK_CLIENT_SIGNING_KEY_ID is invalid");
   const key = privateKey(readFileSync(keyFile, "ascii").trim());
 
@@ -143,10 +149,11 @@ async function main() {
   const channel = env("SODUWORK_CLIENT_CHANNEL", "beta");
   if (!["stable", "beta"].includes(channel)) fail("SODUWORK_CLIENT_CHANNEL must be stable or beta");
   const minimum = env("SODUWORK_CLIENT_MINIMUM_VERSION");
-  if (minimum && !VERSION_RE.test(minimum)) fail("SODUWORK_CLIENT_MINIMUM_VERSION must be x.y.z");
+  if (minimum && !VERSION_RE.test(minimum)) fail("SODUWORK_CLIENT_MINIMUM_VERSION must be x.y.z or x.y.z-beta.N");
   const mandatory = /^(1|true|yes)$/i.test(env("SODUWORK_CLIENT_MANDATORY"));
-  const arch = env("SODUWORK_CLIENT_ARCH", "x64");
-  if (!["x64", "arm64"].includes(arch)) fail("SODUWORK_CLIENT_ARCH must be x64 or arm64");
+  const arch = env("SODUWORK_CLIENT_ARCH", platform === "android" ? "universal" : "x64");
+  const arches = platform === "android" ? ["universal"] : ["x64", "arm64"];
+  if (!arches.includes(arch)) fail("SODUWORK_CLIENT_ARCH does not match platform");
   const notes = env("SODUWORK_CLIENT_RELEASE_NOTES");
   const bundlePath = resolve(env(
     "SODUWORK_CLIENT_RELEASE_BUNDLE",
@@ -194,7 +201,7 @@ async function main() {
       const hex = bytes.toString('hex');
       payload.releaseId = `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
     }
-    if (!["x64", "arm64"].includes(payload.arch)) fail("SODUWORK_CLIENT_ARCH must be x64 or arm64");
+    if (!arches.includes(payload.arch)) fail("SODUWORK_CLIENT_ARCH does not match platform");
     payload.artifact.url = `/api/v1/client-updates/artifacts/${payload.releaseId}`;
     bundle = {
       ...payload,

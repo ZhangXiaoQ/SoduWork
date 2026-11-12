@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import hashlib
+import calendar
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -106,53 +107,107 @@ def _wall_candidate(day: date, hh: int, mm: int, zone) -> datetime:
     return candidate.astimezone(timezone.utc).astimezone(zone)
 
 
+def _date_allowed(day: date, start: date | None, end: date | None) -> bool:
+    return (start is None or day >= start) and (end is None or day <= end)
+
+
+def _next_hourly(s, base_utc: datetime, zone, minute: int,
+                 start: date | None, end: date | None) -> datetime | None:
+    probe = base_utc.replace(second=0, microsecond=0)
+    local_probe = probe.astimezone(zone)
+    if start and local_probe.date() < start:
+        probe = _wall_candidate(start, 0, 0, zone).astimezone(timezone.utc)
+    elif probe <= base_utc:
+        probe += timedelta(minutes=1)
+    for _ in range(181):
+        local_probe = probe.astimezone(zone)
+        if end and local_probe.date() > end:
+            return None
+        if _date_allowed(local_probe.date(), start, end) and local_probe.minute == minute and probe > base_utc:
+            return probe
+        probe += timedelta(minutes=1)
+    raise RuntimeError("无法计算下一次小时计划")
+
+
+def _next_calendar_run(s, base_utc: datetime, zone, every: str,
+                       start: date | None, end: date | None) -> datetime | None:
+    local = base_utc.astimezone(zone)
+    hh = max(0, min(23, int(s.at_hour or 0)))
+    mm = max(0, min(59, int(s.at_minute or 0)))
+    first_day = max(local.date(), start) if start else local.date()
+    if end and first_day > end:
+        return None
+
+    if every == "daily":
+        for offset in range(0, 3):
+            day = first_day + timedelta(days=offset)
+            if end and day > end:
+                return None
+            candidate = _wall_candidate(day, hh, mm, zone).astimezone(timezone.utc)
+            if candidate > base_utc:
+                return candidate
+        return None
+
+    if every == "weekly":
+        weekdays = schedule_timing.clean_weekdays(getattr(s, "weekdays", None))
+        if not weekdays:
+            weekdays = schedule_timing.clean_weekdays(getattr(s, "weekday", None))
+        for offset in range(0, 14):
+            day = first_day + timedelta(days=offset)
+            if end and day > end:
+                return None
+            if day.isoweekday() not in weekdays:
+                continue
+            candidate = _wall_candidate(day, hh, mm, zone).astimezone(timezone.utc)
+            if candidate > base_utc:
+                return candidate
+        return None
+
+    month_days = schedule_timing.clean_month_days(getattr(s, "month_days", None))
+    if not month_days:
+        return None
+    policy = str(getattr(s, "month_day_policy", "skip") or "skip")
+    cursor = date(first_day.year, first_day.month, 1)
+    for _ in range(3):
+        last_day = calendar.monthrange(cursor.year, cursor.month)[1]
+        candidates = set()
+        for month_day in month_days:
+            if month_day <= last_day:
+                candidates.add(month_day)
+            elif policy == "last_day":
+                candidates.add(last_day)
+        for month_day in sorted(candidates):
+            day = date(cursor.year, cursor.month, month_day)
+            if not _date_allowed(day, start, end):
+                continue
+            candidate = _wall_candidate(day, hh, mm, zone).astimezone(timezone.utc)
+            if candidate > base_utc:
+                return candidate
+        if end and cursor > date(end.year, end.month, 1):
+            return None
+        if cursor.year == 9999 and cursor.month == 12:
+            return None
+        cursor = date(cursor.year + (cursor.month // 12), cursor.month % 12 + 1, 1)
+    return None
+
+
 def next_run_instant(s, after: datetime | None = None) -> datetime | None:
     """Return the next occurrence as an aware UTC instant."""
     if getattr(s, "every", "") == "once":
         return schedule_timing.next_once(s)
     base_utc = _utc(after) if after is not None else datetime.now(timezone.utc)
     zone = schedule_zone(s)
-    local = base_utc.astimezone(zone)
-    start_date = getattr(s, "start_date", None)
-    end_date = getattr(s, "end_date", None)
-    if end_date is not None and local.date() > end_date:
-        return None
-    mm = max(0, min(59, int(s.at_minute or 0)))
     every = s.every if getattr(s, "every", "") in EVERY else "daily"
+    if every == "custom":
+        return schedule_timing.next_custom_run(s, base_utc)
+    start, end = schedule_timing.schedule_dates(s)
 
-    if every == "hourly":
-        if start_date is not None and local.date() < start_date:
-            base_utc = (_wall_candidate(start_date, 0, 0, zone) - timedelta(minutes=1)).astimezone(timezone.utc)
-        probe = base_utc.replace(second=0, microsecond=0)
-        if probe <= base_utc:
-            probe += timedelta(minutes=1)
-        # Three real hours cover normal time and both sides of a DST fold.
-        for _ in range(181):
-            if probe.astimezone(zone).minute == mm:
-                candidate = probe
-                local_day = candidate.astimezone(zone).date()
-                if (start_date is None or local_day >= start_date) and (end_date is None or local_day <= end_date):
-                    return candidate
-            probe += timedelta(minutes=1)
-        if end_date is not None:
-            return None
-        raise RuntimeError("无法计算下一次小时计划")
-
-    hh = max(0, min(23, int(s.at_hour or 0)))
-    weekday = max(1, min(7, int(s.weekday or 1)))
-    if start_date is not None and local.date() < start_date:
-        local = _wall_candidate(start_date, 0, 0, zone)
-    limit = 15 if every == "weekly" else 3
-    for offset in range(limit):
-        day = local.date() + timedelta(days=offset)
-        if end_date is not None and day > end_date:
-            return None
-        if every == "weekly" and day.isoweekday() != weekday:
-            continue
-        candidate = _wall_candidate(day, hh, mm, zone).astimezone(timezone.utc)
-        if candidate > base_utc:
-            return candidate
-    raise RuntimeError("无法计算下一次计划")
+    try:
+        if every == "hourly":
+            return _next_hourly(s, base_utc, zone, max(0, min(59, int(s.at_minute or 0))), start, end)
+        return _next_calendar_run(s, base_utc, zone, every, start, end)
+    except OverflowError:
+        return None
 
 
 def next_run_after(s, after: datetime | None = None) -> datetime | None:
@@ -169,16 +224,29 @@ def next_run_after(s, after: datetime | None = None) -> datetime | None:
     return result.replace(tzinfo=None) if naive else result
 
 
+def calendar_window_allows(s, current: datetime, occurrence: datetime | None = None) -> bool:
+    """Allow the final dated occurrence one polling interval to be dispatched."""
+    start, end = schedule_timing.schedule_dates(s)
+    zone = schedule_zone(s)
+    today = current.astimezone(zone).date()
+    if _date_allowed(today, start, end):
+        return True
+    if end is None or today <= end or occurrence is None:
+        return False
+    if occurrence.astimezone(zone).date() != end:
+        return False
+    from ..config import get_settings
+    gap = max(60, int(getattr(get_settings(), "delivery_sweep_seconds", 120)))
+    lateness = (current - occurrence).total_seconds()
+    return 0 <= lateness <= gap
+
+
 def due(s, now: datetime | None = None) -> bool:
     """Whether the next scheduled instant or bounded retry is due now."""
     current = _utc(now) if now is not None else datetime.now(timezone.utc)
     if getattr(s, "every", "") == "once":
         target = schedule_timing.next_once(s)
         return target is not None and target <= current
-    local_day = current.astimezone(schedule_zone(s)).date()
-    if ((getattr(s, "start_date", None) is not None and local_day < s.start_date) or
-            (getattr(s, "end_date", None) is not None and local_day > s.end_date)):
-        return False
     retry_at = getattr(s, "next_retry_at", None)
     if retry_at is not None:
         return _utc(retry_at) <= current
@@ -187,7 +255,9 @@ def due(s, now: datetime | None = None) -> bool:
     if base is None:
         return False
     next_at = next_run_instant(s, _utc(base))
-    return next_at is not None and next_at <= current
+    if next_at is None or next_at > current:
+        return False
+    return getattr(s, "every", "") == "custom" or calendar_window_allows(s, current, next_at)
 
 
 def trigger_identity(s, trigger: str = "timer") -> str:
@@ -205,6 +275,8 @@ def trigger_identity(s, trigger: str = "timer") -> str:
         if base is None:
             raise ValueError("plan has no scheduling origin")
         instant = next_run_instant(s, _utc(base))
+        if instant is None:
+            raise ValueError("计划已超出有效日期范围")
     stamp = instant.astimezone(timezone.utc).isoformat(
         timespec="microseconds" if getattr(s, "every", "") == "once" else "seconds")
     owner = (hashlib.sha256(str(getattr(s, "owner_client_id", "") or "").encode()).hexdigest() + ":"
@@ -596,12 +668,13 @@ async def run_one(session: AsyncSession, s, who: str = "SoduWork（定时）",
             # Retrying an occurrence must keep the cloud request digest stable.
             instruction_prefix = instruction + '\n\n自动化触发时间：'
             instruction = instruction_prefix + format_trigger_time(s, run.started_at)
+            from .schedule_instruction import for_run
             required = clean_required_capabilities(s.required_capabilities)
             runner_kind = 'work-computer' if runner.client_id else 'cloud'
             request = {
                 'sessionId': request_id, 'agentId': cli,
                 'model': str(getattr(s, 'model_name', '') or ''),
-                'title': title, 'text': instruction, 'userText': instruction,
+                'title': title, 'text': for_run(instruction), 'userText': instruction,
                 'requiredSkills': required_skill_names(required),
                 'targetRunnerId': runner.id, 'targetRunnerKind': runner_kind,
             }

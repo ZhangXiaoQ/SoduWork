@@ -35,14 +35,14 @@ def ok(value, message: str) -> None:
     checks += 1
 
 
-def login_body(device: str, account: str, password: str) -> dict:
+def login_body(device: str, account: str, password: str, platform="win32") -> dict:
     return {
         "device": device,
         "account": account,
         "password": password,
         "displayName": "Smoke Employee",
         "name": "Smoke workstation",
-        "platform": "win32",
+        "platform": platform,
         "version": "smoke",
         "workRoot": "C:/SoduWork/work",
     }
@@ -67,11 +67,12 @@ async def login(
     key: str,
     account: str,
     password: str,
+    platform: str = "win32",
 ):
     return await client.post(
         "/api/v1/client-auth/login",
         headers={"X-Device-Key": key},
-        json=login_body(device, account, password),
+        json=login_body(device, account, password, platform),
     )
 
 
@@ -118,7 +119,9 @@ async def run() -> None:
 
         first = await login(client, device_1, key_1, account, old_password)
         ok(first.status_code == 200, "device-1 first sign-in failed")
-        second = await login(client, device_2, key_2, account, old_password)
+        # A phone and a desktop coexist; another desktop now revokes the first.
+        # Password rotation must still revoke every active device category.
+        second = await login(client, device_2, key_2, account, old_password, platform="android")
         ok(second.status_code == 200, "device-2 sign-in failed")
         token_1 = first.json()["session"]
         token_2 = second.json()["session"]

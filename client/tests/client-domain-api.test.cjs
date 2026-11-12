@@ -37,6 +37,22 @@ test('browser callers without the new bridge retain the original HTTP request', 
   const f = await fixture(); await f.api.conversationProjects();
   assert.ok(f.requests.at(-1).url.endsWith('/api/v1/conversation-projects'));
 });
+
+test('execution history binds an encoded task and run while retaining legacy pagination', async () => {
+  const f = await fixture();
+  await f.api.aiSession('task/slash', 0, 'run:a&b c');
+  const first = new URL(f.requests.at(-1).url);
+  assert.ok(first.pathname.endsWith('/tasks/task%2Fslash/ai-session'));
+  assert.equal(first.searchParams.get('ref'), 'run:a&b c');
+  assert.equal(first.searchParams.has('since'), false);
+  await f.api.aiSession('task/slash', 400, 'run:a&b c');
+  const next = new URL(f.requests.at(-1).url);
+  assert.equal(next.searchParams.get('since'), '400');
+  assert.equal(next.searchParams.get('ref'), 'run:a&b c');
+  await f.api.aiSession('task/slash', 400);
+  assert.ok(f.requests.at(-1).url.endsWith('/ai-session?since=400'));
+  assert.equal(f.requests.at(-1).options.method, undefined);
+});
 test('model and config reads use shared snapshots and successful writes invalidate their domain', async () => {
   const invalidated = [], reads = [];
   const f = await fixture({clientDomainRead: async domain => {

@@ -19,7 +19,7 @@ class Target {
   get innerHTML() { return this.html; }
   replaceChildren() { this.html = ''; this.writes++; }
 }
-function fixture(width = 1200) {
+function fixture(width = 1200, stageWidth = width) {
   const global = new Target(), root = new Target(), grip = new Target(), maximize = new Target();
   let ratio = 0.5, maximized = false, hidden = 0, scheduled = 0;
   const classes = new Set();
@@ -28,7 +28,8 @@ function fixture(width = 1200) {
   root.style = { setProperty(_name, value) { ratio = Number.parseFloat(value) / 100; } };
   root.getBoundingClientRect = () => ({ width });
   const nodes = { '[data-wb-resize]': grip, '[data-wb-maximize]': maximize,
-    '.nchat-main': { getBoundingClientRect: () => ({ width: width * ratio }) },
+    '.nchat-stage': { getBoundingClientRect: () => ({ width: stageWidth }) },
+    '.nchat-main': { getBoundingClientRect: () => ({ width: stageWidth * ratio }) },
     '.ncw': new Target(), '.ncw-tabs': new Target(), '.ncw-body': new Target() };
   root.querySelector = name => nodes[name] || null;
   const context = { window: global, URL, setTimeout, clearTimeout };
@@ -45,6 +46,17 @@ function drag(ctx, destination) {
   ctx.grip.emit('pointerdown', { button: 0, pointerId: 7, clientX: start });
   ctx.global.emit('pointermove', { pointerId: 7, clientX: destination });
 }
+test('split ratios, keyboard steps and pointer resizing follow the actual stage bounds', () => {
+  const ctx = fixture(1600, 1280), binding = ctx.bind();
+  assert.equal(ctx.global.ChatWorkspaceSplit.current(ctx.root), 0.5);
+  ctx.grip.emit('keydown', { key: 'ArrowRight' });
+  assert.equal(ctx.ratio, 0.52);
+  ctx.grip.emit('pointerdown', { button: 0, pointerId: 7, clientX: 665.6 });
+  ctx.global.emit('pointerup', { pointerId: 7, clientX: 512 });
+  assert.equal(ctx.ratio, 0.4);
+  assert.equal(ctx.maximized, false);
+  binding.dispose();
+});
 test('drag below 320 previews snap, commits only on release, and retains prior useful width', () => {
   const ctx = fixture(); const binding = ctx.bind(); ctx.ratio = 0.56;
   drag(ctx, 310);

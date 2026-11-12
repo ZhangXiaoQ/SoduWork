@@ -13,6 +13,7 @@ const PLATFORM_META = {
   win32: { label: 'Windows', mark: 'W' },
   darwin: { label: 'macOS', mark: 'M' },
   linux: { label: 'Linux', mark: 'L' },
+  android: { label: 'Android', mark: 'A' },
 }
 
 const ATTEMPT_STATE_META = localeMap(() => ({
@@ -52,7 +53,7 @@ function newerVersion(a, b) {
   return 0
 }
 
-const PLATFORM_ORDER = { win32: 0, darwin: 1, linux: 2 }
+const PLATFORM_ORDER = { win32: 0, darwin: 1, linux: 2, android: 3 }
 const FORMAT_ORDER = [['.exe', 0], ['.dmg', 1], ['.deb', 2], ['.rpm', 3], ['.tar.gz', 4], ['.appimage', 5]]
 
 function formatRank(name) {
@@ -102,6 +103,7 @@ export default function ClientReleases() {
   const [uploadOpen, setUploadOpen] = useState(false)
   const [confirmEnable, setConfirmEnable] = useState(null)   // Release awaiting enablement.
   const [toggling, setToggling] = useState('')
+  const [downloading, setDownloading] = useState('')
   // Per-device update version and stage.
   const [attempts, setAttempts] = useState([])
   const [counts, setCounts] = useState({})
@@ -166,7 +168,7 @@ export default function ClientReleases() {
     <div className="cr-head">
       <div>
         <h2>{tx("客户端发布")}</h2>
-        <p>{tx("上传已签名的桌面客户端安装包并控制哪些版本可被设备升级到。上传后默认停用；启用前服务端会重新校验签名与安装包完整性。")}</p>
+        <p>{tx("管理桌面与 Android 安装包。上传后默认停用；启用前服务端会重新校验签名与完整性。")}</p>
       </div>
       {manage && <button className="btn btn-primary" onClick={() => setUploadOpen(true)}>
         <Icon name="plus" /> {tx("上传发布")}
@@ -220,6 +222,13 @@ export default function ClientReleases() {
                 </span>
                 <span className="cr-time">{fmtTime(row.createdAt)}</span>
                 <span className="cr-actions">
+                  {manage && <button className="admin-text-action" disabled={!!downloading}
+                    onClick={async () => {
+                      setDownloading(row.id)
+                      try { await api.downloadClientRelease(row.id, row.artifactName) }
+                      catch (error) { toast(error.message || tx("请稍后重试")) }
+                      finally { setDownloading('') }
+                    }}>{tx(downloading === row.id ? "下载中" : "下载")}</button>}
                   {manage && (row.enabled
                     ? <button className="admin-text-action" disabled={toggling === row.id}
                         onClick={() => toggle(row, false)}>{tx("停用")}</button>
@@ -240,7 +249,9 @@ export default function ClientReleases() {
     {uploadOpen && <UploadModal onClose={() => setUploadOpen(false)} onDone={() => { setUploadOpen(false); load() }} />}
     {confirmEnable && <Confirm
       title={tx("启用该版本？")}
-      text={tx("启用 {0}（{1} / {2}）后，对应平台的设备会在检查更新时收到升级。启用前服务端会重新校验签名与安装包完整性，校验失败将被拒绝。", [confirmEnable.version, confirmEnable.platform, confirmEnable.arch])}
+      text={confirmEnable.platform === 'android'
+        ? tx("启用后可从首页下载此 Android 安装包；停用后下载入口将不可用。已有安装不会被卸载。")
+        : tx("启用 {0}（{1} / {2}）后，对应平台的设备会在检查更新时收到升级。启用前服务端会重新校验签名与安装包完整性，校验失败将被拒绝。", [confirmEnable.version, confirmEnable.platform, confirmEnable.arch])}
       confirmText={tx("启用")}
       onConfirm={() => toggle(confirmEnable, true)}
       onClose={() => setConfirmEnable(null)} />}
@@ -392,7 +403,7 @@ function UploadModal({ onClose, onDone }) {
           <span className="cr-file-chip btn btn-ghost xs" aria-hidden="true">{tx("选择文件")}</span>
           <span className="cr-file-name">{installerName || tx("未选择任何文件")}</span>
         </span>
-        <small>{tx("SoduWork-x.y.z-Setup.exe / .dmg / .deb / .rpm / .tar.gz / .AppImage")}</small>
+        <small>{tx("SoduWork-x.y.z-Setup.exe / .dmg / .deb / .rpm / .tar.gz / .AppImage")} / SoduWork-Mobile-x.y.z.apk</small>
       </label>
       {error && <div className="cr-upload-error">{error}</div>}
     </div>

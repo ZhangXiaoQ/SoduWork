@@ -33,3 +33,4 @@ class RemoteScreenGrant(Base):
     activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     ticket_hash: Mapped[str] = mapped_column(String(64), default="")
+

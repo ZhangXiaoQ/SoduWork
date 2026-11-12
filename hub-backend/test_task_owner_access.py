@@ -17,6 +17,21 @@ from app.services import ai_exec, task_access, task_events
 
 
 class TaskOwnerAccessTests(unittest.IsolatedAsyncioTestCase):
+    async def test_pc_local_requirement_can_continue_from_same_account_phone(self):
+        runner = {"mode": "local", "runnerId": "own-pc", "clientId": "pc"}
+        task = models.Task(id="requirement", kind="ticket", origin="local", owner_client_id="pc",
+                           owner_user_id="alice", created_by="alice", work_routing={"executionContext": {
+                               "runner": runner, "agent": {"id": "runner:own-pc:pi"}}})
+        phone = models.Client(id="phone", user_ref="alice")
+        self.assertTrue(task_access.can_continue_execution(task, phone))
+        self.assertFalse(task_access.is_owner(task, phone))
+        self.assertFalse(task_access.can_continue_execution(task, models.Client(id="other", user_ref="bob")))
+        self.assertFalse(task_access.can_continue_execution(task, models.Client(id="guest")))
+        for change in ({"runnerId": ""}, {"runnerId": "other-pc"}, {"clientId": "another-device"}):
+            task.work_routing = {"executionContext": {"runner": {**runner, **change},
+                "agent": {"id": "runner:own-pc:pi"}}}
+            self.assertFalse(task_access.can_continue_execution(task, phone), change)
+
     async def test_requirement_execution_is_same_account_only_and_remains_pinned(self):
         task = models.Task(id="requirement", kind="requirement", origin="local", owner_client_id="phone",
                            owner_user_id="alice", created_by="alice", work_routing={"executionContext": {

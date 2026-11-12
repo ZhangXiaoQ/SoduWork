@@ -66,6 +66,7 @@ soduWorkApp.events.onRefresh(() => {
   for (const [file, content] of Object.entries({ [htmlFile]: html, 'ui/app.js': script, 'ui/soduwork-app.js': sdk,
     ...(body.jiyong ? { 'assets/data-init.json': JSON.stringify({ schemaVersion: 1, migrations: [] }, null, 2) } : {}),
     'soduwork-plugin-draft.json': JSON.stringify(body, null, 2),
+    ...(body.jiyong ? {'assets/data-init.json':JSON.stringify({schemaVersion:1,migrations:[{version:1,seed:[]}]},null,2)} : {}),
     '.soduwork/delivery.json': JSON.stringify({ schemaVersion: 1, deliverables: [{ path: 'soduwork-plugin-draft.json', kind: 'file', title: String(name).trim() + '应用草稿', primary: true }] }, null, 2) })) {
     fs.mkdirSync(path.dirname(path.join(target, file)), { recursive: true });
     fs.writeFileSync(path.join(target, file), content, { flag: 'wx' });

@@ -42,6 +42,7 @@ RUNNER_MODULES = [
     # skills imports its inventory helpers; database policy must stay lazy and
     # absent in the standalone bundle, while Hub transport remains unchanged.
     "app.services.runner_hub",
+    "app.services.conversation_turn_skills",
 ]
 
 passed = failed = 0
@@ -156,6 +157,17 @@ for mod in __MODS__:
         failures.append(mod + ": " + type(exc).__name__ + ": " + str(exc))
 if failures:
     print("IMPORT-FAIL:", "; ".join(failures)); sys.exit(31)
+
+# A packaged Runner must validate turn skills without Hub HTTP dependencies.
+import asyncio
+from app.services import conversation_turn_skills
+assert asyncio.run(conversation_turn_skills.prepare(None, {})) == {"prompt": "", "selection": []}
+try:
+    asyncio.run(conversation_turn_skills.prepare(None, {"turnSkills": ["../private"]}))
+except ValueError:
+    pass
+else:
+    raise AssertionError("Runner accepted an invalid skill selection")
 
 # Both naming paths must complete without database libraries in the Runner environment.
 from app.services import execution_aliases, agent_naming, ai_local

@@ -51,6 +51,9 @@ test('only explicit official authorization status counts as connected', () => {
   assert.equal(connections.authResult('wecom', { code: 0, output: 'unauthorized\n' }), false);
   assert.equal(connections.authResult('dingtalk', { code: 0, output: '{"authenticated":false}' }), false);
   assert.throws(() => connections.authResult('dingtalk', { code: 0, output: '{"success":true}' }));
+  assert.throws(() => connections.authResult('dingtalk', { code: 0, output: '{"success":false,"authenticated":true}' }));
+  assert.throws(() => connections.authResult('dingtalk', { code: 0, output: '{"authenticated":false,"reason":"dek_missing","message":"sensitive fixture"}' }),
+    error => error.message.includes('凭据存储') && !error.message.includes('sensitive'));
   assert.throws(() => connections.authResult('wecom', { code: 1, output: 'authorized' }));
 });
 test('IPC checks the invoking frame rather than trusting its parent window', () => {
@@ -102,17 +105,19 @@ test('real Runner tool probe precedes enabling MCP and preserves unrelated setti
     calls.push({ url, options });
     if (options.method === 'GET') return { ok: true, json: async () => ({ personal: [old], company: [], enabledCompany: ['company'] }) };
     if (url.endsWith('/probe')) return { ok: true, json: async () => ({ ok: true, tools: ['read-doc'] }) };
-    const body = JSON.parse(options.body); assert.deepEqual(body.servers[0], old); assert.deepEqual(body.enabledCompany, ['company']);
+    assert.ok(url.endsWith('/upsert'));
+    const body = JSON.parse(options.body); assert.deepEqual(Object.keys(body).sort(), ['original','server']);
+    assert.equal(body.original,null);assert.equal(body.server.name,'feishu');assert.ok(!JSON.stringify(body).includes(old.id));
     return { ok: true, json: async () => ({ ok: true }) };
   });
   assert.equal((await feishu.register(identity(), runtime.scope(identity()), { port: 1234, bearer: 'fixture' })).toolCount, 1);
-  assert.deepEqual(calls.map(x => x.options.method), ['GET', 'POST', 'PUT']);
+  assert.deepEqual(calls.map(x => x.options.method), ['GET', 'POST', 'POST']);
 });
 test('failed tool probe does not enable or overwrite any connection', async t => {
   let writes = 0;
   t.mock.method(global, 'fetch', async (_url, options) => {
     if (options.method === 'GET') return { ok: true, json: async () => ({ personal: [], company: [] }) };
-    if (options.method === 'PUT') writes++;
+    if (_url.endsWith('/upsert') || options.method === 'PUT') writes++;
     return { ok: false, json: async () => ({ detail: 'credential-echo' }) };
   });
   await assert.rejects(feishu.register(identity(), runtime.scope(identity()), { port: 1234, bearer: 'fixture' }),

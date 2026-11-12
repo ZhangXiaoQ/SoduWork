@@ -117,7 +117,7 @@ app.whenReady().then(async()=>{
   const notices=await call('/e2e/observations');assert.ok(notices.events.some(row=>row.client==='e2e-sender'&&row.event.type==='notice'&&JSON.stringify(row.event).includes('确认交付标准')));
   report.checks.push('active execution removes definition editing and the HTTP API rejects changed criteria; real comment emits targeted mention notification');
   await call('/e2e/finish/'+encodeURIComponent(id),'POST');
-  await sender.js(`SoduWorkAPI.reviewTask(${JSON.stringify(id)},'完成标准与文件内容已核对')`);
+  report.reviewResult=await sender.js(`SoduWorkAPI.reviewTask(${JSON.stringify(id)},'完成标准与文件内容已核对')`);
   assert.equal((await sender.js(`SoduWorkAPI.getTask(${JSON.stringify(id)})`)).status,'done');
   await sender.js('RequirementsBoard.refresh()');
   await sender.click('[data-rq-scope="all"]');

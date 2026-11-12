@@ -42,6 +42,7 @@
     const next = {state,connected,added,disconnected,installed:value?.installed ?? previous.installed ?? false,
       checkedAt:String(value?.checkedAt ?? previous.checkedAt ?? '').slice(0,100),
       account:disconnected?'':String(value?.account ?? previous.account ?? '').slice(0,200),
+      registrationId:String(value?.registrationId ?? previous.registrationId ?? '').slice(0,36),
       message:String(value?.message || value?.reason || '').slice(0,500)};
     states.set(key,next);checked.set(key,stamp());
     if (JSON.stringify(previous) !== JSON.stringify(next)) notify(key, reason);
@@ -71,6 +72,7 @@
     const generation = epoch;
     const active = () => generation === epoch && (!ctx.isCurrent || ctx.isCurrent());
     return global.SoduWorkPlatformConnections.openProvider(key,{openModal:ctx.openModal,closeModal:ctx.closeModal},{
+      manageConflict:ctx.manageConflict && ((id,live) => ctx.manageConflict(id,() => active() && live())),
       onState(value) {
         if (!active() || value?.provider !== key) return;
         revisions.set(key,(revisions.get(key)||0)+1);
@@ -81,9 +83,12 @@
       },
     });
   }
+  function ownsRegistration(entry,row) {
+    return entry?.key === 'feishu' && (entry.registrationId ? row.id === entry.registrationId : String(row.id).startsWith('soduwork-feishu-'));
+  }
   function connectedCount(mcp) {
     return entries().filter(x => x.connected && !(x.key === 'feishu' &&
-      (mcp?.personal || []).some(r => r.enabled && String(r.id).startsWith('soduwork-feishu-')))).length;
+      (mcp?.personal || []).some(r => r.enabled && ownsRegistration(x,r)))).length;
   }
   // Update legacy rows independently; unified directory consumers subscribe directly to entries.
   function render(root, ctx) {
@@ -112,5 +117,5 @@
     });});
     void load();
   }
-  global.SoduWorkPlatformDirectory={entries,load,subscribe,open,render,reset,connectedCount};
+  global.SoduWorkPlatformDirectory={entries,load,subscribe,open,render,reset,connectedCount,ownsRegistration};
 })(window);

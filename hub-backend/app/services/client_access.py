@@ -318,6 +318,7 @@ async def monthly_tokens(session: AsyncSession, user_id: str, *, month_start=Non
     # Quotas protect admission, so another worker's committed usage must be
     # visible immediately. Process-local TTLs cannot provide that guarantee.
     daily = select(func.coalesce(func.sum(AIUsageDaily.total_tokens), 0)).where(
+        AIUsageDaily.quota_scope != "personal",
         AIUsageDaily.billing_user_id == key, AIUsageDaily.day_key >= month,
         AIUsageDaily.day_key < end_day).scalar_subquery()
     # Compatibility for events written by older integrations without daily rows.
@@ -351,7 +352,8 @@ async def quota_status(
         raise ClientAccessError("额度配置暂时不可用，请联系管理员检查套餐",
                                 code="TOKEN_QUOTA_UNAVAILABLE", status=503) from exc
     if assigned is not None:
-        return assigned
+        from .model_quota import describe
+        return describe(assigned)
     current_policy = current_policy if current_policy is not None else {
         **DEFAULT_POLICY, **_stored_json(rows.get(POLICY_KEY, ""))}
     override = user_quota(_stored_json(rows.get(keys[0], "")))
@@ -366,7 +368,7 @@ async def quota_status(
         else 0
     )
     exceeded = bool(enabled and used >= limit)
-    return {
+    result = {
         "enabled": enabled,
         "limit": limit,
         "used": used,
@@ -379,11 +381,16 @@ async def quota_status(
         "period": start.astimezone(_CHINA_TZ).strftime("%Y-%m"),
         "mode": override["mode"],
     }
+    from .model_quota import describe
+    return describe(result)
 
 
 async def assert_quota(session: AsyncSession, user_id: str, *, policy_rows=None,
-                       provider: str = "", model: str = "") -> dict:
+                        provider: str = "", model: str = "", personal: bool = False) -> dict:
     status = await quota_status(session, user_id, policy_rows=policy_rows, provider=provider, model=model)
+    from .model_quota import admission
+    platform_status = status
+    status = admission(status, personal=personal)
     if status["exceeded"]:
         messages = {
             "trial_expired": "试用已结束，联系管理员分配套餐后即可继续",
@@ -396,4 +403,4 @@ async def assert_quota(session: AsyncSession, user_id: str, *, policy_rows=None,
             status=403,
             meta={"quota": status},
         )
-    return status
+    return {**status, "platformQuota": platform_status} if personal else status

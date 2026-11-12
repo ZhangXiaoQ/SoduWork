@@ -178,9 +178,25 @@ function removeReservedSelection(app, created, owner, selection) {
   try {
     const file = location(app, created.header.id), stat = fs.lstatSync(file);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) return;
-    const expected = JSON.stringify({ version: 1, sessionId: created.header.id, owner,
-      cards: [], draftSelection: selection, draftSelectionRevision: 1 });
-    if (stat.size === Buffer.byteLength(expected) && fs.readFileSync(file, 'utf8') === expected) fs.unlinkSync(file);
+    const expected = Buffer.from(JSON.stringify({ version: 1, sessionId: created.header.id, owner,
+      cards: [], draftSelection: selection, draftSelectionRevision: 1 }));
+    // Filesystem filters may report a container size rather than decoded bytes.
+    // Read at most the exact expected payload plus one byte; never remove a
+    // later writer's record or allocate from an untrusted reported file size.
+    const fd = fs.openSync(file, 'r'), bytes = Buffer.alloc(expected.length + 1);
+    let read = 0;
+    try {
+      const opened = fs.fstatSync(fd);
+      if (opened.dev !== stat.dev || opened.ino !== stat.ino) return;
+      while (read < bytes.length) {
+        const count = fs.readSync(fd, bytes, read, bytes.length - read, read);
+        if (!count) break;
+        read += count;
+      }
+    } finally { fs.closeSync(fd); }
+    const current = fs.lstatSync(file);
+    if (read === expected.length && bytes.subarray(0, read).equals(expected) &&
+        current.dev === stat.dev && current.ino === stat.ino && !current.isSymbolicLink()) fs.unlinkSync(file);
   } catch (_) { /* Keep a later writer's card or selection record. */ }
 }
 

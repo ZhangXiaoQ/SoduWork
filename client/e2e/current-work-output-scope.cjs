@@ -28,6 +28,12 @@ if (typeof electron === 'string') {
   let win;
   const js = code => win.webContents.executeJavaScript(code, true);
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+  async function click(selector) {
+    const point = await js(`(()=>{const e=document.querySelector(${JSON.stringify(selector)}),r=e.getBoundingClientRect();
+      const x=Math.round(r.x+r.width/2),y=Math.round(r.y+r.height/2);if(!e.contains(document.elementFromPoint(x,y)))throw Error('Occluded control: '+${JSON.stringify(selector)});return{x,y}})()`);
+    for (const type of ['mouseDown', 'mouseUp']) win.webContents.sendInputEvent({ type, button: 'left', clickCount: 1, ...point });
+    await sleep(220);
+  }
   const until = async (fn, label) => {
     for (let count = 0; count < 80; count++) { if (await fn()) return; await sleep(30); }
     throw Error('Timed out: ' + label);
@@ -46,10 +52,10 @@ if (typeof electron === 'string') {
       '<link rel="stylesheet" href="' + url('theme/variables.css') + '">' +
       '<link rel="stylesheet" href="' + url('components/panels/panels-chat.css') + '">' +
       '<link rel="stylesheet" href="' + url('components/panels/code-workbench.css') + '">' +
-      '<style>body{margin:0;font:14px system-ui;color:#26262a}#chat{height:100vh}.nchat-stage{height:85vh;display:flex}.nchat-main{flex:1;min-width:0}.ncw{height:100%}</style>' +
+      '<style>body{margin:0;font:14px system-ui;color:#26262a}#chat{height:100vh}</style>' +
       '<div id="chat" class="nchat"></div>' + scripts.map(file => '<script src="' + url('components/panels/' + file + '.js') + '"></script>').join('') +
       '<script>window.fixtureRoot=document.querySelector("#chat");window.fixtureContext={ref:"first",intent:{cwd:' + JSON.stringify(cwd) + '}};' +
-      'fixtureRoot.innerHTML=ChatChrome.header()+"<div class=\\"nchat-stage\\"><section class=\\"nchat-main\\"></section></div>";' +
+      'fixtureRoot.innerHTML=\'<div class="nchat-stage"><section class="nchat-main">\'+ChatChrome.header()+\'<div class="nchat-content-area">Current conversation</div></section></div>\';' +
       'window.contextValue=()=>fixtureContext;ChatChrome.bind(fixtureRoot,contextValue);ChatWorkbench.bind(fixtureRoot,contextValue);</script>');
     win = new BrowserWindow({ show: false, width: 1280, height: 860,
       webPreferences: { preload: path.join(client, 'preload.js'), contextIsolation: true, nodeIntegration: false, offscreen: true } });
@@ -65,6 +71,21 @@ if (typeof electron === 'string') {
     assert.equal(await js('document.querySelector("[data-chat-summary-body] button").dataset.wbFile'), firstArtifact);
     await until(() => js('document.querySelector(".ncw-body")?.textContent.includes("first")'), 'own auto-preview');
     assert.equal(await js('document.querySelector(".ncw-body").textContent.includes("second")'), false);
+    await click('[data-wb-close]');
+    assert.equal(await js('document.querySelector(".nchat-summary").hidden'), true, 'clicking the preview controls dismisses the summary');
+    await click('[data-chat-summary]');
+    await click('[data-chat-summary-body] [data-wb-file]');
+    await until(() => js('document.querySelector(".ncw-body")?.textContent.includes("first")'), 'summary file click');
+    assert.equal(await js('document.querySelector(".nchat-summary").hidden'), true, 'opening a file dismisses the compact summary');
+    const previewBefore = await js('document.querySelector(".ncw").getBoundingClientRect().toJSON()');
+    await click('[data-chat-summary]');
+    assert.deepEqual(await js('document.querySelector(".ncw").getBoundingClientRect().toJSON()'), previewBefore, 'reopening summary never shrinks the preview');
+    assert.equal(await js(`(()=>{const preview=document.querySelector('.ncw').getBoundingClientRect(),panel=document.querySelector('.nchat-summary').getBoundingClientRect(),header=document.querySelector('.nchat-head').getBoundingClientRect();
+      return Math.abs(preview.right-innerWidth)<1&&Math.abs(panel.right-(header.right-8))<1;})()`), true, 'preview reaches the window edge and summary stays below chat controls');
+    fs.writeFileSync(path.join(out, 'summary-file-preview.png'), (await win.webContents.capturePage()).toPNG());
+    await click('[data-chat-summary-close]');
+    assert.equal(await js('Math.round(document.querySelector(".ncw").getBoundingClientRect().right)===innerWidth'), true);
+    report.cases.push('Native click opens the real file; preview fills the right edge and reopening the summary under chat controls never moves or shrinks either column.');
     report.cases.push('Shared-folder directory scan keeps both files; the current-work summary claims only the current reply result and no unrelated file auto-opens.');
     await js('ChatWorkbench.reset();ChatChrome.reset();fixtureContext.ref="second";' +
       'ChatChrome.bind(fixtureRoot,contextValue);ChatWorkbench.bind(fixtureRoot,contextValue);' +

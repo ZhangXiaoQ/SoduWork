@@ -42,17 +42,17 @@ def _bundle(installer: Path, *, platform: str, arch: str = "x64",
         "minVersion": "",
         "notes": "",
         "publishedAt": "2026-10-10T08:00:00Z",
-        "keyId": "fixture-release-key",
+        "keyId": "soduwork-client-release-2026b",
         "signature": "irrelevant",
     }
 
 
 class InstallerNameConventionTests(unittest.TestCase):
     def test_expected_names_cover_platforms(self):
-        # Only the primary SoduWork- prefix exists in the public line.
+        # Accept the primary SoduWork- prefix and the legacy SoduWork- transition prefix.
         self.assertEqual(contract._expected_installer_names("win32", "x64", "1.2.3"),
-                         {"SoduWork-1.2.3-Setup.exe"})
-        for prefix in ("SoduWork",):
+                         {"SoduWork-1.2.3-Setup.exe", "SoduWork-1.2.3-Setup.exe", "SoduWork-1.2.3-Setup.exe"})
+        for prefix in ("SoduWork", "SoduWork", "SoduWork"):
             self.assertIn(f"{prefix}-1.2.3-mac-arm64.dmg",
                           contract._expected_installer_names("darwin", "arm64", "1.2.3"))
             self.assertIn(f"{prefix}-1.2.3-mac.dmg",
@@ -63,7 +63,9 @@ class InstallerNameConventionTests(unittest.TestCase):
                           contract._expected_installer_names("linux", "x64", "1.2.3"))
         # arch segment must survive into every non-win name variant
         for name in contract._expected_installer_names("linux", "x64", "1.2.3"):
-            self.assertTrue(name.startswith("SoduWork-1.2.3-linux"))
+            self.assertTrue(name.startswith("SoduWork-1.2.3-linux")
+                            or name.startswith("SoduWork-1.2.3-linux")
+                            or name.startswith("SoduWork-1.2.3-linux"))
 
     def test_legacy_win32_contract_still_rejected_without_exe(self):
         with _trust_stub():

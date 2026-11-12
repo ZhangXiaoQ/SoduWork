@@ -40,10 +40,15 @@
     return global.SoduWorkLibraryFileIcons?.markup?.({ filename: file.name || file.relative || '', contentType: file.contentType }) ||
       '<span class="ndelivery-extension">' + esc((file.name || '').split('.').pop().toUpperCase().slice(0, 6)) + '</span>';
   }
-  function groupFiles(files, taskId) {
+  function outputRound(message, snapshot) {
+    const match = /^message:(\d+)$/.exec(message.dataset.chatNode || '');
+    const round = match && snapshot.messages?.[Number(match[1])]?.round;
+    return Number.isSafeInteger(round) && round > 0 ? round : 0;
+  }
+  function groupFiles(files, taskId, ownerRound = 0) {
     let candidates = (files || []).filter(f => (f.taskId || f.cloudTaskId || '') === (taskId || '') && !f.processEvidence && !f.pluginDraft && f.role !== 'evidence' && (taskId ? f.role === 'supporting' || f.primary !== false || f.remoteMaterialized : f.primary !== false));
     if (taskId) {
-      const round = Math.max(0, ...candidates.map(f => Number(f.round) || 0));
+      const round = ownerRound || Math.max(0, ...candidates.map(f => Number(f.round) || 0));
       candidates = candidates.filter(f => (Number(f.round) || 0) === round).sort((a, b) => String(a.at).localeCompare(String(b.at)));
     }
     /* Attachment filenames are not unique in a multi-file delivery (for
@@ -175,7 +180,9 @@
       const currentTurn = message.dataset.deliveryCurrent !== 'false';
       if (cloudTaskId && latestForTask && currentTurn && !snapshot.codeDelivery && !/^https?:\/\/(?:github\.com|gitlab\.com|bitbucket\.org)(?:\/|$)/i.test(artifactUrl)) appendArtifactUrl(message, artifactUrl);
       const captured = f => (snapshot.deliverySync?.artifactVersions || []).some(v => v.id === key(f) && String(v.at || 0) === String(f.at || 0) && Number(v.size || 0) === Number(f.size || 0));
-      const available = groupFiles(files, taskId).filter(f => !used.has(key(f)) && !alreadyDelivered(f) && (
+      const ownerRound = outputRound(message, snapshot);
+      const available = groupFiles(files, taskId, ownerRound).filter(f => !used.has(key(f)) && !alreadyDelivered(f) && (
+        (taskId && ownerRound > 0 && Number(f.round) === ownerRound) ||
         mentioned.has(key(f)) ||
         ((currentTurn && snapshot.deliverySync?.currentTurn !== false && (f.changedInTurn || captured(f)) && f.primary !== false && message === messages[0])) ||
         (cloudTaskId && currentTurn && latestForTask && ['output', 'supporting'].includes(f.role || 'output'))));
@@ -186,7 +193,11 @@
       const matchesReceipt = (message === messages[0] || snapshot.deliverySync?.currentTurn === false) && available.every(captured);
       const id = jobKey(ref, available) + (matchesReceipt && snapshot.deliverySync?.revision ? ':' + snapshot.deliverySync.revision : '');
       const old = groups.get(id);
-      const group = { id, ref, files: available, scope: scope(), taskId, snapshot, remote: Boolean(cloudTaskId), current: message === messages[0], ...(old?.delivery ? { delivery: old.delivery } : {}) };
+      const rounds = [...new Set(available.map(file => Number(file.round) || 0))];
+      const executionRefs = [...new Set(available.map(file => file.sourceRef || ''))];
+      const selection = old?.selection || { round: rounds.length === 1 ? rounds[0] : 0,
+        executionRef: executionRefs.length === 1 ? executionRefs[0] : '' };
+      const group = { id, ref, files: available, selection, scope: scope(), taskId, snapshot, remote: Boolean(cloudTaskId), current: message === messages[0], ...(old?.delivery ? { delivery: old.delivery } : {}) };
       groups.set(id, group);
       available.sort((a, b) => Number(b.primary !== false && b.role !== 'supporting') - Number(a.primary !== false && a.role !== 'supporting'));
       const first = available[0], count = available.length, amount = totalSize(available);
@@ -230,8 +241,14 @@
     if (status) status.textContent = job?.localError
       ? job.localError + (job.localUnavailable && result ? ' · ' + text.openSaved : '')
       : job?.error ? (text.title + ' · ' + text.retry + ' · ') + job.error
-      : result ? (group.remote ? text.savedCrossDevice : text.localSaved)
+      : result ? (result.storage === 'local' || !group.remote ? text.localSaved : text.savedCrossDevice)
       : job?.busy ? (group.remote ? text.collecting : text.preparing) : (group.remote ? text.collecting : text.localFiles);
+    if (status && job?.error && !job.localError) {
+      // Keep complete UI phrases in separate nodes so locale changes can
+      // translate and restore them without rewriting user-supplied details.
+      status.replaceChildren(...[text.title, ' · ', text.retry, ' · ', job.error]
+        .map(value => document.createTextNode(value)));
+    }
     const retry = card.querySelector('[data-delivery-retry]');
     const open = card.querySelector('[data-delivery-open]');
     card.classList.toggle('has-error', Boolean(job?.localError || job?.error));
@@ -246,7 +263,7 @@
       retry.title = tx(result ? '已保存到资料库，点击查看' : label); retry.setAttribute('aria-label', retry.title);
       retry.setAttribute('aria-busy', String(Boolean(job?.busy)));
     }
-    const rows = result?.files || job?.manifest?.files;
+    const rows = result?.files || job?.manifest?.files || group.package?.files;
     const count = rows?.length || group.files.length;
     const archive = card.querySelector('.ndelivery-actions [data-delivery-archive]');
     if (archive) archive.hidden = count < 2 && !/\.zip$/i.test(group.files[0]?.name || '');
@@ -258,7 +275,7 @@
       ? String(primary[0].title || '').trim() : '';
     // CSS/JS dependencies enlarge the package, not the number of website results.
     if (title && count > 1) {
-      title.textContent = (websiteTitle || result?.title || job?.manifest?.title || '成果包').replace(/\.zip$/i, '') + '.zip';
+      title.textContent = (websiteTitle || result?.title || job?.manifest?.title || group.package?.title || '成果包').replace(/\.zip$/i, '') + '.zip';
       title.parentElement?.removeAttribute('data-open-app');
       title.parentElement?.setAttribute('data-delivery-archive', '');
       title.parentElement?.setAttribute('title', '打开压缩包');
@@ -297,7 +314,7 @@
     job = Object.assign(job || {}, { busy: true, error: '', manual: true }); jobs.set(group.id, job); repaint(group);
     try {
       let result;
-      if (group.taskId) result = await global.SoduWorkAPI.syncTaskDelivery(group.taskId);
+      if (group.taskId) result = await global.SoduWorkAPI.saveTaskLibraryDelivery(group.taskId, { ...group.selection });
       else {
         const payload = await api.prepareDelivery(group.ref, group.files.map(key));
         if (!payload?.ok) throw Error(payload?.reason || '\u6210\u679c\u6587\u4ef6\u5c1a\u672a\u51c6\u5907\u597d');
@@ -309,18 +326,27 @@
       if (group.scope !== scope()) return;
       if (!result?.ok || !result.delivery?.id) throw Error(result?.error || result?.reason || '\u6210\u679c\u96c6\u540c\u6b65\u5931\u8d25');
       job.delivery = group.delivery = result.delivery;
+      if (group.taskId && result.manifest?.id && result.manifest.revision) {
+        const current = groups.get(group.id);
+        if (current?.scope === group.scope) current.selection = { ...group.selection,
+          deliveryId: result.manifest.id, revision: result.manifest.revision };
+      }
       announceLibraryChange({ itemId: result.delivery.id });
     } catch (error) {
       job.error = /Failed to fetch|NetworkError|fetch failed/i.test(error.message || '') ? '\u7f51\u7edc\u6682\u65f6\u4e0d\u53ef\u7528' : error.message || '\u6210\u679c\u96c6\u540c\u6b65\u5931\u8d25';
     } finally { job.busy = false; repaint(group); }
   }
   function hydrateRemoteStatus(group) {
-    if (!group.taskId || group.statusRequested || group.delivery || typeof global.SoduWorkAPI?.getTaskDelivery !== 'function') return;
+    if (!group.taskId || group.statusRequested || group.delivery || typeof global.SoduWorkAPI?.getTaskLibraryDeliveryStatus !== 'function') return;
     group.statusRequested = true;
-    Promise.resolve(global.SoduWorkAPI.getTaskDelivery(group.taskId)).then(result => {
-      if (group.scope !== scope() || !result?.delivery) return;
-      group.delivery = result.delivery;
-      announceLibraryChange({ itemId: result.delivery.id });
+    Promise.resolve(global.SoduWorkAPI.getTaskLibraryDeliveryStatus(group.taskId, { ...group.selection })).then(result => {
+      if (group.scope !== scope() || groups.get(group.id) !== group || jobs.get(group.id)?.manual) return;
+      if (result?.delivery) group.delivery = result.delivery;
+      // Server package revisions must never guard a materialized local ZIP.
+      if (result?.manifest) {
+        group.package = result.manifest;
+        group.selection = { ...group.selection, deliveryId: result.manifest.id, revision: result.manifest.revision };
+      }
       repaint(group);
     }).catch(() => { /* A legacy task may not have a delivery yet; the normal sync path handles it. */ });
   }
@@ -540,5 +566,9 @@
   }
   global.addEventListener?.('soduwork-data-scope-changed', () => { groups.clear(); jobs.clear(); localJobs.clear(); completed.clear(); });
   function settled(ref) { completed.add(ref); if (completed.size > 120) completed.delete(completed.values().next().value); }
-  global.ChatDeliveries = { decorate, hydrate, handle, settled, isSettled, localContinuation, continueLocal, _groupFiles: groupFiles, _artifactUrlFor: artifactUrlFor };
+  function deliverySelection(card) {
+    const group = groups.get(card?.dataset?.delivery);
+    return group && group.scope === scope() ? { ...group.selection } : null;
+  }
+  global.ChatDeliveries = { decorate, hydrate, handle, settled, isSettled, outputRound, deliverySelection, localContinuation, continueLocal, _groupFiles: groupFiles, _artifactUrlFor: artifactUrlFor };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -13,7 +13,7 @@ PG_NAME="${SODUWORK_PG_CONTAINER:-soduwork-pg-1}"
 HEALTH_URL="${SODUWORK_HEALTH_URL:-}"
 EXPECTED_ACTION="${SODUWORK_DEPLOY_ACTION:-production}"
 STATE_ROOT="${SODUWORK_DEPLOY_STATE_ROOT:-/deployer-state/soduwork}"
-DOCKERFILE="${SODUWORK_DOCKERFILE:-ops/self-host/Dockerfile.server}"
+DOCKERFILE="${SODUWORK_DOCKERFILE:-Dockerfile.server}"
 IMAGE="soduwork-hub:deploy-${COMMIT}"
 
 [ "${ACTION}" = "${EXPECTED_ACTION}" ] || {

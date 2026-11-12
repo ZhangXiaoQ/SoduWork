@@ -28,7 +28,9 @@ def clean_protocol_caps(value) -> list[str]:
         return []
     # executionSelection1 exceeds the old 16-character display-style limit.
     # Drop malformed/oversized identifiers instead of creating truncated aliases.
-    return list(dict.fromkeys(item for item in value[:8]
+    # Desktop hello already advertises nine capabilities, including admit1.
+    # Leave bounded room for protocol growth without dropping admission support.
+    return list(dict.fromkeys(item for item in value[:32]
                               if isinstance(item, str) and 0 < len(item) <= 64))
 
 
@@ -238,11 +240,14 @@ class _Runner:
     async def send(self, msg: dict) -> None:
         from .cluster_runtime import check_owner
         from .runner_access_policy import authorize_send
-        async with self._send_lock:
-            await check_owner(self)
-            # A half-open socket must fail fast.  Without a send timeout the caller can
-            # wait forever before the RPC reply timeout has even started.
-            async with authorize_send(self, str(msg.get("op") or "")):
+        # Content operations may already own the policy transaction. Always
+        # acquire policy before the socket lock: another request waiting for
+        # that transaction must not block its owner's content RPCs.
+        async with authorize_send(self, str(msg.get("op") or "")):
+            async with self._send_lock:
+                await check_owner(self)
+                # A half-open socket must fail fast. Without a send timeout the caller can
+                # wait forever before the RPC reply timeout has even started.
                 await asyncio.wait_for(self.ws.send_json(msg), timeout=15)
 
     async def call(self, op: str, data: dict, timeout: float = _RPC_TIMEOUT) -> dict:

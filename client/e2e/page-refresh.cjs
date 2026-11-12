@@ -33,13 +33,19 @@ if (typeof electron === 'string') {
       if (path.basename(fileURLToPath(request.url.split('?')[0])) !== 'desk.html') return net.fetch(request.url, { bypassCustomProtocolHandlers: true });
       const mock = fs.readFileSync(path.join(__dirname, 'fixtures/page-audit-api.js'), 'utf8');
       const html = fs.readFileSync(path.join(client, 'desk.html'), 'utf8')
-        .replace('<head>', '<head><script>' + mock + '\nsoduWorkAPI.workPreview.onComposerRefresh=()=>()=>{};soduWorkAPI.distributionInfo=()=>({hubOrigin:"http://127.0.0.1:19999"});soduWorkAPI.readAloud={onStop:()=>()=>{}};</script>')
+        .replace('<head>', '<head><script>' + mock + '\nsoduWorkAPI.workPreview.onComposerRefresh=()=>()=>{};soduWorkAPI.workPreview.hide=async()=>({ok:true});soduWorkAPI.distributionInfo=()=>({hubOrigin:"http://127.0.0.1:19999"});soduWorkAPI.readAloud={onStop:()=>()=>{}};</script>')
         .replace('<script src="desk-boot.js"></script>', '<script>fixtureInstallApi();</script><script src="desk-boot.js"></script>');
       return new Response(html, { headers: { 'content-type': 'text/html;charset=utf-8' } });
     });
     win = new BrowserWindow({ show: false, width: 1440, height: 1000, webPreferences: { contextIsolation: true, nodeIntegration: false, offscreen: true, backgroundThrottling: false } });
     await win.loadFile(path.join(client, 'desk.html'), { query: { panel: 'workspace', view: 'settings' } });
     await until('Boolean(window.fixtureReady)');
+    await js('WorkspaceHost.open("create",{newSession:true});openCapabilityPanel();void 0;');
+    await check('external plugin setup uses the workspace route without mixing conversation panels',
+      'document.documentElement.dataset.workspaceView === "skills" && document.querySelector("#capPanel").classList.contains("show") && !document.querySelector("#composePanel")?.classList.contains("show")');
+    await js('document.querySelector("[data-view=create]").click();void 0;');
+    await check('conversation navigation works after external plugin setup',
+      'document.documentElement.dataset.workspaceView === "create" && !document.querySelector("#capPanel").classList.contains("show")');
     await js(`window.refreshRows={items:[{pluginId:'local:refresh-one',personal:true,enabled:true,name:'Refresh fixture',description:'Synthetic application',ui:{contributions:[{id:'main',slot:'workspace.navigation'}]}}]};
       fixtureOverrides.pluginCatalog=async()=>structuredClone(refreshRows); WorkspaceHost.open('apps',{});void 0;`);
     await until('Boolean(document.querySelector(".appsx-card"))');
@@ -63,16 +69,19 @@ if (typeof electron === 'string') {
 
     await js('fixtureOverrides.pluginCatalog=async()=>({items:[]});WorkspaceHost.open("skills",{});void 0;');
     await until('Boolean(document.getElementById("capContent"))'); await wait(80);
+    // The controlled capabilityCatalog request belongs to the Skills tab.
+    await js('document.querySelector("[data-cap-tab=skills]").click();void 0;');
     await js(`window.capShell=document.querySelector('.cap-shell');window.pendingCap=[];
       fixtureOverrides.capabilityCatalog=()=>new Promise((resolve,reject)=>pendingCap.push({resolve,reject}));
       window.capFirst=openCapabilityPanel();window.capSecond=openCapabilityPanel();void 0;`);
     await until('pendingCap.length>0');
+    report.capabilityReopen = await js('({requests:pendingCap.length,connected:capShell.isConnected,view:document.documentElement.dataset.workspaceView})');
     await check('capability reopen coalesces reads and keeps content', 'pendingCap.length===1 && capShell.isConnected');
     await js('pendingCap.shift().resolve({skills:[],mcpTemplates:[],summary:{}});Promise.all([capFirst,capSecond])');
     await check('unchanged capability data keeps toolbar and focus container', 'capShell === document.querySelector(".cap-shell")');
     await js('window.capFirst=openCapabilityPanel();void 0;'); await until('pendingCap.length>0');
     await js('pendingCap.shift().reject(Error("offline"));capFirst');
-    await check('capability refresh failure preserves content with retry', 'capShell.isConnected && !!document.querySelector("#capRefreshNotice button")');
+    await check('capability refresh failure preserves content with retry', 'capShell.isConnected && !!document.querySelector("[data-cap-load-error] button")');
 
     await js(`window.libraryRows={items:[{id:'file-one',title:'Fixture document',kind:'document',storage:'local',filename:'fixture.md',updatedAt:1720000000000}],folders:[]};
       libraryRows.items.push(...Array.from({length:40},(_,i)=>({...libraryRows.items[0],id:'scroll-'+i,title:'Scroll fixture '+i})));
@@ -133,5 +142,8 @@ if (typeof electron === 'string') {
     fs.writeFileSync(path.join(output, 'report.json'), JSON.stringify(report, null, 2)); console.log(JSON.stringify(report));
     win?.destroy(); app.quit();
   });
-  app.on('will-quit', () => { try { fs.rmSync(profile, { recursive: true, force: true }); } catch {} });
+  app.on('will-quit', () => {
+    try { fs.rmSync(profile, { recursive: true, force: true }); } catch {}
+    app.exit(report.ok ? 0 : 1);
+  });
 }

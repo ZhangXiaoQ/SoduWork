@@ -74,6 +74,19 @@ test('missing local file dialogs provide recovery guidance in every supported lo
   }
 });
 
+test('delivery version and integrity failures have copy in every supported locale', () => {
+  const messages = ['成果已变化，请重新打开后保存', '成果正在收集，请稍后重试',
+    '成果读取不完整，请重试', '成果已变化，请重新打开会话'];
+  for (const locale of ['en-US', 'ja-JP', 'ko-KR', 'zh-CN']) {
+    const api = loadI18n(locale);
+    for (const message of messages) {
+      if (locale === 'zh-CN') assert.equal(api.translateText(message), message);
+      else assert.notEqual(api.translateText(message), message, `${locale}: ${message}`);
+    }
+    assert.equal(api.translateText('用户原文：成果已变化，请重新打开会话'), '用户原文：成果已变化，请重新打开会话');
+  }
+});
+
 test('remote storage percentage and connected tooltip follow the selected locale', () => {
   const expected = {
     'zh-CN': '远程存储已连接 · 剩余 75%',

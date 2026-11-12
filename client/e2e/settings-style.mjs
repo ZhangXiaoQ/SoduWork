@@ -57,7 +57,7 @@ const html='<!doctype html><html lang="zh-CN" data-desk-panel="workspace" data-w
  '<body><aside class="test-nav"><b>SoduWork</b><p>自动化</p><p>设置</p></aside>'+
  panel.replace('class="panel"','class="panel show"').replace('<div class="set-group">','<div class="set-group soduwork-account-settings">'+account+'</div><div class="set-group">')+
  '<script>'+mock+'</script><script src="/client/components/settings/settings.js"></script>'+
- '<script>openSettings();document.querySelector(".soduwork-account-name").textContent="示例";document.querySelector(".soduwork-account-id").textContent="demo.user";document.querySelector(".soduwork-account-avatar").textContent="示";document.querySelector(".soduwork-account-quota").textContent="未启用额度限制";</script></body></html>';
+ '<script>openSettings();document.querySelector(".soduwork-account-name").textContent="林舟";document.querySelector(".soduwork-account-id").textContent="lin.zhou";document.querySelector(".soduwork-account-avatar").textContent="林";document.querySelector(".soduwork-account-quota").textContent="未启用额度限制";</script></body></html>';
 const server=http.createServer((req,res)=>{
  if(req.url==='/'){res.setHeader('Content-Type','text/html;charset=utf-8');res.end(html);return;}
  const requested=decodeURIComponent(new URL(req.url,'http://localhost').pathname);

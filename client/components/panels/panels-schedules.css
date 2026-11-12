@@ -366,6 +366,26 @@
 .sch-clock em{font-style:normal;font-weight:700;color:var(--ink-3)}
 .sch-when-pv{margin-left:auto;font-size:max(var(--font-min-readable, 14.5px), 12px);font-weight:600;color:var(--accent);
   background:var(--accent-soft);border-radius:20px;padding:4px 12px;white-space:nowrap}
+.sch-timing-range,.sch-timing-choice{display:flex;flex-direction:column;gap:7px;margin-top:9px;padding:10px 12px;
+  border:1px solid var(--line-2,var(--line));border-radius:var(--r-md,10px);background:color-mix(in srgb,var(--bg-1,#fafafa) 72%,var(--bg-0,#fff))}
+.sch-timing-range[hidden],.sch-timing-choice[hidden]{display:none}
+.sch-date-pair{display:flex;align-items:center;gap:8px;max-width:440px}
+.sch-date-pair .sch-in{min-width:0;flex:1 1 0}
+.sch-date-pair i{font-style:normal;color:var(--ink-4);flex:0 0 auto}
+.sch-timing-range small{color:var(--ink-4);font-size:max(var(--font-min-readable, 14.5px), 11px);line-height:1.45}
+.sch-choice-grid{display:grid;gap:7px}
+.sch-week-grid{grid-template-columns:repeat(7,minmax(0,1fr))}
+.sch-month-grid{grid-template-columns:repeat(7,minmax(0,1fr))}
+.sch-choice{position:relative;min-width:0;cursor:pointer}
+.sch-choice input{position:absolute;opacity:0;pointer-events:none}
+.sch-choice span{display:grid;place-items:center;min-height:36px;padding:5px 4px;border:1px solid var(--line);
+  border-radius:9px;background:var(--bg-0,#fff);color:var(--ink-2);font-size:max(var(--font-min-readable, 14.5px), 12px);
+  font-variant-numeric:tabular-nums;transition:border-color .14s ease,background-color .14s ease,color .14s ease,box-shadow .14s ease}
+.sch-choice:hover span{border-color:color-mix(in srgb,var(--accent) 48%,var(--line))}
+.sch-choice input:checked + span{border-color:var(--accent);background:var(--accent);color:var(--accent-contrast,#fff);box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 16%,transparent)}
+.sch-choice input:focus-visible + span{outline:2px solid color-mix(in srgb,var(--accent) 70%,transparent);outline-offset:2px}
+.sch-month-policy{margin-top:2px}
+.sch-timing-choice .sch-f-lbl{margin-bottom:0}
 .sch-chk-row{display:flex;flex-direction:column;gap:8px;margin-top:4px}
 .sch-chk em{font-style:normal;font-size:max(var(--font-min-readable, 14.5px), 11px);color:var(--ink-4);margin-left:6px}
 .sch-in{width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--line);
@@ -393,12 +413,22 @@ select.sch-in option{background:var(--bg-0,#fff);color:var(--ink)}
 .sch-when-row>select.sch-w-wd{min-width:0}
 .sch-clock .sch-in{min-height:40px;width:80px;padding:8px 28px 8px 10px;font-variant-numeric:tabular-nums}
 .sch-clock [hidden]{display:none}
+.sch-clock select.fwd-select-native{display:none!important}
+.sch-clock .fwd-select{width:80px;min-width:0;flex:none}
+.sch-clock .fwd-select-trigger{min-height:40px;height:40px;border-radius:var(--r-md,10px);font:inherit;font-variant-numeric:tabular-nums}
+.sch-custom-rule{display:flex;flex-direction:column;gap:6px;margin-top:12px;min-width:0}
+.sch-custom-rule[hidden]{display:none}
+.sch-custom-rule textarea{min-height:104px;max-height:260px;resize:vertical;font-family:var(--font-mono,monospace);line-height:1.65;overflow-wrap:anywhere}
+.sch-custom-rule small{color:var(--ink-3);font-size:var(--font-min-readable,14.5px);line-height:1.5}
+.sch-when-pv{max-width:100%;white-space:normal;overflow-wrap:anywhere}
 .sch-clock small{color:var(--ink-3);font-size:var(--font-min-readable,14.5px);font-weight:400;margin-left:4px}
 .sch-retry-row .sch-in{min-height:34px}
 @media(max-width:480px){
   .sch-when-row>select.sch-in{flex:1 1 100px;max-width:none}
   .sch-clock{flex:1 1 160px}
   .sch-when-pv{margin-left:0;width:100%;box-sizing:border-box}
+  .sch-week-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .sch-date-pair{max-width:none}
 }
 @media(prefers-reduced-motion:reduce){select.sch-in{transition:none}}
 @media(forced-colors:active){

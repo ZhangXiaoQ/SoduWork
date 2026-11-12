@@ -88,18 +88,26 @@ function row(record) {
     usedHarnesses: harnesses.fromRecord(record),
     path: record.active.path, at: record.at, runtimeConversationId: record.id, state: 'idle' };
 }
+function rowHistoryIds(value) {
+  return [...new Set([value?.id,
+    ...(Array.isArray(value?.historyAliasIds) ? value.historyAliasIds : []),
+    ...(Array.isArray(value?.aliasIds) ? value.aliasIds : [])]
+    .filter(Boolean).map(String))];
+}
 function mergeHistory(app, rows) {
   for (const record of list(app)) {
     const ids = new Set(record.segments.map(s => s.sessionId).concat(record.active.sessionId, record.id));
-    const matches = rows.filter(r => ids.has(r.id));
+    const matches = rows.filter(r => rowHistoryIds(r).some(id => ids.has(id)));
     if (!matches.length) continue;
-    const current = matches.find(r => r.id === record.active.sessionId) || {};
+    const current = matches.find(r => rowHistoryIds(r).includes(String(record.active.sessionId))) || matches[0] || {};
     const remote = matches.find(r => r.id === record.id && r.cloud);
-    rows = rows.filter(r => !ids.has(r.id));
+    rows = rows.filter(r => !rowHistoryIds(r).some(id => ids.has(id)));
     const merged = remote || { ...row(record), ...current, id: record.id, title: title(record) || require('./automatic-title').resolve(current.title, record.prefix),
       adapterId: record.active.adapterId, runtimeConversationId: record.id };
-    rows.push({ ...merged, usedHarnesses: harnesses.merge(harnesses.fromRecord(record),
-      ...matches.map(match => match.usedHarnesses)) });
+    const aliases = [...new Set([...ids, ...matches.flatMap(rowHistoryIds)])].filter(id => id !== record.id);
+    rows.push({ ...merged, historyAliasIds: [...new Set([...(merged.historyAliasIds || []), ...aliases])],
+      usedHarnesses: harnesses.merge(harnesses.fromRecord(record),
+        ...matches.map(match => match.usedHarnesses)) });
   }
   return rows;
 }
@@ -120,4 +128,4 @@ function brief(snapshot) {
     'Verify current files when needed; this bounded transcript may omit older details.\n' +
     lines.join('\n\n').slice(-28000) + '\nRecent operations:\n' + tools.join('\n').slice(-6000) + '\n[End handover]';
 }
-module.exports = { read, save, flush, assertOwner, list, row, title, mergeHistory, remove, brief, scope };
+module.exports = { read, save, flush, assertOwner, list, row, title, mergeHistory, remove, brief, scope, rowHistoryIds };

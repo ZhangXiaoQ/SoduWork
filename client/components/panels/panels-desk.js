@@ -223,11 +223,13 @@ function _sinceTxt(at) {
 let _noticeFolder = 'received';
 let _noticeLoad = { received: {}, sent: {} };
 let _noticeScope = '';
+let _noticeLimits = { received: 100, sent: 100 };
 function _syncNoticeScope() {
   const scope = globalThis.SoduWorkAPI?.taskStorageKey?.('notices') || '';
   if (scope !== _noticeScope) {
     _noticeScope = scope;
     _noticeLoad = { received: {}, sent: {} };
+    _noticeLimits = { received: 100, sent: 100 };
     _noticeExpanded.clear();
     _noticeVisibleRows.clear();
   }
@@ -261,9 +263,9 @@ async function _loadMateNoticeFolder(folder) {
     const result = await MateNoticeSync.refresh(target);
     if (_syncNoticeScope() !== scope || _noticeLoad[target] !== load) return;
     if (!result || result.ok === false) throw Error('通知暂时无法加载，请重试');
-  } catch (_) {
+  } catch (error) {
     if (_syncNoticeScope() !== scope || _noticeLoad[target] !== load) return;
-    load.error = '通知暂时无法加载，请重试';
+    load.error = error?.message || '通知暂时无法加载，请重试';
   } finally { load.pending = false; }
   if (_noticeFolder === target) _renderNoticePanel();
 }
@@ -283,6 +285,15 @@ function _readReceivedNotice(serverId, scope) {
   });
 }
 
+async function _readLocalNotice(read) {
+  const scope = _syncNoticeScope();
+  try {
+    if (typeof markNoticeRead === 'function') await read();
+  } catch (error) {
+    if (_syncNoticeScope() === scope) _noticeLoad.received.error = error?.message || '通知暂时无法加载，请重试';
+  } finally { if (_syncNoticeScope() === scope) _renderNoticePanel(); }
+}
+
 function openNoticePanel() {
   let p = document.getElementById('noticePanel');
   if (!p) {
@@ -299,8 +310,11 @@ function openNoticePanel() {
       const tab = event.target.closest('[data-notice-folder]'); if (!tab) return;
       void _loadMateNoticeFolder(tab.getAttribute('data-notice-folder'));
     });
-    document.getElementById('npClear').addEventListener('click', () => {
-      if (typeof clearNotices === 'function') clearNotices();
+    document.getElementById('npClear').addEventListener('click', async () => {
+      const scope = _syncNoticeScope();
+      try { if (typeof clearNotices === 'function') await clearNotices(); }
+      catch (error) { if (_syncNoticeScope() === scope) _noticeLoad.received.error = error?.message || '通知暂时无法加载，请重试'; }
+      if (_syncNoticeScope() !== scope) return;
       _renderNoticePanel();
     });
     document.getElementById('npBody').addEventListener('keydown', e => {
@@ -308,6 +322,13 @@ function openNoticePanel() {
       e.preventDefault(); e.target.click();
     });
     document.getElementById('npBody').addEventListener('click', (e) => {
+      if (e.target.closest('[data-notice-more]')) {
+        _noticeLimits[_noticeFolder] += 100;
+        const top = document.getElementById('npBody').scrollTop;
+        _renderNoticePanel(); document.getElementById('npBody').scrollTop = top;
+        document.querySelector('[data-notice-more]')?.focus({ preventScroll: true });
+        return;
+      }
       if (e.target.closest('[data-notice-retry]')) { void _loadMateNoticeFolder(_noticeFolder); return; }
       const followUp = e.target.closest('[data-notice-follow-up]');
       if (followUp) {
@@ -339,8 +360,7 @@ function openNoticePanel() {
           const serverId = String(message.serverMessageId || '');
           if (sourceFolder === 'received') {
             if (serverId) return _readReceivedNotice(serverId, sourceScope);
-            if (typeof markNoticeRead === 'function') markNoticeRead(key);
-            _renderNoticePanel();
+            return _readLocalNotice(() => markNoticeRead(key));
           }
         }).finally(() => {
           if (followUp.isConnected) { followUp.disabled = false; followUp.removeAttribute('aria-busy'); }
@@ -372,10 +392,29 @@ function openNoticePanel() {
       if (file) { e.preventDefault(); e.stopPropagation(); void _downloadNoticeFile(file); return; }
       const row = e.target.closest('.np-row');
       if (!row) return;
+      const notice = _noticeVisibleRows.get(row.getAttribute('data-nnotice'));
+      if (notice?.kind === 'legal_update') {
+        const noticeScope = _syncNoticeScope();
+        Promise.resolve().then(() => {
+          if (_syncNoticeScope() !== noticeScope) return false;
+          if (!globalThis.LegalUpdates?.openNotice) throw Error('协议内容暂未加载，请稍后重试。');
+          return globalThis.LegalUpdates.openNotice(notice);
+        }).then(opened => {
+          if (opened && _syncNoticeScope() === noticeScope) {
+            _noticeLoad.received.error = '';
+            return _readLocalNotice(() => markNoticeRead(notice.id));
+          }
+        }).catch(error => {
+          if (_syncNoticeScope() !== noticeScope) return;
+          _noticeLoad.received.error = error?.message || '协议内容暂未加载，请稍后重试。';
+          _renderNoticePanel();
+        });
+        return;
+      }
       const serverId = row.getAttribute('data-server-message');
       if (serverId && _noticeFolder === 'received') {
         void _readReceivedNotice(serverId, _syncNoticeScope());
-      } else if (_noticeFolder === 'received' && typeof markNoticeRead === 'function') markNoticeRead(row.getAttribute('data-nnotice'));
+      } else if (_noticeFolder === 'received') void _readLocalNotice(() => markNoticeRead(row.getAttribute('data-nnotice')));
       _renderNoticePanel();
       const tid = row.getAttribute('data-ntask');
       if (tid && typeof openDetailEntry === 'function') openDetailEntry(tid);
@@ -384,6 +423,7 @@ function openNoticePanel() {
   }
   _renderNoticePanel();
   void _loadMateNoticeFolder(_noticeFolder);
+  void globalThis.LegalUpdates?.refresh();
   p.classList.add('show');
   if (typeof placeDockPopup === 'function') placeDockPopup(p);
   if (typeof expandForOverlay === 'function') expandForOverlay();
@@ -396,6 +436,7 @@ function closeNoticePanel() {
   }
 }
 function _noticePresentation(n) {
+  const legal = n.kind === 'legal_update';
   const mate = n.kind === 'mate_message' || n.kind === 'task_assignment';
   const descriptor = n.textMessage;
   const fallback = String(n.bodyText ?? n.text ?? '');
@@ -403,11 +444,11 @@ function _noticePresentation(n) {
     ? (globalThis.SoduWorkI18n?.t?.(String(descriptor.key || ''),
         String(descriptor.fallback || fallback), descriptor.params || {}) || fallback)
     : fallback;
-  let text = String(translated).replace(/^[\s\u23f0\u21bb\u2705\ud83d\udce5]+/u, '').trim();
+  let text = String(legal && globalThis.LegalUpdates ? LegalUpdates.noticeText(n.legalUpdate) : translated).replace(/^[\s\u23f0\u21bb\u2705\ud83d\udce5]+/u, '').trim();
   if (mate && n.bodyText == null && n.senderName && text.startsWith(n.senderName + '：')) text = text.slice(n.senderName.length + 1).trim();
   const report = !mate && text.match(/^(日报已生成|周报已生成)[：:]\s*([\s\S]*)$/);
   const labels = { task: '任务动态', remind: '提醒', recur: '循环任务', system: '系统通知', notice: '工作通知', mate_receipt: '消息回执' };
-  let title = esc(report ? report[1] : labels[n.kind] || '工作通知');
+  let title = esc(legal ? (globalThis.SoduWorkI18n?.translateText?.('系统消息') || '系统消息') : report ? report[1] : labels[n.kind] || '工作通知');
   if (n.kind === 'mate_receipt') {
     const status = { accepted: '已发送', delivered: '已送达', read: '已读' }[n.receiptStatus] || '消息回执';
     title = esc(status + ' · ' + (n.recipientName || n.senderName || '对方'));
@@ -416,7 +457,7 @@ function _noticePresentation(n) {
     const person = _noticeFolder === 'sent' ? n.recipientName : n.senderName;
     title = person ? '<span>' + (_noticeFolder === 'sent' ? '发送给' : '来自') + '</span> <span data-user-content>' + esc(person) + '</span>' : '同事消息';
   }
-  const icon = mate ? '<svg class="np-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5a8 8 0 0 1-8 8H4l1.6-4A8 8 0 1 1 20 11.5Z"/><path d="M8 10h8M8 14h5"/></svg>' : report ? '<svg class="np-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="3" width="14" height="18" rx="3"/><path d="M9 7h6M9 11h6M9 15h3"/></svg>' : _nkIcon(n.kind);
+  const icon = mate ? '<svg class="np-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5a8 8 0 0 1-8 8H4l1.6-4A8 8 0 1 1 20 11.5Z"/><path d="M8 10h8M8 14h5"/></svg>' : report ? '<svg class="np-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="3" width="14" height="18" rx="3"/><path d="M9 7h6M9 11h6M9 15h3"/></svg>' : _nkIcon(legal ? 'system' : n.kind);
   return { text: report ? report[2] : text, title, icon, mate, report: !!report };
 }
 
@@ -456,8 +497,8 @@ function _renderNoticePanel() {
   const today = dayKey(Date.now()), yesterday = dayKey(Date.now() - 86400000);
   const dayLabel = k => k === today ? '今天' : k === yesterday ? '昨天' : (parseInt(k.slice(5, 7), 10) + '月' + parseInt(k.slice(8), 10) + '日');
   const groups = new Map();
-  list.forEach((n, index) => { const key = dayKey(n.at); if (!groups.has(key)) groups.set(key, []); groups.get(key).push({ n, index }); });
-  let h = status + '<div class="np-stream">';
+  list.slice(0, _noticeLimits[_noticeFolder]).forEach((n, index) => { const key = dayKey(n.at); if (!groups.has(key)) groups.set(key, []); groups.get(key).push({ n, index }); });
+  let h = (loading.error ? status : '') + '<div class="np-stream">';
   groups.forEach((entries, day) => {
     h += '<section class="np-day-group"><div class="np-day"><span>' + dayLabel(day) + '</span><span class="np-day-count">' + entries.length + ' 条</span></div><div class="np-day-items">';
     entries.forEach(({ n, index }) => {
@@ -474,6 +515,7 @@ function _renderNoticePanel() {
         '<div class="np-message-meta">' + (isUnread ? '<span class="np-unread-dot" title="未读" aria-label="未读"></span>' : '') + '<time class="np-time">' + tm + '</time>' +
         (n.sentStatus && _noticeFolder === 'sent' ? '<span class="np-delivery np-' + esc(n.sentStatus) + '">' + (n.sentStatus === 'read' ? '已读' : n.sentStatus === 'delivered' ? '已送达' : '已发送') + '</span>' : '') + '</div></div>' +
         '<div class="np-txt' + (long ? ' is-long' : '') + '"' + (view.mate ? ' data-user-content' : '') + '>' + esc(view.text) + '</div>' +
+        (n.kind === 'legal_update' ? '<button type="button" class="np-preview" data-legal-update>' + esc(globalThis.SoduWorkI18n?.translateText?.('查看更新') || '查看更新') + '</button>' : '') +
         (long ? '<button type="button" class="np-expand" data-notice-expand="' + esc(key) + '" aria-expanded="' + expanded + '">' + (expanded ? '收起全文' : '展开全文') + '</button>' : '') +
         (files.length ? '<div class="np-files" data-notice-file-scope="' + esc(_syncNoticeScope()) + '">' + files.map(file => {
           const name = String(file.name || file.filename || '附件'), zip = _noticeFileIsZip(file);
@@ -488,7 +530,13 @@ function _renderNoticePanel() {
     });
     h += '</div></section>';
   });
-  body.innerHTML = h + '</div>';
+  const markup = h + '</div>' + (list.length > _noticeLimits[_noticeFolder]
+    ? '<div class="np-load-status"><button type="button" data-notice-more>加载更多</button></div>' : '');
+  // An unchanged background refresh must not replace a row between pointer
+  // down and click, or disturb keyboard focus and expanded message content.
+  if (body._noticeMarkup === markup && body.querySelector('.np-stream')) return;
+  body._noticeMarkup = markup;
+  body.innerHTML = markup;
   /*
    * Offer follow-up conversations only for colleague messages with attachments; retain
    * delegated propagation and busy-state handling.

@@ -201,7 +201,14 @@ app.whenReady().then(async () => {
           observation.injectedFailure = true;
           throw Error('Isolated transient cleanup snapshot failure');
         }
-        const result = await guard.stop(); observation.confirmed = true; return result;
+        try {
+          const result = await guard.stop(); observation.confirmed = true; return result;
+        } catch (error) {
+          observation.error = String(error.message);
+          observation.causes = (error.errors || []).map(cause => ({ message: cause.message, code: cause.code }));
+          observation.report = error.report;
+          throw error;
+        }
       } };
     },
     authFactory: options => createHostAuth({ ...options,
@@ -403,6 +410,38 @@ app.whenReady().then(async () => {
   await handle.rememberWorkflowPlugin('');
   assert.equal(requests.length, workflowRequests); assertMainHasNoSdk();
   report.cases.push('Workflow partial text, actual Agent attribution and final storage acknowledgement cross the real utility-process batch interface without another model request.');
+
+  stage('Persist and reopen a long controlled answer through the actual native process');
+  const longOpened = await bridge.open({ ...options, ref: 'process-e2e-long-answer' });
+  assert.equal(longOpened.ok, true, longOpened.reason);
+  let longHandle = longOpened.session;
+  const longChunks = Array.from({ length: 100 }, (_, i) => i + ':' + 'Complete answer \u4f60\u597d\ud83d\ude42\n'.repeat(200));
+  const longAnswer = longChunks.join(''), longStart = performance.now(), beforeLong = requests.length;
+  try {
+    const turn = require('../main/pi-session/controlled-task-turn').create({
+      task: { id: 'long-native-task' }, scope: {}, spec: { mode: 'dispatch', context: {}, agentId: 'local:codex-harness' },
+      request: async (_route, body) => body ? { ref: 'long-native-ref' } : {
+        ref: 'long-native-ref', engine: 'codex-harness', status: 'done', seq: longChunks.length,
+        items: longChunks.map((text, i) => ({ seq: i + 1, kind: 'say', streamId: 'answer', delta: true, text })),
+      },
+    });
+    assert.equal((await turn.execute(longHandle, 'Isolated long answer', [])).ok, true);
+    const answer = value => value.messages.filter(row => row.taskOutputKey?.includes('long-native-ref'));
+    assert.equal(answer(longHandle.snapshot()).length, 1);
+    assert.equal(answer(longHandle.snapshot())[0].blocks[0].text, longAnswer);
+    const longArchive = longHandle.resumeLocation();
+    await longHandle.close();
+    const longRestored = await bridge.open({ ...options, ref: 'process-e2e-long-restored', resumePath: longArchive, resumeCwd: cwd });
+    assert.equal(longRestored.ok, true, longRestored.reason);
+    longHandle = longRestored.session;
+    assert.equal(answer(longHandle.snapshot()).length, 1);
+    assert.equal(answer(longHandle.snapshot())[0].blocks[0].text, longAnswer);
+    assert.equal(answer(longHandle.snapshot())[0].sourceAgent.agentId, 'codex-harness');
+    assert.equal(requests.length, beforeLong, 'controlled replay and reopening never execute a model');
+    report.longAnswer = { characters: longAnswer.length, chunks: longChunks.length,
+      elapsedMs: +(performance.now() - longStart).toFixed(1), nativeArchiveRestored: true };
+    report.cases.push('A long controlled answer crosses the unchanged native RPC budget, persists once, and reopens completely with its original runtime identity.');
+  } finally { await longHandle.close(); }
 
   stage('Run a personal Pi workflow in the existing process-backed conversation queue');
   const personal = require('../main/personal-plugins');

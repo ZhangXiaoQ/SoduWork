@@ -3,7 +3,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
-from ..deps import current_ai_client, current_client
+from ..deps import current_model_client, current_client, enforce_client_quota
 from ..models import Client
 
 router = APIRouter()
@@ -161,7 +161,7 @@ async def put_my_models(
 @router.post("/my-models/test")
 async def test_my_model(
     body: dict = Body(default_factory=dict),
-    client: Client = Depends(current_ai_client),
+    client: Client = Depends(current_model_client),
     session: AsyncSession = Depends(get_session),
 ):
     """Probe the client's currently effective credential, preferring a personal key over the
@@ -182,5 +182,11 @@ async def test_my_model(
     for modality in model_catalog.MODEL_MODALITIES:
         lst.extend(await model_catalog.usable(session, client, modality))
     probe = next((m["name"] for m in lst if m["providerId"] == pid), "")
+    from ..services import model_quota
+    # A probe can fall back to paid inference. Use the same credential-derived
+    # admission, with the exact probe model for restricted plans.
+    await enforce_client_quota(session, client, conf={"provider": pid, "model": probe,
+        "quotaScope": model_quota.scope(p, key_from) if probe else "platform"})
     r = await _aio.to_thread(model_catalog.probe_sync, p["baseUrl"], key, probe, p["kind"])
-    return {**r, "keyFrom": key_from}
+    return {**r, "keyFrom": key_from, "protocol": p["kind"],
+            "gatewayCompatible": p["kind"] == "openai-compat"}

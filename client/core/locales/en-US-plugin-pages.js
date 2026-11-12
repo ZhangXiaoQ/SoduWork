@@ -1,5 +1,11 @@
 (function (global) {
   const messages = {
+    "应用版本不完整，请重新安装后再提交审核": "The app version is incomplete. Reinstall it before submitting for review.",
+    "至少选择一位可以使用应用的成员": "Select at least one member who can use the app.",
+    "至少选择一个可以使用应用的团队或部门": "Select at least one team or department that can use the app.",
+    "应用已签名并提交审核；管理员确认发布身份后可继续审核上架": "App signed and submitted for review. An administrator must verify the publisher identity before review and listing can continue.",
+    "应用已提交审核，管理员审核发布后按所选范围可用": "App submitted for review. It will be available to the selected audience after an administrator reviews and publishes it.",
+    "应用没有提交成功": "The app could not be submitted.",
     "管理远程连接与执行底座": "Manage remote connections and agent runtimes",
     "可用 Agent": "Available agents",
     "连接信息": "Connection details",

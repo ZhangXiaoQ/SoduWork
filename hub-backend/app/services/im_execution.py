@@ -93,6 +93,8 @@ async def final_text(session, row, inbox, binding=None):
         am.ExecutionEvent.kind == "say").order_by(am.ExecutionEvent.seq.desc()).limit(401))).all())
     truncated = len(events) > 400
     events = events[:400]
+    from . import endpoint_events
+    events = await endpoint_events.hydrate(events, session=session)
     parts, streams = [], {}
     for event in reversed(events):
         detail = event.detail or {}

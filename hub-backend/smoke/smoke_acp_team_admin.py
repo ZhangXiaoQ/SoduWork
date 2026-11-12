@@ -3,7 +3,10 @@ team visibility.
 """
 from __future__ import annotations
 import json, os, sys
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///.smoke-acp-team.db"
+import tempfile
+from pathlib import Path
+_fixture = tempfile.TemporaryDirectory(prefix="soduwork-smoke-acp-team-")
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///" + (Path(_fixture.name) / ".smoke.db").as_posix()
 sys.path.insert(0, ".")
 from app.services import acp_agents, agent_setup, dsh_gateway  # noqa: E402
 from app.services.local_base import _PROFILES, _env_for  # noqa: E402

@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app import (automation_models, models, session_memory_models, project_context_models,  # noqa: F401
                  memory_record_models, library_models, conversation_handoff_models,
-                 account_models, account_privacy_models, mail_models,
+                 account_models, account_privacy_models, mail_models, legal_models,
                  account_conversation_models,
                  remote_screen_models,
                  repository_issue_models, release_note_models,

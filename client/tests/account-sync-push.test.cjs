@@ -117,6 +117,26 @@ test('reconnect ready immediately repairs missing archive/deletion changes and n
   assert.deepEqual((await f.sync.history()).chats, []);
 });
 
+test('pushed lifecycle deletion retains its tombstone in shared active and archived directory reads', async t => {
+  const f = fixture(t);
+  await f.sync.history(); await f.ready();
+  f.change({ deleted: true, lifecycleRevision: 2 });
+  f.event({ type: 'account-conversation', conversationId: 'account-1', revision: 2 });
+  await f.advance(1000);
+  const [active, archived] = await Promise.all([f.sync.history(), f.sync.history({ archived: true })]);
+  assert.deepEqual(active.chats, []); assert.deepEqual(archived.chats, []);
+  for (const result of [active, archived]) {
+    assert.equal(result.lifecycle.length, 1);
+    assert.equal(result.lifecycle[0].id, 'account-1');
+    assert.equal(result.lifecycle[0].deleted, true);
+    assert.equal(result.lifecycle[0].lifecycleRevision, 2);
+  }
+  assert.equal(f.changes.length, 1);
+  assert.equal(f.changes[0].projection.deleted, true);
+  assert.equal(f.changes[0].projection.lifecycleRevision, 2);
+  assert.equal(f.requests.length, 3, 'the push refresh and both views share one incremental directory read');
+});
+
 test('failed socket reconnects cannot cancel periodic reconciliation or fabricate authentication readiness', async t => {
   const f = fixture(t);
   await f.sync.history();

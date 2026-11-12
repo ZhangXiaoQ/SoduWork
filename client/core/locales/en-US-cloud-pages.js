@@ -134,6 +134,8 @@
     '此环境还有未结束的会话，请先确认执行状态再移除': 'This environment has unfinished conversations. Confirm their execution status before removing it.'
   };
   Object.assign(messages, {
+    '请确认目标电脑没有运行中的会话。更新后旧密钥立即失效；已保存 SSH 连接时，客户端会先验证连接，再自动更新并启动 Runner。没有可用 SSH 连接时，将提供一次性接入命令。': 'Confirm that no sessions are running on the target computer. The old key expires immediately after rotation. With saved SSH access, the client verifies the connection, then updates and starts Runner automatically. Otherwise, a one-time enrollment command is provided.',
+    '新目录在 Runner 重新接入后生效。已有文件会保留在原目录。': 'The new directory takes effect when Runner reconnects. Existing files remain in the original directory.',
     '正在处理，请稍候…': 'Working, please wait…',
     '仅显示一次': 'Shown once',
     '请在这台云端电脑上完成接入。凭据不会保存到客户端，关闭窗口后无法再次查看。': 'Finish setup on this cloud computer. The credential is not saved in the client and cannot be viewed again after this window closes.',
@@ -144,7 +146,7 @@
     '连接状态已更新': 'Connection status updated',
     '云端电脑登录信息': 'Cloud computer login',
     'IP 地址或主机名': 'IP address or hostname',
-    '例如 192.0.2.20 或 dev.example.com': 'For example, 192.0.2.20 or dev.example.com',
+    '例如 192.0.2.10 或 dev.example.com': 'For example, 192.0.2.10 or dev.example.com',
     'SSH 端口': 'SSH port',
     '登录账号': 'Login account',
     '例如 root 或 ubuntu': 'For example, root or ubuntu',
@@ -247,6 +249,12 @@
     ['负载已满', '执行机目前已满，请等待现有工作完成后刷新'], ['服务异常', '执行服务暂时无法接收交接，请检查服务状态后刷新']
   ];
   for (const [label, reason] of checks) messages[label + '。' + reason] = messages[label] + '. ' + messages[reason];
+  Object.assign(messages, {
+    '连接信息已保存': 'Connection details saved',
+    'Runner 安装已完成': 'Runner installation completed',
+    'SSH 连接已验证；Runner 是否在线以下方检查结果为准。': 'SSH access is verified; Runner availability is shown by the connection check below.',
+    '插件参数过长，请缩短后重试': 'Plugin inputs are too long. Shorten them and try again.',
+  });
   if (typeof module !== 'undefined' && module.exports) { module.exports = Object.freeze(messages); return; }
   global.SoduWorkLocaleMessages = Object.freeze(Object.assign(Object.create(null), global.SoduWorkLocaleMessages, { 'en-US': Object.freeze(Object.assign(Object.create(null), global.SoduWorkLocaleMessages['en-US'], messages)) }));
 })(globalThis);

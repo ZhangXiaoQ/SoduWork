@@ -126,7 +126,7 @@ chk("冬令时重复小时只触发一次",
     (first_fold, after_fold))
 
 # Verify serialized schedule shape.
-chk("保留三种周期并支持一次性", S.EVERY == ("hourly", "daily", "weekly", "once"))
+chk("保留周期并支持每月、自定义和一次性", S.EVERY == ("hourly", "daily", "weekly", "monthly", "custom", "once"))
 bad = Sch(every="every-minute", at_hour=99, at_minute=99)
 n = S.next_run_after(bad, BASE)
 chk("乱填的时分被夹住、节奏退回每天", n.hour <= 23 and n.minute <= 59, n)

@@ -22,6 +22,8 @@ if (typeof electron === 'string') {
   const get=name=>js(`document.querySelector('[name="${name}"]').value`);
   const choose=(name,value)=>js(`(()=>{const el=document.querySelector('[name="${name}"]');el.value=${JSON.stringify(value)};el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}))})()`);
   const open=(text,proposal={})=>js(`WorkAutomationSheet.open({host:document.getElementById('host'),text:${JSON.stringify(text)},proposal:${JSON.stringify(proposal)}})`);
+  // Refinements retain disabled history snapshots with the same action attributes.
+  const save=()=>js('document.querySelector("[data-plugin-surface=work-automation]:not(.is-archived) [data-waz-save]").click();void 0;');
   app.whenReady().then(async()=>{
     win=new BrowserWindow({show:false,width:1200,height:1600,webPreferences:{contextIsolation:true,nodeIntegration:false,offscreen:true,backgroundThrottling:false}});
     win.webContents.on('console-message',event=>{if(event.level==='error')report.errors.push(event.message);});
@@ -52,7 +54,7 @@ if (typeof electron === 'string') {
     assert.equal(await js('calls.parse.at(-1).options.candidates.methods[0].id'),'games');
     await until('document.querySelector("#wazProbe").classList.contains("ready")');
     fs.writeFileSync(path.join(output,'selected.png'),(await win.webContents.capturePage()).toPNG());
-    await js('document.querySelector("[data-waz-save]").click();void 0;');
+    await save();
     await until('calls.save.length===1');
     const body=await js('calls.save[0]');
     assert.equal(body.personalPluginKey,'games');assert.equal(body.personalPluginVersionPolicy,'pinned');
@@ -82,7 +84,7 @@ if (typeof electron === 'string') {
     await open('每天12点，使用小游戏插件');
     assert.equal(await get('personalPluginKey'),'__waz_unresolved__');
     assert.match(await js('document.querySelector("#wazProbe").textContent'),/不唯一/);
-    await js('document.querySelector("[data-waz-save]").click();void 0;');
+    await save();
     assert.equal(await js('calls.save.length'),1);
     await choose('personalPluginKey','games');
     assert.equal(await get('personalPluginKey'),'games');
@@ -101,7 +103,7 @@ if (typeof electron === 'string') {
     await open('每天12点检查报告',{personalPluginKey:'removed',repoId:'gone'});
     assert.equal(await get('personalPluginKey'),'removed');assert.equal(await get('repoId'),'gone');
     assert.match(await js('document.querySelector("#wazProbe").textContent'),/不可用/);
-    await js('document.querySelector("[data-waz-save]").click();void 0;');assert.equal(await js('calls.save.length'),1);
+    await save();assert.equal(await js('calls.save.length'),1);
     report.cases.push('missing preserved plugin and engineering repo remain visible and cannot degrade to defaults');
 
     await open('2030年10月20日中午12点使用小游戏插件');
@@ -111,7 +113,7 @@ if (typeof electron === 'string') {
     assert.equal(await js('calls.probe.at(-1).every'),'once');
     assert.ok(await js('Boolean(calls.probe.at(-1).runAt)'));
     fs.writeFileSync(path.join(output,'once.png'),(await win.webContents.capturePage()).toPNG());
-    await js('document.querySelector("[data-waz-save]").click();void 0;');
+    await save();
     await until('calls.save.length===2');
     assert.equal(await js('calls.save[1].every'),'once');
     assert.equal(await js('ScheduleTiming.localInput(calls.save[1].runAt,calls.save[1].timeZone)'),'2030-10-20T12:00');
@@ -119,7 +121,7 @@ if (typeof electron === 'string') {
     await open('只执行一次生成报告');
     assert.equal(await get('every'),'once');assert.equal(await get('runAt'),'');
     assert.match(await js('document.querySelector("#wazProbe").textContent'),/日期|时间/);
-    await js('document.querySelector("[data-waz-save]").click();void 0;');assert.equal(await js('calls.save.length'),2);
+    await save();assert.equal(await js('calls.save.length'),2);
     await choose('runAt','2020-01-01T12:00');
     assert.match(await js('document.querySelector("#wazProbe").textContent'),/过去/);
     await choose('runAt','2030-10-20T12:00');
@@ -156,8 +158,33 @@ if (typeof electron === 'string') {
     await js('finishCatalog([{key:"stale",name:"小游戏"}]);void 0;');
     assert.equal(await js('oldOpen'),false);assert.equal(await get('personalPluginKey'),'reports');
     report.cases.push('closed and reopened sheets cannot receive the previous catalog response');
+    await open('每天12点生成报告。保存为暂停状态。如果审批通过，创建后启用。');
+    assert.equal(await js('document.querySelector("[name=enabled]").checked'), false);
+    await until('document.querySelector("#wazProbe").classList.contains("ready")');
+    const beforePause = await js('calls.save.length');
+    await save();
+    await until('calls.save.length===' + (beforePause + 1));
+    assert.equal(await js('calls.save.at(-1).enabled'), false);
+    report.cases.push('conditional enable text leaves the checkbox and submitted schedule paused');
+
+    await open('每天12点生成报告。保存为暂停状态。');
+    await js("WorkAutomationSheet.refine('创建后启用')");
+    assert.equal(await js('document.querySelector("[name=enabled]").checked'), true);
+    await until('document.querySelector("#wazProbe").classList.contains("ready")');
+    const beforeEnable = await js('calls.save.length');
+    await save();
+    await until('calls.save.length===' + (beforeEnable + 1));
+    assert.equal(await js('calls.save.at(-1).enabled'), true);
+    report.cases.push('an explicit unconditional refinement enables the actual submitted schedule');
     assert.deepEqual(await js('errors'),[]);assert.deepEqual(report.errors,[]);report.ok=true;
-  }).catch(error=>report.errors.push(error.stack)).finally(()=>{
+  }).catch(async error=>{
+    report.errors.push(error.stack);
+    report.failureState = await js(`({
+      text: document.getElementById('host')?.innerText,
+      saveButtons: [...document.querySelectorAll('[data-waz-save]')].map(el=>({text:el.textContent,disabled:el.disabled,archived:!!el.closest('.is-archived')})),
+      calls, errors
+    })`).catch(()=>null);
+  }).finally(()=>{
     fs.writeFileSync(path.join(output,'report.json'),JSON.stringify(report,null,2));
     console.log(JSON.stringify(report));win?.destroy();app.exit(report.ok?0:1);
   });

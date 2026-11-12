@@ -105,6 +105,44 @@ function response(body, status = 200) {
     async json() { return body; } };
 }
 
+test('unsent review drafts do not checkpoint until their first submitted message', async t => {
+  const identity = { hub: 'http://hub.test', clientId: 'desktop', session: 'fixture' };
+  const queued = new Map(), sent = [], view = { status: 'idle', messages: [] };
+  const sync = require('./account-sync').create({ app: {}, metadataOnly: true, identityOf: async () => identity,
+    store: { session: () => null, setSession() {}, enqueue: job => queued.set(job.id, job),
+      jobs: () => [...queued.values()], ack: id => queued.delete(id), fail() {} },
+    fetch: async (_identity, _url, request) => {
+      const body = JSON.parse(request.body); sent.push(body);
+      return response({ ok: true, conversationId: 'account-review', sourceRevision: body.sourceRevision });
+    } });
+  t.after(() => sync.close());
+  sync.bind({ sessionId: 'native-review', acceptanceSession: { taskRef: 'requirement' }, snapshot: () => view,
+    historyRow: () => ({ title: 'Requirement', taskId: 'requirement' }) }, identity);
+  await sync.flush();
+  assert.equal(sent.length, 0);
+  view.messages.push({ role: 'user', text: 'Review the delivery' });
+  await sync.flush();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].messageCount, 1);
+  assert.equal(sent[0].taskProjectionId, '');
+});
+
+test('legacy idle zero-message account rows carry a reversible visibility hint', async t => {
+  const actor = require('../../tests/helpers/platform-session-fixture.cjs').identity();
+  const sync = require('./account-sync').create({ app: {}, store: { jobs: () => [] },
+    identityOf: async () => actor, resolveNativeSource: async () => null,
+    fetch: async () => response({ items: [
+      { id: 'empty', sourceSessionId: 'native-empty', messageCount: 0, state: 'idle' },
+      { id: 'unknown', state: 'idle' },
+      { id: 'sent', messageCount: 2, state: 'idle' },
+      { id: 'task', messageCount: 0, state: 'idle', taskProjectionId: 'task' },
+    ], cursor: 4, hasMore: false }) });
+  t.after(() => sync.close());
+  const page = await sync.history();
+  assert.deepEqual(page.chats.map(row => row.emptyPlaceholder), [true, false, false, false]);
+  assert.equal(page.chats[0].deleted, false);
+});
+
 test('only a dedicated task transcript publishes its task projection identity', async t => {
   const identity = { hub: 'http://hub.test', clientId: 'desktop', session: 'fixture' };
   const saved = new Map(), queued = new Map(), sent = [];
@@ -182,6 +220,9 @@ test('an open account projection refreshes its transcript after a realtime inval
   f.advance();
   await view.refresh();
   assert.deepEqual(view.snapshot().messages.map(item => item.id), ['m1', 'm2']);
+  assert.equal(view.snapshot().messages[1].blocks[0].kind, 'text');
+  assert.equal(view.snapshot().messages[1].blocks[0].text, '第二条');
+  assert.equal(view.snapshot().messages[1].blocks[0].done, true);
   assert.equal(view.historyRow().title, '已更新');
 });
 
@@ -212,6 +253,77 @@ test('fresh and cached account history retain authenticated ownership through ac
   assert.equal(requests, 2);
 });
 
+test('account-only history preserves the original identity while default history retains native projection', async t => {
+  const actor = require('../../tests/helpers/platform-session-fixture.cjs').identity();
+  let scans = 0, requests = 0;
+  const sync = require('./account-sync').create({ app: {}, store: { jobs: () => [] }, identityOf: () => actor,
+    resolveNativeSource: async () => { scans++; return { id: 'native-1', adapterId: 'pi', count: 2 }; },
+    fetch: async () => { requests++; return response({ items: [{ id: 'acct-1', sourceSessionId: 'native-1',
+      sourceClientId: actor.clientId, title: 'Original', canSend: true, messageCount: 2 }], hasMore: false }); } });
+  t.after(() => sync.close());
+  const account = (await sync.history({ source: 'account' })).chats[0];
+  assert.equal(account.id, 'acct-1'); assert.equal(account.accountProjection, true);
+  assert.equal(scans, 0);
+  const legacy = (await sync.history()).chats[0];
+  assert.equal(legacy.id, 'native-1'); assert.equal(scans, 1);
+  assert.equal(requests, 1);
+});
+
+test('account-only forced refresh publishes current directory rows without native discovery', async t => {
+  const actor = require('../../tests/helpers/platform-session-fixture.cjs').identity();
+  let scans = 0, revision = 1;
+  const changes = [];
+  const sync = require('./account-sync').create({ app: {}, store: { jobs: () => [] }, identityOf: () => actor,
+    realtime: false,
+    resolveNativeSource: async () => { scans++; return { id: 'native-1', adapterId: 'pi', count: 2 }; },
+    fetch: async () => response({ items: [{ id: 'acct-1', sourceSessionId: 'native-1',
+      sourceClientId: actor.clientId, title: 'Revision ' + revision, revision,
+      messageCount: 2, canSend: true }], hasMore: false }) });
+  t.after(() => sync.close());
+  sync.onChange((id, row, presence) => changes.push({ id, row, presence }));
+  await sync.history({ source: 'account' });
+  revision++;
+  const result = await sync.history({ source: 'account', force: true });
+  assert.equal(result.chats[0].revision, 2); assert.equal(scans, 0);
+  assert.equal(changes.length, 1); assert.equal(changes[0].id, 'acct-1');
+  assert.equal(changes[0].presence.accountProjection, true);
+  assert.equal(changes[0].presence.owner, require('../platform-connections/runtime.cjs').connectionScope(actor));
+  assert.equal((await sync.history()).chats[0].id, 'native-1');
+  assert.equal(scans, 1, 'the legacy view still resolves its native identity');
+});
+
+test('coalesced account-only and legacy directory callers keep their respective identities in either order', async t => {
+  const actor = require('../../tests/helpers/platform-session-fixture.cjs').identity();
+  for (const firstSource of ['account', undefined]) {
+    let revision = 1, scans = 0, requests = 0, release, entered;
+    const waiting = new Promise(resolve => { entered = resolve; });
+    const gate = new Promise(resolve => { release = resolve; });
+    const sync = require('./account-sync').create({ app: {}, store: { jobs: () => [] }, identityOf: () => actor,
+      realtime: false,
+      resolveNativeSource: async () => { scans++; return { id: 'native-1', adapterId: 'pi', count: 2 }; },
+      fetch: async () => {
+        requests++;
+        if (revision === 2) { entered(); await gate; }
+        return response({ items: [{ id: 'acct-1', sourceSessionId: 'native-1', sourceClientId: actor.clientId,
+          title: 'Revision ' + revision, revision, messageCount: 2 }], hasMore: false });
+      } });
+    t.after(() => sync.close());
+    await sync.history({ source: 'account' }); revision = 2;
+    const first = sync.history({ source: firstSource, force: true });
+    await waiting;
+    const second = sync.history({ source: firstSource === 'account' ? undefined : 'account', force: true });
+    await new Promise(resolve => setImmediate(resolve)); release();
+    const results = await Promise.all([first, second]);
+    const account = results[firstSource === 'account' ? 0 : 1];
+    const legacy = results[firstSource === 'account' ? 1 : 0];
+    assert.equal(account.chats[0].id, 'acct-1'); assert.equal(account.chats[0].accountProjection, true);
+    assert.equal(legacy.chats[0].id, 'native-1'); assert.equal(legacy.chats[0].accountProjection, undefined);
+    assert.equal(requests, 2, 'different views still coalesce the same authorized refresh');
+    assert.ok(scans > 0, 'the legacy caller retains its native projection');
+    await sync.close();
+  }
+});
+
 test('archived account rows stay out of fresh and cached history and retain live archive state', async t => {
   const { identity } = require('../../tests/helpers/platform-session-fixture.cjs');
   const previous = global.WebSocket, sockets = [], events = [];
@@ -240,7 +352,7 @@ test('archived account rows stay out of fresh and cached history and retain live
   const restored = await sync.history({ force: true });
   assert.equal(restored.chats[0].id, 'acct-archived');
   assert.equal(restored.chats[0].archived, false);
-  assert.equal(nativeLookups, 1);
+  assert.equal(nativeLookups, 0, 'a different source device never probes this device\'s archives');
 });
 
 test('failed directory refresh hides archived rows loaded from disk', async t => {

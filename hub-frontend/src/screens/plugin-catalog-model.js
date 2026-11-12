@@ -1,7 +1,7 @@
 import { catalogPlugin } from '../plugin-locales.js'
 import { translateText as tx, localeMap, getLocale, t } from '../i18n.js'
 export const SOURCE_LABELS = localeMap(() => ({
-  builtin: 'SoduWork 内置', adapter: '兼容导入', codex: 'Codex', claude: 'Claude',
+  builtin: 'SoduWork 内置', soduwork: 'SoduWork 原生', adapter: '兼容导入', codex: 'Codex', claude: 'Claude',
 }))
 
 export const CATALOG_FILTERS = localeMap(() => ([
@@ -23,7 +23,7 @@ export function pluginKind(plugin) {
 
 export function pluginSource(plugin) {
   if (plugin.orgId) return { key: 'enterprise', label: tx("企业提交") }
-  if (plugin.sourceKind === 'builtin') return { key: 'builtin', label: tx("SoduWork 内置") }
+  if (['builtin', 'soduwork'].includes(plugin.sourceKind)) return { key: 'builtin', label: tx("SoduWork 内置") }
   return { key: 'external', label: SOURCE_LABELS[plugin.sourceKind] || tx("外部导入") }
 }
 

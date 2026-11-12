@@ -56,11 +56,15 @@ test('自动化模式：设定形状与「我的定时任务」一致，出格�
   const value = intent.normalize({ mode: 'schedule',
     schedule: { every: 'weekly', atHour: 18, atMinute: 30, weekday: 5 } }, '每周汇报');
   assert.equal(value.mode, 'schedule');
-  assert.deepEqual(value.schedule, { every: 'weekly', atHour: 18, atMinute: 30, weekday: 5 });
+  assert.deepEqual(value.schedule, {
+    every: 'weekly', atHour: 18, atMinute: 30, weekday: 5,
+    weekdays: [], monthDays: [], monthDayPolicy: 'skip', startDate: '', endDate: '',
+  });
   /* Normalize invalid frequency values and clamp time and weekday fields before persistence. */
   assert.deepEqual(intent.normalize({ mode: 'schedule',
     schedule: { every: 'never', atHour: 99, atMinute: -3, weekday: 12 } }).schedule,
-    { every: 'daily', atHour: 23, atMinute: 0, weekday: 7 });
+    { every: 'daily', atHour: 23, atMinute: 0, weekday: 7,
+      weekdays: [], monthDays: [], monthDayPolicy: 'skip', startDate: '', endDate: '' });
   /* Exclude schedule settings from unrelated goal and task intent contracts. */
   assert.equal(intent.normalize({ mode: 'goal', goal: 'x',
     schedule: { every: 'daily' } }).schedule, null);
@@ -72,6 +76,15 @@ test('自动化模式：设定形状与「我的定时任务」一致，出格�
   assert.equal(intent.normalize({ mode: 'schedule',
     schedule: { every: 'daily', personalPluginKey: 'x'.repeat(200) } })
     .schedule.personalPluginKey.length, 64);
+});
+
+test('custom automation intent preserves both recurrence lines and its mode', () => {
+  const rule = 'DTSTART;TZID=Asia/Shanghai:20990101T105100\nRRULE:FREQ=DAILY;INTERVAL=3;COUNT=10';
+  const value = intent.normalize({mode:'schedule', schedule:{every:'custom',customRule:rule}});
+  assert.equal(value.schedule.every, 'custom');
+  assert.equal(value.schedule.customRule, rule);
+  assert.match(intent.surface('cp'), /value="custom"/);
+  assert.match(intent.surface('cp'), /cpIntentSchCustomRule/);
 });
 
 test('长要求折叠，目标和完成标准随同一条消息发送', () => {

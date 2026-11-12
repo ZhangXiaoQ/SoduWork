@@ -1,4 +1,4 @@
-"""Opt-in native Harness² web tool test; model, weather and grants are loopback fixtures."""
+"""Native Harness² web tools, streaming and permissions without an external agent."""
 from __future__ import annotations
 
 import json
@@ -162,12 +162,9 @@ class _WebFixture:
         handler.reply(200, payload, "text/event-stream")
 
 
-@unittest.skipUnless(os.environ.get("SODUWORK_TEST_OPENCODE_BIN"),
-                     "Requires an explicitly selected installed OpenCode")
 class Harness2NativeWebTests(unittest.TestCase):
     def test_native_webfetch_resume_and_readonly_without_refinement(self):
-        executable = Path(os.environ["SODUWORK_TEST_OPENCODE_BIN"]).resolve()
-        self.assertTrue(executable.is_file())
+        executable = Path("must-not-launch-opencode.exe")
         fixture = _WebFixture()
         self.fixture = fixture
         fixture.start()
@@ -181,14 +178,12 @@ class Harness2NativeWebTests(unittest.TestCase):
             original = {path.relative_to(work): path.read_bytes() for path in work.rglob("*")
                         if path.is_file()}
             env, permission = self.environment(root, work, fixture, executable, "standard")
-            # This is the existing standard map, not full access or a write grant.
-            self.assertEqual(permission["edit"], "ask")
-            self.assertEqual(permission["bash"], "ask")
-            self.assertEqual(permission["webfetch"], "ask")
+            self.assertEqual(permission["mode"], "standard")
+            self.assertFalse(any(key.startswith("OPENCODE_") for key in env))
             first = self.run_turn(work, env,
                                   f"Fetch {fixture.weather_url} using webfetch and report the weather.")
             sid = self.session(first)
-            self.assertTrue(sid.startswith("ses_"))
+            self.assertTrue(sid.startswith("h2_"))
             self.assert_stream(first, "WEATHER-VERIFIED")
             self.assertEqual(fixture.gets, ["/weather"], {
                 "grants": fixture.grants,
@@ -213,9 +208,7 @@ class Harness2NativeWebTests(unittest.TestCase):
 
             fixture.next_phase("readonly")
             readonly, permission = self.environment(root, work, fixture, executable, "readonly")
-            self.assertEqual(permission["*"], "deny")
-            self.assertNotIn("edit", permission)
-            self.assertNotIn("webfetch", permission)
+            self.assertEqual(permission["mode"], "readonly")
             denied = self.run_turn(work, readonly,
                                    f"Fetch {fixture.weather_url} if webfetch is permitted.", sid)
             self.assertEqual(self.session(denied), sid)
@@ -232,8 +225,9 @@ class Harness2NativeWebTests(unittest.TestCase):
             self.assertTrue(all(row["harness_identity"] for row in execution_calls), fixture.calls)
             self.assertFalse(any(row["executor_identity"] for row in execution_calls), fixture.calls)
             self.assertFalse(fixture.bad_requests, fixture.bad_requests)
-            self.assertGreater(fixture.dependency_requests, 0)
-            self.assertFalse((root / "refinement").exists())
+            self.assertEqual(fixture.dependency_requests, 0)
+            self.assertEqual(list((root / "refinement").glob("turn-*")), [])
+            self.assertTrue((root / "refinement/sessions").is_dir())
             self.assertEqual(
                 {path.relative_to(work): path.read_bytes() for path in work.rglob("*")
                  if path.is_file()}, original)
@@ -269,9 +263,9 @@ class Harness2NativeWebTests(unittest.TestCase):
                        "model": "fixture", "kind": "openai-compat"},
                "accessPolicy": policy, "workRoot": str(work)}
         with (patch.dict(os.environ, clean, clear=True),
-              patch.object(local_base, "_opencode_bin", return_value=str(executable))):
-            env = harness2_runtime.environment({}, cfg)
-        permission = json.loads(env["OPENCODE_CONFIG_CONTENT"])["permission"]
+              patch.object(local_base, "_opencode_bin", side_effect=AssertionError("Unexpected OpenCode lookup"))):
+            env = harness2_runtime.environment(clean, cfg)
+        permission = policy
         env.update({
             harness2_runtime.ROOT_ENV: str(root / "refinement"),
             "SODUWORK_APPROVAL_CHANNEL": json.dumps({
@@ -318,7 +312,7 @@ class Harness2NativeWebTests(unittest.TestCase):
         self.assertNotIn("Harness²：", stdout)
         events = [json.loads(line) for line in stdout.splitlines() if line.strip()]
         self.assertFalse(any(row.get("error") for row in events))
-        self.assertIn({"type": "harness2_probe_complete", "coverage": "execute-v2", "stages": 0}, events)
+        self.assertIn({"type": "harness2_probe_complete", "coverage": "native-execute-v1", "stages": 0}, events)
         return events
 
     @staticmethod

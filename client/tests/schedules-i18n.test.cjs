@@ -28,6 +28,86 @@ function boot(locale) {
 
 const CJK = /[\u4e00-\u9fff]/;
 
+test('yearly binding validation uses the actual message in every supported locale', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../components/panels/work-automation-bindings.js'), 'utf8');
+  const message = '当前不支持年度执行，请确认时间安排后再创建。';
+  for (const locale of ['zh-CN', 'en-US', 'ja-JP', 'ko-KR']) {
+    const context = boot(locale);
+    vm.runInContext(source, context);
+    const draft = context.WorkAutomationBindings.resolve({}, '每年整理年度报告', { every: 'daily' }, {});
+    assert.equal(draft.bindingIssues[0].message, message);
+    const translated = context.WorkAutomationBindings.validate(draft, {});
+    assert.equal(translated, context.SoduWorkI18n.translateText(message));
+    if (locale === 'zh-CN') assert.equal(translated, message);
+    else assert.notEqual(translated, message, locale);
+    if (locale === 'en-US' || locale === 'ko-KR') assert.ok(!CJK.test(translated), locale + ': ' + translated);
+    assert.equal(context.SoduWorkI18n.translateText('用户自己的年度报告名称'), '用户自己的年度报告名称');
+  }
+});
+
+test('combined binding errors translate separately while preserving source issues and user names', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../components/panels/work-automation-bindings.js'), 'utf8');
+  const expected = {
+    'en-US': [
+      'Linked project "清风Demo" is unavailable or has no unique match. Select it explicitly in the form.',
+      'Yearly schedules are not supported. Confirm a supported schedule before creating the automation.',
+    ],
+    'ja-JP': [
+      '関連プロジェクト「清风Demo」は利用できないか、一意に特定できません。フォームで明示的に選択してください。',
+      '年単位の実行には対応していません。対応しているスケジュールを確認してから自動化を作成してください。',
+    ],
+    'ko-KR': [
+      '연결된 프로젝트 "清风Demo"을 사용할 수 없거나 일치하는 항목이 하나가 아닙니다. 양식에서 직접 선택하세요.',
+      '연간 실행은 지원하지 않습니다. 지원되는 일정을 확인한 후 자동화를 만드세요.',
+    ],
+  };
+  for (const locale of ['zh-CN', 'en-US', 'ja-JP', 'ko-KR']) {
+    const context = boot(locale);
+    vm.runInContext(source, context);
+    const draft = context.WorkAutomationBindings.resolve({}, '每年整理年度报告，使用清风Demo工程', { every: 'daily' }, {});
+    assert.equal(draft.bindingIssues.length, 2);
+    const original = JSON.stringify(draft.bindingIssues);
+    const error = context.WorkAutomationBindings.validate(draft, {});
+    assert.equal(JSON.stringify(draft.bindingIssues), original);
+    const messages = draft.bindingIssues.map(issue => issue.message);
+    const translated = messages.map(message => context.SoduWorkI18n.translateText(message));
+    assert.equal(error, translated.join('\n'));
+    assert.ok(error.includes('清风Demo'));
+    if (locale !== 'zh-CN') assert.equal(error, expected[locale].join('\n'));
+    for (let index = 0; index < messages.length; index++) {
+      if (locale === 'zh-CN') assert.equal(translated[index], messages[index]);
+      else assert.notEqual(translated[index], messages[index], locale + ': ' + messages[index]);
+    }
+    context.SoduWorkI18n.setLocale('zh-CN');
+    assert.equal(context.WorkAutomationBindings.validate(draft, {}), messages.join('\n'));
+  }
+});
+
+test('multi-weekday card summaries translate every weekday before assembly', () => {
+  const context = boot('en-US');
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../components/panels/panels-schedules.js'), 'utf8'), context);
+  const summary = context._schRhythm({every:'weekly',weekdays:[1,3,5],atHour:9,atMinute:30});
+  assert.ok(!CJK.test(summary), summary);
+  assert.match(summary, /09:30/);
+});
+
+test('custom recurrence labels and validation translate across supported locales', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../components/panels/schedule-timing.js'), 'utf8');
+  const messages = [...source.matchAll(/return '(.*?)'/g)].map(match => match[1])
+    .filter(text => /自定义|RRULE|BYDAY|BYMONTHDAY/.test(text));
+  messages.push('自定义', '自定义规则', '支持 iCalendar RRULE',
+    '可使用 DTSTART 与 RRULE 精确指定开始时间、时区和重复规则',
+    '支持 HOURLY、DAILY、WEEKLY、MONTHLY，可设置 INTERVAL、COUNT 或 UNTIL',
+    '按天、周、月重复时，夏令时跳过的时刻顺延，重复时刻执行一次', '执行时间需要确认');
+  for (const locale of ['en-US', 'ja-JP', 'ko-KR']) {
+    const tt = boot(locale).SoduWorkI18n.translateText;
+    for (const message of messages) {
+      assert.notEqual(tt(message), message, locale + ': ' + message);
+      if (locale === 'en-US') assert.ok(!CJK.test(tt(message)), message);
+    }
+  }
+});
+
 test('history distinguishes trigger records from execution in every supported locale', () => {
   const messages = [
     '自动化触发后，这里会记录状态；开始执行后可查看对应会话。',

@@ -49,9 +49,11 @@ def work(prompt):
 
 agent = sys.argv[1]
 sid = "fixture-" + uuid.uuid4().hex
+if agent == "harness2":
+    sid = "h2_" + uuid.uuid4().hex
 resumed = False
 thought = "Inspect restored workspace before delivering."
-if agent in {"codex-harness", "qwen", "opencode", "dsh"}:
+if agent in {"codex-harness", "qwen", "opencode", "dsh", "harness2"}:
     for raw in sys.stdin:
         message = json.loads(raw)
         method, params = message.get("method"), message.get("params") or {}
@@ -61,6 +63,8 @@ if agent in {"codex-harness", "qwen", "opencode", "dsh"}:
             result = {"sessionId": sid}
         elif method in {"session/load", "session/resume"}:
             sid, resumed = params["sessionId"], True
+            result = {}
+        elif method == "session/set_mode" and agent == "harness2":
             result = {}
         elif method == "session/prompt":
             text = work("\n".join(x.get("text", "") for x in params["prompt"]))

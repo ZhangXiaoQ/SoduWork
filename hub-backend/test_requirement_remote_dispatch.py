@@ -5,6 +5,9 @@ No live database, model, Runner process, or user workspace is accessed.
 """
 import importlib
 import os
+import sqlite3
+import uuid
+from contextlib import closing
 from pathlib import Path
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -19,10 +22,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app import models, automation_models as am
 from app.api import tasks
-from app.db import Base, get_session
+from app.db import get_session
 from app.deps import current_client
 from app.services import (ai_exec, ai_remote, conversation_handoffs, dispatch_identity,
                           runner_hub, task_dispatch, task_execution_options)
+from test_unified_requirements import _schema_template
 
 for model_file in (Path(__file__).parent / "app").glob("*models.py"):
     importlib.import_module("app." + model_file.stem)
@@ -30,10 +34,17 @@ for model_file in (Path(__file__).parent / "app").glob("*models.py"):
 
 class RequirementRemoteDispatchTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        # Clone the complete schema into a private database for each test.
+        # Avoid rebuilding every table through the async driver on every case.
+        memory_name = "soduwork_remote_dispatch_" + uuid.uuid4().hex
+        anchor = sqlite3.connect(f"file:{memory_name}?mode=memory&cache=shared", uri=True)
+        self.addCleanup(anchor.close)
+        with closing(sqlite3.connect(_schema_template())) as source:
+            source.backup(anchor)
+        self.engine = create_async_engine(
+            f"sqlite+aiosqlite:///file:{memory_name}?mode=memory&cache=shared&uri=true")
+        self.addAsyncCleanup(self.engine.dispose)
         self.sessions = async_sessionmaker(self.engine, expire_on_commit=False)
-        async with self.engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
         self.client = models.Client(id="phone", user_ref="owner", auth_state="active")
         async with self.sessions() as session:
             session.add_all([
@@ -90,6 +101,7 @@ class RequirementRemoteDispatchTests(unittest.IsolatedAsyncioTestCase):
         ]
         for item in self.patches:
             item.start()
+            self.addCleanup(item.stop)
         app = FastAPI()
         app.include_router(tasks.router)
 
@@ -100,12 +112,7 @@ class RequirementRemoteDispatchTests(unittest.IsolatedAsyncioTestCase):
         app.dependency_overrides[get_session] = db
         app.dependency_overrides[current_client] = lambda: self.client
         self.http = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://fixture")
-
-    async def asyncTearDown(self):
-        await self.http.aclose()
-        for item in reversed(self.patches):
-            item.stop()
-        await self.engine.dispose()
+        self.addAsyncCleanup(self.http.aclose)
 
     def body(self, **runner_fields):
         return {"assigneeId": "local:pi", "assigneeType": "agent",

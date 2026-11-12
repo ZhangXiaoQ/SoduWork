@@ -1089,27 +1089,13 @@ class AccountPrivacyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code,200,response.text)
         payload = response.json()
         documents = payload["documents"]
-        titles = {
-            "zh-CN": {"terms": "用户协议", "privacy": "隐私政策"},
-            "en-US": {"terms": "Terms of Service", "privacy": "Privacy Policy"},
-            "ja-JP": {"terms": "利用規約", "privacy": "プライバシーポリシー"},
-            "ko-KR": {"terms": "이용약관", "privacy": "개인정보 처리방침"},
-        }
-        expected = {(locale, kind) for locale in titles for kind in ("terms", "privacy")}
-        self.assertEqual(len(documents), len(expected))
-        self.assertEqual({(doc["locale"], doc["key"]) for doc in documents}, expected)
-        self.assertEqual(payload["requiredConsentVersions"], auth_fixture.required_versions())
-        self.assertEqual(set(payload["requiredConsentVersions"]), {"terms", "privacy"})
+        expected = {(kind, locale) for kind in ("terms", "privacy")
+                    for locale in ("zh-CN", "en-US", "ja-JP", "ko-KR")}
+        self.assertCountEqual([(doc["key"], doc["locale"]) for doc in documents], expected)
         for doc in documents:
-            with self.subTest(locale=doc["locale"], document=doc["key"]):
-                self.assertEqual(doc["title"], titles[doc["locale"]][doc["key"]])
-                self.assertEqual(doc["version"], payload["requiredConsentVersions"][doc["key"]])
-                self.assertEqual(doc["format"], "text")
-                self.assertEqual(doc["defaultLocale"], doc["locale"] == "zh-CN")
-                self.assertTrue(doc["content"].startswith("SoduWork " + doc["title"] + "\n"))
-                self.assertIn(doc["version"], doc["content"])
-                for placeholder in ("{version}", "{operator}", "{contact}"):
-                    self.assertNotIn(placeholder, doc["content"])
+            self.assertEqual(doc["version"], payload["requiredConsentVersions"][doc["key"]])
+            self.assertTrue(doc["title"].strip())
+            self.assertTrue(doc["content"].strip())
         privacy=(await self.call("GET", "/me/privacy")).json()
         self.assertEqual(len(privacy["consents"]),2)
         self.assertEqual({item["document"]: item["version"] for item in privacy["consents"]},

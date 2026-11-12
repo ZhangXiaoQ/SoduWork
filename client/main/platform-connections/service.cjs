@@ -2,7 +2,7 @@
 const runtime = require('./runtime.cjs'), lifecycle = require('./account-lifecycle.cjs');
 const feishu = require('./feishu.cjs'), wecomQr = require('./wecom-qr.cjs');
 const wecomAuthError = require('./wecom-auth-error.cjs');
-const CLEAR = { authUrl: '', qrCode: '', userCode: '', expiresAt: 0, phase: '', account: '' };
+const CLEAR = { authUrl: '', qrCode: '', userCode: '', expiresAt: 0, phase: '', account: '', conflictId:'' };
 const LOCAL_ONLY = '已断开本机连接；平台侧授权未撤销，需要使用时请重新连接';
 // DWS 1.0.61 allows sixteen minutes for device authorization. Leave one minute
 // for credential persistence and final verification before cancelling its process.
@@ -93,13 +93,14 @@ function create({ app, identityOf, safeStorage, shell }, { loginHint, authResult
       authUrl: disconnected ? '' : cached.authUrl || '', qrCode: disconnected ? '' : job?.qr && !job.cancelled ? job.qr.read() : '',
       userCode: disconnected ? '' : cached.userCode || '', phase: disconnected ? '' : cached.phase || '',
       expiresAt: disconnected ? 0 : cached.expiresAt || 0, checkedAt: cached.checkedAt || '',
-      account: disconnected ? '' : cached.account || '' };
+      account: disconnected ? '' : cached.account || '', conflictId:disconnected ? '' : cached.conflictId || '',
+      ...(key === 'feishu' ? {registrationId:saved.registration?.id || feishu.registrationId(context.scope)} : {}) };
   }
   const status = async key => snapshot(await owner(key), key);
-  async function refresh(key) {
+  async function refresh(key, afterLogin = false) {
     const context = await owner(key, true), name = id(context, key);
     const saved = lifecycle.read(app, key, context.scope);
-    if (saved.disconnected || saved.connecting || states.get(name)?.disconnectError || jobs.has(name) || disconnects.has(name) || (key !== 'feishu' && unfinished(name).length)) return snapshot(context, key);
+    if (saved.disconnected || states.get(name)?.disconnectError || jobs.has(name) || disconnects.has(name) || (key !== 'feishu' && unfinished(name).length)) return snapshot(context, key);
     if (checks.has(name)) return checks.get(name).completion;
     const job = { controller: new AbortController(), cancelled: false, command: null };
     checks.set(name, job);
@@ -118,12 +119,16 @@ function create({ app, identityOf, safeStorage, shell }, { loginHint, authResult
         }
         if (job.cancelled) return status(key);
         await guard(context, key, saved.revision);
-        set(context, key, { scope: context.scope, state: result.connected ? 'connected' : 'needs_auth',
+        // A prior process may have exited after browser consent but before its
+        // completion callback. Only the provider's current status can settle it.
+        if (saved.connecting) lifecycle.finish(app, key, context.scope, saved.revision);
+        set(context, key, { ...CLEAR, scope: context.scope, state: result.connected ? 'connected' : 'needs_auth',
           account: result.account || '', checkedAt: new Date().toISOString(),
-          message: result.description || (result.connected ? '账号授权状态已检查；具体业务权限以平台返回为准' : '请连接你的平台账号') });
+          message: result.description || (result.connected ? '账号授权状态已检查；具体业务权限以平台返回为准'
+            : key === 'dingtalk' && afterLogin === true ? '钉钉尚未确认本机登录。请完成网页中的组织授权，再点检查连接。' : '请连接你的平台账号') });
       } catch (error) {
         if (!job.cancelled) {
-          try { await guard(context, key, saved.revision); set(context, key, { state: 'error', message: error.message, checkedAt: new Date().toISOString() }); }
+          try { await guard(context, key, saved.revision); set(context, key, { ...CLEAR, state: 'error', message: error.message, conflictId:error.conflictId || '', checkedAt: new Date().toISOString() }); }
           catch (_) { /* Discard stale results after disconnect or account switching. */ }
         }
       } finally { if (checks.get(name) === job) checks.delete(name); }
@@ -198,7 +203,14 @@ function create({ app, identityOf, safeStorage, shell }, { loginHint, authResult
         lifecycle.finish(app, key, context.scope, saved.revision);
         set(context, key, { ...CLEAR, state: result.connected ? 'connected' : 'error', account: result.account || '',
           checkedAt: new Date().toISOString(), message: result.description || '' });
-      }).catch(error => { if (active()) set(context, key, { ...CLEAR, state: 'error', message: error.message }); })
+      }).catch(async error => {
+        if (!active()) return;
+        try { await guard(context,key,saved.revision); } catch { return; }
+        if (!active()) return;
+        try { lifecycle.finish(app,key,context.scope,saved.revision); }
+        catch { error = Error('本机连接状态无法保存，请检查目录权限后重试'); }
+        set(context,key,{ ...CLEAR, state:'error', message:error.message, conflictId:error.conflictId || '' });
+      })
         .finally(() => { if (jobs.get(name) === job) jobs.delete(name); });
       return snapshot(context, key);
     }
@@ -221,14 +233,21 @@ function create({ app, identityOf, safeStorage, shell }, { loginHint, authResult
         if (!active()) return;
         await guard(context, key, saved.revision);
         job.qr?.dispose(); set(context, key, CLEAR);
-        if (result.code !== 0) {
-          if (key === 'wecom') await failWecom(result);
-          else await failDingtalk(result);
+        if (result.code !== 0 && key === 'wecom') {
+          await failWecom(result);
           return;
         }
         lifecycle.finish(app, key, context.scope, saved.revision);
         jobs.delete(name);
-        await refresh(key);
+        if (key === 'dingtalk') set(context,key,{...CLEAR,state:'connecting',message:'正在验证钉钉本机登录状态…'});
+        // DWS can persist a profile before a later login step exits with an
+        // error. Verify the active profile once, after CLI output has closed.
+        const checked = await refresh(key,true);
+        if (key === 'dingtalk' && result.code !== 0) {
+          await guard(context,key,saved.revision);
+          if (checked.connected) set(context,key,{message:'网页授权未确认，本机已有可用的钉钉登录。'});
+          else if (checked.state === 'needs_auth') set(context,key,{state:'error',message:'钉钉授权未完成，请检查连接后重试'});
+        }
       }).catch(async error => {
         if (key === 'wecom') await failWecom(error);
         else await failDingtalk(error);
@@ -277,7 +296,7 @@ function create({ app, identityOf, safeStorage, shell }, { loginHint, authResult
         if (pending.some(job => job.stopFailed)) throw Error('平台授权程序停止失败，请重试断开');
         await guard(context, key);
         lifecycle.clear(app, key, context.scope);
-        if (key === 'feishu') await feishu.disableRegistration(context.identity, context.scope, () => guard(context, key));
+        if (key === 'feishu') await feishu.disableRegistration(context.identity, context.scope, () => guard(context, key), barrier.registration);
         lifecycle.completeDisconnect(app, key, context.scope, barrier.revision);
       } catch (error) { failure = error.message || '本机连接清理尚未完成，请重试'; }
       if (failure) set(context, key, { state: 'error', disconnectError: failure });

@@ -19,6 +19,15 @@ test('Agent label retains popup semantics without a decorative chevron',()=>{
  assert.doesNotMatch(html,/class="wc-chevron"/);
  assert.match(api.contextButton({id:'permission',popup:true}),/class="wc-chevron"/);
 });
+
+test('existing workspace uses a static label while the new-draft workspace remains a picker',()=>{
+ const {api}=composer();
+ const label=api.contextButton({id:'nchatWd',valueId:'nchatWdName',label:'Work location',value:'saved-folder',readOnly:true});
+ assert.match(label,/^<span class="wc-context-button wc-context-static"/);
+ assert.doesNotMatch(label,/<button|tabindex|aria-haspopup/);
+ const picker=api.contextButton({id:'cpWorkspace',label:'Work location',popup:true});
+ assert.match(picker,/^<button/);assert.match(picker,/aria-haspopup="true"/);
+});
 test('plugin library navigation prefers the workspace router and supports detached fallback',()=>{
  const {api,window}=composer(),calls=[];
  window.WorkspaceHost={open:(...args)=>calls.push(args)};

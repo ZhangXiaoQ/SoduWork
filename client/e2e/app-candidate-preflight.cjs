@@ -21,6 +21,11 @@ function candidate(name,script,extraHtml){
   assert.equal(good.ok,true,JSON.stringify(good));
   for(const key of ['app-first-screen','app-bridge','app-context','app-database-notes','app-database-write-notes','app-startup'])assert.equal(good.checks.find(row=>row.key===key)?.ok,true,key);
   assert.equal(good.businessTested,false);assert.equal(good.firstScreen.inputCount,1);
+  assert.equal(good.checks.find(row=>row.key==='app-check-hidden').ok,true);
+  assert.equal(good.diagnosticNotice.fontSize,'12px');
+  assert.equal(good.diagnosticNotice.whiteSpace,'nowrap');
+  assert.equal(good.diagnosticNotice.color,'rgb(139, 139, 147)');
+  assert.ok(good.diagnosticNotice.height-good.diagnosticNotice.bottom<=8);
   const noContextBody=candidate('no-context-demo',"document.getElementById('status').textContent='Ready';");
   noContextBody.ui.contributions[0].source.bridge.capabilities=noContextBody.ui.contributions[0].source.bridge.capabilities.filter(value=>value!=='context.read');
   const noContext=await probe.run(app,noContextBody);
@@ -45,12 +50,13 @@ function candidate(name,script,extraHtml){
   const external=await probe.run(app,{template:'app',ui:{contributions:[{slot:'workspace.navigation',source:{type:'external',url:'https://example.invalid'}}]}});
   assert.equal(external.executed,false);assert.equal(external.checks.length,0,'untested external page has no fabricated pass');
   const handlers={};require('../main/personal-plugins').install({app,ipcMain:{handle:(name,fn)=>handlers[name]=fn}});
-  const blocked=await handlers['personal-plugin-create']({},swallowedBody);
-  assert.equal(blocked.ok,false);assert.equal(blocked.installed,false);assert.match(blocked.reason,/soduWorkApp\.connect is not a function/);
-  assert.equal(fs.readFileSync(original,'utf8'),originalBytes,'failed startup must not persist an app even through direct installation IPC');
+  assert.equal(fs.readFileSync(original,'utf8'),originalBytes,'explicit diagnostics leave the user profile unchanged');
+  const installed=await handlers['personal-plugin-create']({},swallowedBody);
+  assert.equal(installed.ok,true,'installation no longer executes or gates on the first screen');
+  assert.ok(installed.plugin);
   for(const r of [good,swallowed,brokenDom,brokenSyntax,missingAsset,consoleError]){
     const folder=path.join(app.getPath(),'diagnostics/app-preflight',r.candidate.checksum);
     assert.ok(fs.existsSync(path.join(folder,'report.json')));assert.ok(fs.existsSync(path.join(folder,'first-screen.png')));
   }
-  console.log(JSON.stringify({ok:true,evidence:root,cases:['Node test-runner environment isolation','bridge transport with undeclared context access denied','native first screen','native bridge/context','real isolated SQLite read/write/readback','caught nonexistent SDK method despite empty catch','DOM mismatch','duplicate declaration','missing resource','console startup error','external not executed','failed startup blocked at installation IPC','user profile unchanged'],businessTested:false}));
+  console.log(JSON.stringify({ok:true,evidence:root,cases:['Node test-runner environment isolation','bridge transport with undeclared context access denied','explicit native first screen','native bridge/context','real isolated SQLite read/write/readback','caught nonexistent SDK method despite empty catch','DOM mismatch','duplicate declaration','missing resource','console startup error','external not executed','installation independent of startup diagnostics','explicit diagnostics preserve user profile'],businessTested:false}));
 })().catch(error=>{console.error(error.stack);process.exitCode=1;});

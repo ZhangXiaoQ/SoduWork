@@ -105,7 +105,7 @@
       '<span class="rq-card-meta">' + owner(task) + '<span class="rq-card-trailing">' + timestamp(task, true) + '</span></span></button>' +
       (moving ? '<div class="rq-card-moving" role="status"><span class="rq-moving-spinner" aria-hidden="true"></span>正在变更状态…</div>' : acceptance ? '<button type="button" class="rq-card-decision" data-rq-open="' + id + '">' + icon('check') +
         (actionable?.action === 'review' || (!pending && acceptance) ? '核对成果并选择验收方式' : esc(R.nextStep(task, ctx).text)) + icon('arrow') + '</button>' :
-       assignable(task) ? '<button type="button" class="rq-card-assign" data-rq-assign="' + id + '">' + icon('arrow') + (task.readOnly ? '接手并安排执行' : '安排执行') + '</button>' : '') + '</article>';
+       assignable(task) ? '<button type="button" class="rq-card-assign" data-rq-assign="' + id + '">' + icon('arrow') + '安排执行</button>' : '') + '</article>';
   }
   function groups(list, state, ctx) {
     // Every board column uses actual update chronology, regardless of a saved
@@ -186,7 +186,7 @@
         (state.disabled ? '<span>（' + esc(state.reason) + '）</span>' : '') + '</button>';
     };
     return '<button type="button" role="menuitem" data-rq-open="' + id + '">打开详情</button>' +
-      (assignable(task) ? '<button type="button" role="menuitem" data-rq-assign="' + id + '">' + (task.readOnly ? '接手并安排执行' : '安排执行') + '</button>' : '') +
+      (assignable(task) ? '<button type="button" role="menuitem" data-rq-assign="' + id + '">安排执行</button>' : '') +
       (R.canTriage(task) ? ['intake', 'clarifying', 'ready'].filter(key => key !== R.stage(task)).map(key =>
         '<button type="button" role="menuitem" data-rq-move="' + id + '" data-rq-target="' + key + '">' +
         ({intake:'放回收集箱', clarifying:'标记待补充', ready:'准备好，移到待开始'})[key] + '</button>').join('') : '') +

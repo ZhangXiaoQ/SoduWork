@@ -347,6 +347,105 @@ test('accepted Hub locale hydration and config patches reconcile the current ren
   assert.deepEqual(calls.at(-1), ['zh-CN', false, 'zh-CN']);
 });
 
+test('an explicit local locale survives stale per-device Hub defaults during startup', async () => {
+  const puts = [], calls = [];
+  const api = {
+    online: true,
+    registerClient: async () => ({ ok: true }),
+    getTasksSnapshot: async () => ({ online: true, items: [] }),
+    getConfig: async () => ({ locale: 'en-US', theme: 'from-hub' }),
+    syncConfig: async cfg => { puts.push(JSON.parse(JSON.stringify(cfg))); return true; },
+    connectWS: () => () => {},
+  };
+  const f = fixture(api, {
+    soduwork_work_cfg_v5: JSON.stringify({ locale: 'en-US' }),
+    soduwork_work_cfg_v5_locale: 'zh-CN',
+    soduwork_work_cfg_v5_locale_explicit: '1',
+  });
+  f.context.SoduWorkI18n = { normalize: value => value, setLocale(value, options) {
+    calls.push([value, options.persist, options.broadcast]);
+  } };
+  await f.initData(); await f.Store._startupPromise; await settle();
+  assert.equal(f.Store.cfg.locale, 'zh-CN');
+  assert.equal(f.Store.cfg.theme, 'vivid', 'local config remains intact while the locale is repaired');
+  assert.equal(puts.at(-1)?.locale, 'zh-CN');
+  assert.equal(calls.length, 1, 'stale Hub locale must not trigger a renderer switch');
+});
+
+test('a locale changed after startup is protected from a late Hub patch', async () => {
+  const api = {
+    online: true,
+    registerClient: async () => ({ ok: true }),
+    getTasksSnapshot: async () => ({ online: true, items: [] }),
+    getConfig: async () => ({ locale: 'zh-CN' }),
+    connectWS: () => () => {},
+  };
+  const f = fixture(api, {
+    soduwork_work_cfg_v5: JSON.stringify({ locale: 'zh-CN' }),
+    soduwork_work_cfg_v5_locale: 'zh-CN',
+    soduwork_work_cfg_v5_locale_explicit: '1',
+  });
+  f.context.SoduWorkI18n = { setLocale() {} };
+  await f.initData(); await f.Store._startupPromise;
+  f.values.set('soduwork_work_cfg_v5_locale', 'ja-JP');
+  f.values.set('soduwork_work_cfg_v5_locale_explicit', '1');
+  f.Store.cfg.locale = 'ja-JP';
+  f.Store._applyConfigPatch({ locale: 'en-US', theme: 'remote' });
+  assert.equal(f.Store.cfg.locale, 'ja-JP');
+  assert.equal(f.Store.cfg.theme, 'remote');
+});
+
+test('a mirror without local config does not block the first remote locale hydration', async () => {
+  const calls = [];
+  const api = {
+    online: true,
+    registerClient: async () => ({ ok: true }),
+    getTasksSnapshot: async () => ({ online: true, items: [] }),
+    getConfig: async () => ({ locale: 'zh-CN' }),
+    connectWS: () => () => {},
+  };
+  const f = fixture(api, { soduwork_work_cfg_v5_locale: 'en-US' });
+  f.context.SoduWorkI18n = { setLocale(value, options) { calls.push([value, options.persist]); } };
+  await f.initData(); await f.Store._startupPromise;
+  assert.equal(f.Store.cfg.locale, 'zh-CN');
+  assert.deepEqual(calls, [['zh-CN', false]]);
+  assert.equal(f.values.get('soduwork_work_cfg_v5_locale_source'), 'hub');
+});
+
+test('legacy non-default mirror-only locale remains recoverable after upgrade', async () => {
+  const puts = [];
+  const api = {
+    online: true,
+    registerClient: async () => ({ ok: true }),
+    getTasksSnapshot: async () => ({ online: true, items: [] }),
+    getConfig: async () => ({ locale: 'en-US' }),
+    syncConfig: async cfg => { puts.push(cfg); return true; },
+    connectWS: () => () => {},
+  };
+  const f = fixture(api, { soduwork_work_cfg_v5_locale: 'zh-CN' });
+  await f.initData(); await f.Store._startupPromise; await settle();
+  assert.equal(f.Store.cfg.locale, 'zh-CN');
+  assert.equal(puts.at(-1)?.locale, 'zh-CN');
+});
+
+test('remote locale hydration remains authoritative for profiles without an explicit local choice', async () => {
+  const firstApi = {
+    online: true,
+    registerClient: async () => ({ ok: true }),
+    getTasksSnapshot: async () => ({ online: true, items: [] }),
+    getConfig: async () => ({ locale: 'zh-CN' }),
+    connectWS: () => () => {},
+  };
+  const values = new Map([['soduwork_work_cfg_v5_locale', 'en-US']]);
+  const first = fixture(firstApi, Object.fromEntries(values));
+  await first.initData(); await first.Store._startupPromise;
+  first.values.forEach((value, key) => values.set(key, value));
+  const secondApi = { ...firstApi, getConfig: async () => ({ locale: 'en-US' }) };
+  const second = fixture(secondApi, Object.fromEntries(values));
+  await second.initData(); await second.Store._startupPromise;
+  assert.equal(second.Store.cfg.locale, 'en-US');
+});
+
 const settle = () => new Promise(resolve => setImmediate(resolve));
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
 async function connectedFixture() {

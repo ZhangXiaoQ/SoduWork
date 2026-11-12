@@ -211,6 +211,7 @@ SoduWork는 대화, 이슈 관리, 도구 및 에이전트 실행 기능을 제�
 
 
 def required_versions():
+    """Legacy fallback only; current registration versions come from documents()."""
     return {"terms": TERMS_VERSION, "privacy": PRIVACY_VERSION}
 
 
@@ -266,5 +267,12 @@ async def legacy_documents(session):
             "configured": cfg["configured"]}
 
 
-async def documents(session):
-    return await legacy_documents(session)
+async def documents(session, *, active=None):
+    from .legal_publications import active_versions, public_documents
+    active = await active_versions(session) if active is None else active
+    result = await legacy_documents(session)
+    for kind, row in active.items():
+        result["documents"] = [item for item in result["documents"] if item["key"] != kind] + public_documents(row)
+        result["requiredConsentVersions"][kind] = row.version
+    result["configured"] = result["configured"] or all(kind in active for kind in ("terms", "privacy"))
+    return result

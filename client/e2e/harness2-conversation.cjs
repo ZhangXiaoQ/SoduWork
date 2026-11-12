@@ -243,7 +243,9 @@ if (typeof electron === 'string') {
     await js(`NativeChat.enter('','pi-control',{adapterId:'pi'});`);
     await until('Boolean(document.querySelector(".access-request")?.checkVisibility())', 'Pi permission control');
     const permissionShape = await js(`[...document.querySelectorAll('.access-request [data-ui-value]')].map(el=>({choice:el.dataset.uiValue,label:el.textContent}))`);
-    assert.deepEqual(permissionShape.map(row => row.choice), ['deny', 'session', 'once']);
+    // The shared policy exposes explicit full-access escalation, not an implicit
+    // session grant. Verify all bases keep the current common permission UI.
+    assert.deepEqual(permissionShape.map(row => row.choice), ['deny', 'once', 'full']);
 
     for (const adapterId of ['opencode', 'harness2']) {
       const fixture = await runner(adapterId), { handle, session } = fixture;
@@ -258,6 +260,7 @@ if (typeof electron === 'string') {
       await click('.access-request [data-ui-value=once]');
       await until('!document.querySelector(".access-request")?.checkVisibility()', 'approval settled');
       assert.equal(fixture.calls.filter(row => row.op === 'job.permission').length, 1);
+      assert.equal(fixture.calls.find(row => row.op === 'job.permission').payload.decision, 'once');
       fixture.finish();
       await turn.completion;
       await until(() => fixture.terminal.length > 0, 'terminal snapshot');

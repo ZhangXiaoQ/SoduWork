@@ -54,6 +54,7 @@ async def bootstrap_example(session: AsyncSession, provenance_api) -> None:
         "spreadsheet-analyst.json",
         "viral-video-studio.json",
         "web-collect.json",
+        "feishu.soduwork-plugin", "dingtalk.soduwork-plugin", "wecom.soduwork-plugin",
     ) + platform_archives(root):
         path = os.path.join(root, filename)
         if not os.path.isfile(path):

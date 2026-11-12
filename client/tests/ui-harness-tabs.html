@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>双标签与对话皮肤视觉验收</title>
+<!-- Verify task, execution, chat, and console tabs using production styles across skins. -->
+<link rel="stylesheet" href="../theme/variables.css">
+<link rel="stylesheet" href="../components/panels/panels-detail.css">
+<link rel="stylesheet" href="../components/panels/panels-desk-session.css">
+<link rel="stylesheet" href="../vendor/xterm/xterm.css">
+<link rel="stylesheet" href="../components/panels/console.css">
+<style>
+  body{margin:0;padding:26px;background:var(--bg-1);font-family:var(--font-ui);color:var(--ink)}
+  .case{max-width:1180px;margin:0 auto 34px;padding:18px;border:1px dashed var(--line);border-radius:14px;background:var(--bg-0)}
+  .case>h4{margin:0 0 12px;font-size:13px;color:var(--ink-4);font-weight:600}
+</style>
+</head>
+<body>
+
+<div class="case" id="caseDetail">
+  <h4>任务详情 · 双标签（默认进展记录 = 人工任务形态）</h4>
+  <div class="detail-work-tabs" role="tablist">
+    <button type="button" role="tab" data-work-tab="journey" aria-selected="false">执行情况<small>阶段 · 证据 · 交付</small></button>
+    <button type="button" role="tab" data-work-tab="progress" aria-selected="true" class="on">进展记录<em>4</em><small>每天一句 · 协作讨论</small></button>
+  </div>
+  <div class="detail-work-layout is-tab-progress">
+    <main class="detail-process"><div style="height:220px;display:grid;place-items:center;border:1px solid var(--line-2);border-radius:14px;color:var(--ink-4)">（任务进程全链路挂载区）</div></main>
+    <aside class="detail-progress-side">
+      <div class="detail-progress-body">
+        <div class="col-label">当前进展<span class="col-label-hint">2 天 · 4 条</span></div>
+        <div class="prog-chat"><div class="prog-chat-list">
+          <div class="chat-day"><span>昨天 · 2 条</span></div>
+          <div class="chat-sys"><div class="chat-sys-txt"><b>胡耕永</b> 创建了任务<span class="chat-sys-tm">09:12</span></div></div>
+          <div class="chat-msg is-me"><div class="chat-main"><div class="chat-who"><b>我</b><span class="chat-tm">18:40</span></div>
+            <div class="chat-bubble">和综合办公对齐了日报模板，明天开始按新格式填。</div></div><span class="chat-ava">我</span></div>
+          <div class="chat-day"><span>今天 · 2 条</span></div>
+          <div class="chat-msg"><span class="chat-ava is-ai">AI</span><div class="chat-main"><div class="chat-who"><b>阿码</b><em class="chat-cli">Pi</em><span class="chat-tm">10:05</span></div>
+            <div class="chat-bubble">已把上周数据汇总进模板，缺 8/18 的两项指标，先按空位保留。</div></div></div>
+          <div class="chat-msg is-me"><div class="chat-main"><div class="chat-who"><b>我</b><span class="chat-tm">11:20</span></div>
+            <div class="chat-bubble">指标我下午补，先把格式发给部门群预览。</div></div><span class="chat-ava">我</span></div>
+        </div></div>
+        <div class="prog-composer">
+          <textarea class="prog-input" rows="2" placeholder="今天推进了什么？写一句留个记号，Enter 发送"></textarea>
+          <div class="prog-send-row"><span class="prog-tip">Enter 发送 · Shift+Enter 换行</span>
+          <button class="prog-log-btn">发送</button></div>
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<div class="case" id="caseDesk">
+  <h4>AI 办公区 · 双标签 + 对话两种皮肤（点「控制台」切换）</h4>
+  <div class="dk-task-tabs" role="tablist">
+    <button type="button" role="tab" data-dktab="flow" class="on" aria-selected="true">任务执行全链路<small>阶段 · 证据 · 交付</small></button>
+    <button type="button" role="tab" data-dktab="chat" aria-selected="false">对话<small>实时会话 · 必要时介入</small></button>
+    <button type="button" role="tab" data-dktab="console" aria-selected="false">控制台<small>真终端 · 实况 · 原始输出</small></button>
+  </div>
+  <div class="dk-task-layout is-tab-flow">
+    <main class="dk-task-context"><div style="height:200px;display:grid;place-items:center;border:1px solid var(--line-2);border-radius:14px;color:var(--ink-4)">（任务执行全链路挂载区）</div></main>
+    <aside class="dk-task-chat">
+      <section class="dks-panel" id="dksPanel" aria-label="AI 执行会话">
+        <header class="dks-head"><div class="dks-headmark"><svg viewBox="0 0 24 24"><path d="M4 14h3l2-7 4 11 2-8 2 4h3"/></svg></div>
+          <div class="dks-heading"><b>执行会话</b><span>自动运行 · 默认无需值守</span></div>
+          <div class="dks-viewmode" role="group"><button type="button" class="on" disabled>对话</button><button type="button" title="打开真正的终端">控制台</button></div>
+          <span class="dks-state is-running">正在执行</span></header>
+        <div class="dks-runtime"><span><i>底座</i>pi</span><span><i>模型</i>dev-coding-large-agent-soduwork</span><span><i>执行机</i>DESKTOP-C28C287</span></div>
+        <div class="dks-stream">
+          <div class="dks-step"><i></i><b>第 8 步 · 校验产物完整性</b><span>16:53:22</span></div>
+          <details class="dks-tool"><summary><span class="dks-toolname">bash</span><code class="dks-toolprev">cd work && python -c "import json; json.load(open('workflow-decision.json'))" && echo valid JSON</code><span class="dks-tooltime">16:53:22</span><svg class="dks-toolchev" viewBox="0 0 24 24"><path d="m9 7 5 5-5 5"/></svg></summary>
+            <pre>cd work && python -c "import json; json.load(open('workflow-decision.json'))" && echo valid JSON</pre></details>
+          <details class="dks-tool"><summary><span class="dks-toolname">write</span><code class="dks-toolprev">Successfully wrote 1253 bytes to .../workflow-decision.json</code><span class="dks-tooltime">16:53:21</span><svg class="dks-toolchev" viewBox="0 0 24 24"><path d="m9 7 5 5-5 5"/></svg></summary>
+            <pre>Successfully wrote 1253 bytes</pre></details>
+          <article class="dks-message"><span class="dks-avatar">AI</span><div class="dks-message-main">
+            <span class="dks-rowmeta">AI 回复 · 16:53:24</span>
+            <div class="dks-bubble dks-md" id="mdDemo"></div></div></article>
+          <div class="dks-step"><i></i><b>第 9 步 · 汇总节点结论</b><span>16:53:30</span></div>
+          <details class="dks-tool is-output" open><summary><span class="dks-toolname">输出</span><code class="dks-toolprev">===json validate=== valid JSON</code><span class="dks-tooltime">16:53:31</span><svg class="dks-toolchev" viewBox="0 0 24 24"><path d="m9 7 5 5-5 5"/></svg></summary>
+            <pre>===json validate===
+valid JSON
+outcome=blocked reasonCode=no_reproducible_issue</pre></details>
+        </div>
+        <div class="dks-compose"><div class="dks-compose-copy"><b>必要时再介入</b><span>补充要求会排在当前步骤之后，不会打断正在执行的动作。</span></div>
+          <div class="dks-compose-row"><input placeholder="补充要求（可选）"><button>发送</button></div></div>
+        <footer class="dks-actions"><button class="dks-terminal"><svg viewBox="0 0 24 24"><path d="m5 7 4 5-4 5M11 17h8"/></svg>打开真实会话</button>
+          <span class="dks-actiontip"></span><button class="dks-stop">停止执行</button></footer>
+      </section>
+    </aside>
+    <section class="dk-task-console" role="tabpanel" aria-label="控制台">
+      <div class="con-panel con-embed show">
+        <div class="con-head"><span class="con-lamp con-lamp-run"></span>
+          <b class="con-title">Bug 示例：README 中「数据源说明」小节标题层级错误</b>
+          <span class="con-meta">Pi · 第 1 段会话</span>
+          <span class="con-tabs"><button class="con-tab is-on">终端</button><button class="con-tab">实况</button><button class="con-tab">原始</button></span>
+          <span class="con-acts"><button class="con-btn is-on">跟随</button></span>
+        </div>
+        <div class="con-body"><div class="con-term-host" style="background:#0d1117;min-height:420px;padding:12px;color:#c9d1d9;font:12px/1.7 var(--font-mono)">
+PS C:\SoduWorkllin-production-data-analysis&gt; git status<br>On branch fix/tmsxxxx<br>nothing to commit, working tree clean<br>PS C:\SoduWorkllin-production-data-analysis&gt; <span style="background:#c9d1d9;color:#0d1117">&nbsp;</span>
+        </div></div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+/* Match production tab switching through class changes only. */
+document.querySelectorAll('[data-work-tab]').forEach(b => b.onclick = () => {
+  const tab = b.getAttribute('data-work-tab');
+  const layout = document.querySelector('#caseDetail .detail-work-layout');
+  layout.classList.toggle('is-tab-journey', tab === 'journey');
+  layout.classList.toggle('is-tab-progress', tab === 'progress');
+  document.querySelectorAll('[data-work-tab]').forEach(x => x.classList.toggle('on', x === b));
+});
+document.querySelectorAll('[data-dktab]').forEach(b => b.onclick = () => {
+  const tab = b.getAttribute('data-dktab');
+  const layout = document.querySelector('#caseDesk .dk-task-layout');
+  ['flow','chat','console'].forEach(k => layout.classList.toggle('is-tab-' + k, tab === k));
+  document.querySelectorAll('[data-dktab]').forEach(x => x.classList.toggle('on', x === b));
+});
+</script>
+<script src="../vendor/markdown/marked.umd.js"></script>
+<script src="../vendor/markdown/purify.min.js"></script>
+<script>
+const MD = `Both deliverables are in place at the exact required paths:
+
+- \`requirements.md\` ✅
+- \`workflow-decision.json\` ✅ (valid UTF-8 JSON, schemaVersion=1, outcome=blocked)
+
+## Summary of the node outcome
+
+**Execution pre-check performed honestly** — I inspected the actual current repo state and found that the described demo bug does **not** reproduce:
+
+1. The three subsections are already level-3 headings
+2. Nesting under the parent section is correct
+
+\`\`\`bash
+cd work && python -c "import json; json.load(open('workflow-decision.json'))"
+\`\`\``;
+document.getElementById('mdDemo').innerHTML = DOMPurify.sanitize(marked.parse(MD));
+</script>
+</body>
+</html>

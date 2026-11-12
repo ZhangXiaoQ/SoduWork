@@ -8,7 +8,7 @@ the projection itself never grants transcript write access.
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -36,6 +36,7 @@ class PersonalConversationRelay(Base):
     source_epoch: Mapped[str] = mapped_column(String(180))
     source_revision: Mapped[int] = mapped_column(Integer)
     instruction: Mapped[str] = mapped_column(Text)
+    content_ref: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     phase: Mapped[str] = mapped_column(String(16), default="prepared")
     reason: Mapped[str] = mapped_column(String(500), default="")
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -74,10 +75,15 @@ class AccountConversation(Base):
     source_epoch: Mapped[str] = mapped_column(String(180), default="")
     source_revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     source_digest: Mapped[str] = mapped_column(String(64), default="")
+    storage_mode: Mapped[str] = mapped_column(String(16), default="legacy", server_default="legacy")
+    content_ref: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     title: Mapped[str] = mapped_column(String(200), default="")
+    message_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     state: Mapped[str] = mapped_column(String(24), default="idle")
     archived: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     deleted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    # Zero denotes a source snapshot predating explicit account lifecycle intent.
+    lifecycle_revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),

@@ -55,7 +55,8 @@ def can_continue_execution(task: models.Task, client: models.Client | None) -> b
 
     Shared viewers do not acquire execution authority. An account-owned
     requirement may be continued from that account's devices only when its
-    execution context pins a remote Runner; it never selects a fallback host.
+    execution context pins a Runner; local/remote is relative to the viewing
+    device, not an account authorization boundary. Never select a fallback host.
     """
     if not client or task.archived_at is not None:
         return False
@@ -63,8 +64,19 @@ def can_continue_execution(task: models.Task, client: models.Client | None) -> b
         return True
     context = (getattr(task, "work_routing", None) or {}).get("executionContext") or {}
     runner = context.get("runner") or {}
+    # A requirement dispatched from the owning PC is projected as "local".
+    # Its other account devices still address the exact registered Runner.
+    # Sending revalidates the frozen ExecutionSession in task_continuation.
+    from .task_requirements import KINDS
+    local_requirement = (
+        task.kind in KINDS and runner.get("mode") == "local"
+        and bool(task.owner_client_id)
+        and runner.get("clientId") == task.owner_client_id
+        and str((context.get("agent") or {}).get("id") or "").startswith(
+            "runner:" + str(runner.get("runnerId") or "") + ":")
+    )
     return bool(client.user_ref and str(task.owner_user_id or "") == str(client.user_ref)
-                and runner.get("mode") == "remote" and runner.get("runnerId"))
+                and (runner.get("mode") == "remote" or local_requirement) and runner.get("runnerId"))
 
 
 def owner_clause(client: models.Client | None):

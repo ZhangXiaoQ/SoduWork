@@ -35,6 +35,7 @@ _DETAILS = {
     "response_truncated": "模型输出被截断；请检查模型输出上限后重试。",
     "response_empty": "模型未返回完整有效的文本内容；请检查模型服务后重试。",
     "response_limit": "模型返回内容超过推演允许范围；请缩小本轮任务或调整模型输出。",
+    "context_overflow": "模型上下文超限；完整历史已保留，将通过现有会话接续机制恢复。",
     "proposal_json": "模型返回的改进方案不是有效的纯 JSON；本轮未进入最终执行。",
     "proposal_schema": "改进方案的字段或数据类型不符合要求；本轮未进入最终执行。",
     "proposal_scope": "改进方案包含不允许的文件或路径；本轮未进入最终执行。",
@@ -117,7 +118,7 @@ def failure_message(exc: Exception, stage: str, secret: str = "") -> str:
     if isinstance(exc, json.JSONDecodeError) or any(marker in text for marker in (
             "endoffileexpected", "configinvaliderror", "jsonparseerror",
             "json parse error", "invalid json", "unexpected end of json")):
-        detail = "执行组件配置无法解析；请检查 OpenCode 配置格式或修复执行组件。"
+        detail = "执行器配置无法解析；请检查 Harness² 模型配置或修复内置执行器。"
     elif any(marker in text for marker in (
             "providermodelnotfounderror", "model_not_found", "model not found",
             "model does not exist")):
@@ -152,9 +153,9 @@ def failure_message(exc: Exception, stage: str, secret: str = "") -> str:
     elif name == "ProcessCleanupError" or any(marker in text for marker in ("cleanup failed", "readers still active")):
         detail = "执行组件清理未完成；请确认本轮进程已结束后重试。"
     elif "acp agent exited early" in text:
-        detail = "OpenCode 执行组件提前退出；请检查组件安装、配置及工作目录权限。"
+        detail = "Harness² 独立执行器提前退出；请检查内置文件、配置及工作目录权限。"
     elif "acp agent failed to start" in text:
-        detail = "OpenCode 执行组件无法启动；请检查组件安装和文件权限。"
+        detail = "Harness² 独立执行器无法启动；请检查内置文件和目录权限。"
     else:
         detail = f"出现未识别的错误（{safe_name}）；请检查模型配置或修复执行组件后重试。"
 

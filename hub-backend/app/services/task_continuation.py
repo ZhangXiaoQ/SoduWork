@@ -33,6 +33,18 @@ async def prepare(session, task, ctx: dict, ref: str) -> dict:
     # the authority when present; do not rewrite history or infer a new owner.
     original_client = str((identity.get("runnerClientId") or "") if identity.get("runnerId")
                           else execution.runner_client_id or "")
+    context = dict(meta.get("executionContext") or {})
+    original_runner = dict(context.get("runner") or {})
+    # Older read-through snapshots filled an empty cloud client with the
+    # requesting device, including the display identity. Only the frozen,
+    # server-resolved dispatch context can disambiguate this known projection.
+    if (original_client and original_client == task.owner_client_id
+            and identity.get("runnerId") == rid
+            and original_runner.get("mode") == "remote"
+            and original_runner.get("id") == rid
+            and original_runner.get("runnerId") == rid
+            and (context.get("agent") or {}).get("id") == "runner:" + rid + ":" + execution.engine):
+        original_client = str(original_runner.get("clientId") or "")
     owner = await session.get(models.Client, task.owner_client_id)
     if (owner is None or owner.auth_state != "active"
             or (task.owner_user_id and task.owner_user_id != owner.user_ref)):
@@ -61,7 +73,6 @@ async def prepare(session, task, ctx: dict, ref: str) -> dict:
         orgs = await environment_service.task_runner_orgs(session, task)
         if not runner_hub.in_scope(runner, clients, orgs):
             raise ContinuationError("当前需求已无权使用原执行机")
-    context = dict(meta.get("executionContext") or {})
     cli = str(execution.engine or (context.get("agent") or {}).get("cli") or "")
     if not cli:
         raise ContinuationError("原执行底座记录不完整，请重新安排执行")

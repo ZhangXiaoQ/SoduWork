@@ -18,11 +18,15 @@ import './layout-safety.css'
 import './console-theme.css'   // Shared operations-inspired colors and controls.
 import './login-workbench.css' // Login-specific workspace layout.
 import './landing-product.css' // Prelogin product page independent of login and administration views.
+import './enlarge-theme.css'   // Enlarge theme (issue #27); loads after the base stylesheets it adjusts.
+
+import { initScale } from './enlarge-theme.js'
 
 try {
   const savedTheme = localStorage.getItem('soduwork-hub-theme')
   if (savedTheme === 'dark' || savedTheme === 'light') document.documentElement.setAttribute('data-theme', savedTheme)
 } catch (_e) {}
+initScale() // Apply the saved display-scale preference before first paint.
 
 createRoot(document.getElementById('root')).render(<App />)
 

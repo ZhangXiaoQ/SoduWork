@@ -67,9 +67,17 @@ test('workspace chevron can be removed without changing popup behavior', () => {
 
 test('goal status rail shares the task surface below the add cap', () => {
   assert.match(chatCss, /\.nchat-compose-shell\{[^}]*gap:7px/);
-  assert.match(chatCss, /\.nchat-footin\.nchat-compose-shell\{width:min\(780px,100%\)\}/);
+  assert.match(chatCss, /\.nchat-main\{[^}]*--nchat-column-max:780px/);
+  assert.match(chatCss, /\.nchat-footin\{width:min\(var\(--nchat-column-max\),100%\)/);
   assert.match(intentCss,
     /\.nqueue-goal-slot > \.wi-rail \{[^}]*min-height: 34px;[^}]*border-radius: 16px 16px 0 0/s);
+});
+
+test('transcript and composer share column width and responsive gutters without scrollbar centering drift', () => {
+  assert.match(chatCss, /\.nchat-inner\{width:min\(var\(--nchat-column-max\),calc\(100cqw - 2 \* var\(--nchat-column-gutter\)\)\)/);
+  assert.match(chatCss, /margin:0 0 0 max\(var\(--nchat-column-gutter\),calc\(\(100cqw - var\(--nchat-column-max\)\) \/ 2\)\)/);
+  assert.match(chatCss, /\.nchat-foot\{[^}]*padding:10px var\(--nchat-column-gutter\) 20px/);
+  assert.match(chatCss, /@container chat-column \(max-width:380px\)\{\.nchat-inner,\.nchat-foot\{--nchat-column-gutter:10px\}\}/);
 });
 
 test('rotating placeholder yields to composer overlays', () => {

@@ -1,8 +1,10 @@
 """Regression coverage for isolated Runner heartbeat persistence failures."""
 
+import asyncio
+import json
 import time
 import unittest
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, ExitStack
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -159,6 +161,91 @@ class RunnerHeartbeatPersistenceTests(unittest.IsolatedAsyncioTestCase):
 
                 self.assertEqual(runner._registry_write, previous_write)
                 session.commit.assert_not_awaited()
+
+    async def test_background_identity_and_lifecycle_rejections_close_the_socket(self):
+        for rejection, code in ((RunnerIdentityConflict(), 4409),
+                                (ValueError("runner retired"), 1011)):
+            with self.subTest(rejection=type(rejection).__name__):
+                socket = SimpleNamespace(send_json=AsyncMock(), close=AsyncMock())
+                with patch.object(runner_ws, "_persist_runner_heartbeat",
+                                  AsyncMock(side_effect=rejection)):
+                    self.assertFalse(await runner_ws._heartbeat_write(
+                        SimpleNamespace(id="rejected"), socket, force=True))
+                self.assertEqual(socket.close.call_args.kwargs["code"], code)
+                if code == 4409:
+                    self.assertEqual(socket.send_json.call_args.args[0]["code"],
+                                     RunnerIdentityConflict.code)
+
+    async def test_waiting_heartbeat_write_does_not_block_content_reply_or_duplicate_writes(self):
+        from app.services import runner_hub, cluster_runtime
+
+        write_started, write_cancelled = asyncio.Event(), asyncio.Event()
+        incoming = asyncio.Queue()
+        resolved = asyncio.get_running_loop().create_future()
+        report = {"schemaVersion": 3, "reportedAt": int(time.time()), "items": []}
+
+        class Socket:
+            client = SimpleNamespace(host="127.0.0.1")
+            headers = {}
+            accept = AsyncMock()
+            send_json = AsyncMock()
+            close = AsyncMock()
+
+            async def receive_json(self):
+                return {"op": "hello", "runnerId": "heartbeat-reader"}
+
+            async def receive(self):
+                return await incoming.get()
+
+        socket = Socket()
+        runner = runner_hub._Runner(socket, {"runnerId": "heartbeat-reader"})
+        runner._waiters["history-read"] = resolved
+        runner._registry_write = _due_write()
+        runner.send = AsyncMock()
+        session = SimpleNamespace(commit=AsyncMock())
+
+        async def blocked_write(*args, **kwargs):
+            write_started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                write_cancelled.set()
+
+        with ExitStack() as stack:
+            for target, name, replacement in (
+                (runner_ws, "SessionLocal", _session_factory(session)),
+                (runner_ws, "_auth", AsyncMock(return_value=(True, ""))),
+                (runner_ws, "authenticated_identity", AsyncMock(return_value=True)),
+                (runner_hub, "add", lambda *args: runner),
+                (runner_registry, "record", AsyncMock()),
+                (cluster_runtime, "register", AsyncMock()),
+                (runner_ws, "_reconcile_runner_restart", AsyncMock()),
+                (runner_ws, "_drop_runner", AsyncMock()),
+            ):
+                stack.enter_context(patch.object(target, name, replacement))
+            persist = stack.enter_context(patch.object(runner_ws, "_persist_runner_heartbeat",
+                                                       AsyncMock(side_effect=blocked_write)))
+            handler = asyncio.create_task(runner_ws.runner_ws(socket))
+            try:
+                await incoming.put({"text": json.dumps({"op": "beat", "capabilities": report})})
+                await asyncio.wait_for(write_started.wait(), 1)
+                await incoming.put({"text": json.dumps({"op": "beat", "busy": 2, "capabilities": report})})
+                await incoming.put({"text": json.dumps({"op": "reply", "id": "history-read",
+                                                       "ok": True, "data": {"history": "ready"}})})
+                reply = await asyncio.wait_for(asyncio.shield(resolved), 1)
+                self.assertTrue(reply["ok"])
+                self.assertEqual(runner.busy, 2)
+                self.assertEqual(persist.await_count, 1)
+                self.assertTrue(persist.call_args.kwargs["force"])
+                self.assertFalse(write_cancelled.is_set())
+                await incoming.put({"type": "websocket.disconnect"})
+                await asyncio.wait_for(handler, 1)
+                self.assertTrue(write_cancelled.is_set())
+            finally:
+                handler.cancel()
+                await asyncio.gather(handler, return_exceptions=True)
+                if not resolved.done():
+                    resolved.cancel()
 
 
 if __name__ == "__main__":

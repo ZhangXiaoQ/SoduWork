@@ -5,6 +5,26 @@ from unittest.mock import AsyncMock, patch
 from app import automation_models as am, models
 from app.services import ai_exec, ai_remote, model_catalog, runner_hub, task_continuation, task_rework
 from tests.test_rework_lifecycle import _Base
+import unittest
+
+
+class ReadThroughIdentityTests(unittest.IsolatedAsyncioTestCase):
+    async def test_remote_reader_uses_registry_and_never_requesting_device(self):
+        from app.services import execution_sessions
+        task = SimpleNamespace(id="task", owner_client_id="phone", owner_user_id="owner")
+        node = SimpleNamespace(client_id="", org_id="org", owner_user_id="owner",
+            auth_state="active", management_state="")
+        owner = SimpleNamespace(user_ref="owner", auth_state="active")
+        session = SimpleNamespace(get=AsyncMock(side_effect=[node, owner]))
+        with patch.object(execution_sessions, "ingest_runner_snapshots", AsyncMock(return_value=[])) as ingest:
+            await execution_sessions.ingest_live_snapshot(session, task, "ref", {"ok": True, "runnerId": "cloud"})
+            self.assertEqual(ingest.call_args.args[1].client_id, "")
+            self.assertEqual(ingest.call_args.args[1].org_id, "org")
+            node.owner_user_id = "other-user"
+            session.get = AsyncMock(side_effect=[node, owner])
+            ingest.reset_mock()
+            await execution_sessions.ingest_live_snapshot(session, task, "ref", {"ok": True, "runnerId": "cloud"})
+            ingest.assert_not_awaited()
 
 
 class DirectContinuationTests(_Base):
@@ -125,6 +145,35 @@ class DirectContinuationTests(_Base):
         self.assertEqual(result["code"], "RUNNER_OFFLINE")
         discovery.assert_not_called()
         rpc.assert_not_called()
+
+    async def test_cloud_reader_projection_uses_frozen_dispatch_without_changing_history(self):
+        async with self.sessions() as session:
+            task, owner, node, execution, runner = await self.seed(session)
+            node.client_id = runner.client_id = ""
+            node.owner_user_id = runner.owner_user_id = owner.user_ref
+            execution.runner_client_id = owner.id
+            execution.metadata_ = {"executionIdentity": {
+                "runnerId": node.id, "runnerClientId": owner.id},
+                "executionContext": {"agent": {"id": "runner:" + node.id + ":pi"},
+                    "runner": {"mode": "remote", "id": node.id, "runnerId": node.id}}}
+            model = {"base": "https://fixture.invalid", "key": "fixture", "model": "selected-model"}
+            with patch.object(runner_hub, "get", return_value=runner), \
+                 patch.object(model_catalog, "resolve", AsyncMock(return_value=model)) as resolve:
+                result = await task_continuation.prepare(session, task, {"cfg": {}}, "original-ref")
+                self.assertEqual(result["cfg"]["_continuationRunnerIdentity"]["client_id"], "")
+                self.assertEqual(execution.metadata_["executionIdentity"]["runnerClientId"], owner.id)
+                resolve.reset_mock()
+                node.client_id = runner.client_id = "another-pc"
+                with self.assertRaises(task_continuation.ContinuationError):
+                    await task_continuation.prepare(session, task, {}, "original-ref")
+                resolve.assert_not_awaited()
+
+    def test_empty_cloud_client_is_frozen_instead_of_backfilled_by_reader(self):
+        from app.services import execution_identity
+        identity = execution_identity.from_dispatch({"runnerId": "cloud", "runnerClientId": ""})
+        result = execution_identity.from_snapshot(identity, {},
+            SimpleNamespace(id="cloud", client_id="reader-device"))
+        self.assertEqual(result["runnerClientId"], "")
 
     def test_reconnected_foreign_identity_never_receives_credentials(self):
         runner = SimpleNamespace(id="original-pc", client_id="foreign-pc")

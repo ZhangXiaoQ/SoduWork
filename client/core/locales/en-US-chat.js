@@ -1,5 +1,7 @@
 (function (global) {
   const messages = {
+    "始终允许": "Always allow",
+    "内容由 AI 生成，请核实重要信息": "AI-generated content; please verify important information",
     "审批权限列表暂时不可用": "Review permissions are temporarily unavailable",
     "登录后即可整理会话": "Sign in to organize conversations",
     "用时": "Time",
@@ -240,7 +242,7 @@
     'Codex 模型与推理设置': 'Codex model and reasoning settings', '对话与图片模型选择': 'Choose chat and image models', '本机 Codex 模型目录暂时无法读取，可继续使用默认模型': 'Cannot read the local Codex model catalog. You can use the default model.',
     '低延迟办公与连续对话': 'Fast office work and ongoing chats', '深度工程与完整交付': 'Advanced engineering and complete delivery', '个人账号': 'Personal account', '企业模型': 'Enterprise models',
     '云端': 'Cloud', '个底座': 'runtimes', '个可用': 'available', '当前底座': 'Current runtime', '更多底座': 'More runtimes', '暂时没有可用执行底座': 'No runtimes available', '暂时没有可用的执行底座': 'No runtimes are currently available', '执行底座': 'Runtime', '选择本次会话的 Agent 底座': 'Choose the agent runtime for this chat',
-    '选择执行底座': 'Choose runtime', '选择一个底座完成本次会话': 'Choose a runtime for this chat', '检测中': 'Checking', '可用': 'Available', '需登录': 'Sign-in required', '缺少模型': 'No model configured', '缺失的执行底座': 'Missing runtimes', '更多': 'More', '打开 Agent 管理': 'Open Agent management', '打开 Agent 管理，安装或修复执行底座': 'Open Agent management to install or repair runtimes', '切换 Agent': 'Switch agent', '切换 Agent · 保留当前对话和工作目录': 'Switch agent · Keep this chat and working folder', '正在读取可用 Agent…': 'Loading available agents…', '无法读取 Agent 列表': 'Could not load the agent list', '保留对话、文件与权限；下一轮使用所选 Agent。': 'Your chat, files, and access stay unchanged; the next turn uses the selected agent.', '正在切换…': 'Switching…', '执行状态尚未确认': 'Execution status is not confirmed', '请先点击“核实执行状态”后再切换 Agent': 'Verify the execution status before switching agents', '请等待本轮和排队消息完成后切换 Agent': 'Wait for this turn and queued messages to finish before switching agents', '切换未完成，原会话已保留': 'Switching did not finish; the original chat is preserved',
+    '选择执行底座': 'Choose runtime', '选择一个底座完成本次会话': 'Choose a runtime for this chat', '检测中': 'Checking', '可用': 'Available', '需登录': 'Sign-in required', '缺少模型': 'No model configured', '缺失的执行底座': 'Missing runtimes', '更多': 'More', '打开 Agent 管理': 'Open Agent management', '打开 Agent 管理，安装或修复执行底座': 'Open Agent management to install or repair runtimes', '切换 Agent': 'Switch agent', '切换 Agent · 保留当前对话和工作目录': 'Switch agent · Keep this chat and working folder', '需求已保存工程、分支和模型配置；执行结束后可切换 Agent': 'The requirement keeps its saved project, branch, and model settings; switch agents after execution finishes', '正在读取可用 Agent…': 'Loading available agents…', '无法读取 Agent 列表': 'Could not load the agent list', '保留对话、文件与权限；下一轮使用所选 Agent。': 'Your chat, files, and access stay unchanged; the next turn uses the selected agent.', '正在切换…': 'Switching…', '执行状态尚未确认': 'Execution status is not confirmed', '请先点击“核实执行状态”后再切换 Agent': 'Verify the execution status before switching agents', '请等待本轮和排队消息完成后切换 Agent': 'Wait for this turn and queued messages to finish before switching agents', '切换未完成，原会话已保留': 'Switching did not finish; the original chat is preserved',
     '执行位置：本机': 'Execution location: This computer', '执行位置：云端': 'Execution location: Cloud',
     '本机执行，点击选择执行位置': 'Run on this computer; click to choose a location',
     '云端执行，点击选择执行位置': 'Run in the cloud; click to choose a location',

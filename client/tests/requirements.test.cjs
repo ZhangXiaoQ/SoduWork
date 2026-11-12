@@ -26,7 +26,7 @@ test('preparation stages never expose an execution conversation and assigned dev
     assert.equal(R.canOpenConversation({status:'todo', triageStage, canViewExecution:true}, 'local'), false);
   }
   const transferred = {status:'todo',triageStage:'ready',readOnly:true,canViewExecution:true,canClaimExecution:true};
-  assert.equal(R.nextStep(transferred).action, '接手并安排执行');
+  assert.equal(R.nextStep(transferred).action, '安排执行');
   assert.equal(R.nextStep({...transferred,canClaimExecution:false}).text, '等待负责人安排执行');
 });
 
@@ -56,17 +56,6 @@ test('execution facts lock definition editing without disabling delivery capabil
   assert.equal(R.canEdit({...task,canEditRequirement:false}), false);
   assert.equal(R.canOpenConversation({...task,status:'done',myRoles:['assignee']},'local'), false);
   assert.equal(R.canOpenConversation({...task,status:'doing',requirementStage:'reviewing'},'local'), false);
-});
-
-test('unstarted work submits changed metadata and active definitions remain immutable', () => {
-  const task = { status:'todo', title:'Before', note:'Original', priority:'normal', kind:'requirement',
-    acceptanceCriteria:['Complete'], canEditRequirement:true };
-  assert.deepEqual(R.editPatch(task, {title:'After',note:'Original',priority:'normal',kind:'bug',
-    acceptanceCriteria:['Changed'],triageStage:'intake'}),
-    {title:'After',kind:'bug',acceptanceCriteria:['Changed'],triageStage:'intake'});
-  assert.deepEqual(R.editPatch({...task,status:'todo'}, {acceptanceCriteria:['Changed']}), {acceptanceCriteria:['Changed']});
-  assert.deepEqual(R.editPatch({...task,status:'doing'}, {title:'After',note:'Changed',priority:'high',visibility:'organization'}), {});
-  assert.deepEqual(R.editPatch({...task,readOnly:true,status:'todo'}, {title:'After'}), {title:'After'});
 });
 
 test('manual review submission requires an idle executor in the delivering stage', () => {

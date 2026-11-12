@@ -16,6 +16,12 @@ function setup(initial, options = {}) {
   }for(const n of nodes.values())Object.defineProperty(n,'innerHTML',{get(){return this.textContent+this.children.map(c=>'<'+c.tag+'>'+c.innerHTML+'</'+c.tag+'>').join('')},set(x){this.textContent=x;this.children=[]}});return layer;
  }
  const window={crypto:require('node:crypto')};vm.runInNewContext(source,{window,Set,Array,Object,JSON,URL,setTimeout:fn=>fn()});
+ if(options.database){
+   const def=require('../../skills/mcp-tools/connectors/providers/'+options.database+'.json');
+   Object.assign(template,{key:'connector-'+def.id,template:{command:'soduwork-connector'},connectionFields:def.fields});
+ }
+ const directQuery=layer.querySelector;
+ layer.querySelector=selector=>directQuery(selector)||nodes.get('field:'+/^\[data-connector-field="([^"]+)"\]$/.exec(selector)?.[1])||null;
  const data={mcpTemplates:[template]};
  const api={
   taskStorageKey:()=>owner,
@@ -30,7 +36,7 @@ function setup(initial, options = {}) {
   setState(mcp,data){calls.state++;ctx.mcp=mcp;ctx.data=data;}};
  function reopen(value=initial){window.SoduWorkCapabilityEditors.create(ctx).openMcpEditor(value,value?null:template,{onSaved(){calls.onSaved++;return options.onSaved?.();}});}
  reopen();
- if(!initial){nodes.get('field:TENANT').value='company';nodes.get('field:TOKEN').value='private-token';}
+ if(!initial&&!options.database){nodes.get('field:TENANT').value='company';nodes.get('field:TOKEN').value='private-token';}
  return {nodes,layer,calls,api,reopen,get saved(){return saved;},get html(){return html;},get notice(){return notices.at(-1)||'';},
   close:()=>ctx.closeModal(),leave(){revision++;},switchOwner(){owner='owner-b';},
   change(id,value,event='input'){const node=nodes.get(id);if(node.type==='checkbox')node.checked=value;else node.value=value;node.events[event]?.call(node);},
@@ -38,6 +44,27 @@ function setup(initial, options = {}) {
 }
 function deferred(){let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return{promise,resolve,reject};}
 async function settle(){await new Promise(resolve=>setImmediate(resolve));}
+
+for (const [database,key,expected] of [['postgres','PG_PORT','5432'],['mysql','MYSQL_PORT','3306'],
+  ['mongodb','MONGO_PORT','27017'],['redis','REDIS_PORT','6379']]) test(database+' shows its declared editable port next to the host',()=>{
+  const f=setup(null,{database}), basic=f.html.split('<details')[0];
+  assert.ok(basic.includes('data-connector-field="'+key+'"'));
+  assert.equal(f.nodes.get('field:'+key).value,expected);
+});
+test('Redis preserves custom ports, masked ACL credentials and explicit local TLS choices on retry',async()=>{
+ const env={REDIS_HOST:'localhost',REDIS_PORT:'16379',REDIS_USER:'reader',REDIS_PASSWORD:'••••••••',REDIS_TLS:'false',REDIS_DB:'0'};
+ const f=setup({id:'local',name:'Cache',templateKey:'connector-redis',type:'stdio',env},{database:'redis'});
+ assert.equal(f.nodes.get('field:REDIS_TLS').checked,false);
+ await f.click('#capMcpSave');for(const [key,value] of Object.entries(env))assert.equal(f.saved[0].env[key],value);
+});
+test('invalid Redis settings block probes, while an empty port restores the visible catalog default',async()=>{
+ const f=setup(null,{database:'redis'}); f.change('field:REDIS_HOST','cache.example.invalid');
+ f.change('field:REDIS_PORT','65536');await f.click('#capMcpCheck');assert.equal(f.calls.preflight,0);
+ f.change('field:REDIS_PORT','');f.change('field:REDIS_TLS',false);await f.click('#capMcpCheck');assert.equal(f.calls.probe,0);
+ assert.equal(f.nodes.get('field:REDIS_PORT').value,'6379');
+ f.change('field:REDIS_HOST','::1');f.change('field:REDIS_USER','reader');await f.click('#capMcpCheck');assert.equal(f.calls.probe,0);
+ f.change('field:REDIS_USER','');await f.click('#capMcpSave');assert.equal(f.saved[0].env.REDIS_TLS,'false');assert.equal(f.saved[0].env.REDIS_PORT,'6379');
+});
 
 test('one connection action validates and enables, while writes stay off',async()=>{
  const f=setup();assert.match(f.html,/type="password"/);assert.equal(f.nodes.has('#capMcpEnabled'),false);assert.equal(f.nodes.has('#capMcpApprove'),false);assert.equal(f.nodes.get('field:ALLOW_WRITES').checked,false);

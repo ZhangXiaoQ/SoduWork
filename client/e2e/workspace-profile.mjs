@@ -37,7 +37,7 @@ try{
     if(skin.skin==='flat'){assert.equal(result.bg,'none');assert.equal(result.flatShadow,'none');}
     checks.push({skin:skin.id,...result});
   }
-  assert.notEqual(checks.find(s=>s.skin==='bear-vivid').color,checks.find(s=>s.skin==='bear-ruby').color);
+  assert.notEqual(checks.find(s=>s.skin==='bear-vivid').color,checks.find(s=>s.skin==='bear-cnbm').color);
   const identity=async user=>page.run(u=>window.dispatchEvent(new CustomEvent('soduwork-device-auth',{detail:{state:'active',user:u}})),user);
   for(const [user,initial] of [[{displayName:' Alice Example '},'A'],[{displayName:' ',username:'bob'},'B'],[{},'我'],[{displayName:'𠮷田'},'𠮷'],[{displayName:'<img src=x onerror=alert(1)>'},'<']]){
     await identity(user);

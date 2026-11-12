@@ -54,11 +54,18 @@
   let current={},busy=false,timer=null,stopped=false,revision=0,confirming=false;
   const $=id=>layer.querySelector('#'+id);
   const anchor=$('capPlatformState');
+  const manageConflict=layer.ownerDocument?.createElement('button');
+  if (manageConflict && typeof options.manageConflict === 'function') {
+   manageConflict.type='button';manageConflict.className='btn-mini';manageConflict.hidden=true;
+   manageConflict.textContent='管理同名连接';$('capPlatformNote').after(manageConflict);
+   manageConflict.onclick=()=>perform(()=>options.manageConflict(current.conflictId,live));
+  }
   const live=()=>epoch===scopeRevision&&!stopped&&layer.isConnected&&!layer.hidden&&$('capPlatformState')===anchor;
   const notify=()=>{if(typeof ctx.refresh==='function')ctx.refresh();};
   function render(value){
    if(!live())return;
    current=value||{};
+   if(manageConflict)manageConflict.hidden=!current.conflictId||busy||confirming;
    if(current.provider===key){
     stateRevisions.set(key,(stateRevisions.get(key)||0)+1);remember(item,key,current);
     if(typeof options.onState==='function')options.onState(current);

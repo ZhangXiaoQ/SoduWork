@@ -240,7 +240,7 @@ async send(text, turnAttachments, sendOptions) {
           ? goalQuality.normalPrompt(rawText) : rawText;
         let modelPrompt = pluginContext.augment(
           attachmentContract.augment(promptText, files), turnPlugins,
-          [resolvedPlugins.applicationGuide, pluginGrant?.guide].filter(Boolean).join('\n\n'));
+          [resolvedPlugins.applicationGuide, pluginGrant?.guide].filter(Boolean).join('\n\n'), turn.pluginInputs);
         const visualFiles = files.filter((file) => /^image\//i.test(String(file.mimeType || '')) ||
           /\.(?:png|jpe?g|webp|gif|avif|bmp|svg|tiff?|heic|heif|ico|jxl|jp2|j2k|raw|cr2|nef|arw|dng|psd)$/i.test(String(file.path || file.name || '')));
         const visualInputs = await attachments.images(files);

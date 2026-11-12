@@ -455,7 +455,7 @@ with tempfile.TemporaryDirectory(prefix="soduwork-schema-") as directory:
             connection.execute(
                 "INSERT INTO automation_plugin "
                 "(id,org_id,key,name,description,source_kind,enabled,created_by) "
-                "VALUES (?,NULL,'duplicate-key','Duplicate','','personal',0,'smoke')",
+                "VALUES (?,NULL,'duplicate-key','Duplicate','','soduwork',0,'smoke')",
                 (plugin_id,),
             )
         connection.commit()

@@ -83,6 +83,15 @@ test('operator fields start empty and cannot save fictitious defaults', async ()
   page.unmount()
 })
 
+test('legacy operator settings honor the server edit capability', async () => {
+  const page = await fixture({ accountLegal: async () => ({ operatorName: 'Published operator', contactEmail: 'privacy@example.test', canEdit: false }) })
+  assert.equal(page.button('保存运营信息').props.disabled, true)
+  assert.equal(page.nodes(node => node.type === 'input' && node.props.maxLength === '120')[0].props.disabled, true)
+  page.act(() => page.button('保存运营信息').props.onClick()); await page.flush()
+  assert.deepEqual(page.calls, [])
+  page.unmount()
+})
+
 test('unmount while initial settings load is pending cannot update a closed screen', async () => {
   let resolve
   const page = await fixture({ mailSettings: () => new Promise(yes => { resolve = yes }) })

@@ -83,6 +83,12 @@ async def uninstall(client=Depends(client_dependency), session=Depends(session_d
     return {"ok": True}
 
 
+@app.post("/fixture/preflight")
+async def preflight(client=Depends(client_dependency), session=Depends(session_dependency)):
+    version = await session.get(am.PluginVersion, state["versionId"])
+    return await plugin_service.simulate(session, version, None, "fixture-org", binding_config={})
+
+
 if __name__ == "__main__":
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))

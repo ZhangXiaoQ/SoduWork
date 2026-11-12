@@ -118,9 +118,9 @@ def _run_opencode(ws: str, prompt: str, base: str, key: str, model: str) -> tupl
         "provider": {
             "company": {
                 "npm": "@ai-sdk/openai-compatible",
-                "name": "共享模型服务",
+                "name": "公司模型服务",
                 "options": {"baseURL": base, "apiKey": "{env:SODUWORK_LLM_KEY}"},
-                "models": {model: {"name": "编码模型"}},
+                "models": {model: {"name": "公司 coding 模型"}},
             }
         },
         "model": f"company/{model}",

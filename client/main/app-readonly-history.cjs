@@ -1,5 +1,5 @@
 'use strict';
-const fs=require('node:fs'),path=require('node:path'),{createInterface}=require('node:readline');
+const fs=require('node:fs'),path=require('node:path');
 const defaultAccess=require('./conversation/history-access');
 async function plainArchivePath(base, file) {
  // The application supplies the archive root. Its parent may use a trusted OS
@@ -27,9 +27,10 @@ function publicRow(row){return {id:String(row.id||row.sessionId||''),title:Strin
 function eventsPage(data,p,segments){
  const events=Array.isArray(data.items)?data.items:[],end=events.reduce((n,x)=>Math.max(n,Number(x.seq)||0),p.after||0),latest=Number(data.seq??data.last??end);
  if(!events.length&&latest>end)throw Error('消息分页未前进，请稍后重试');
- return {ok:true,format:'events',items:events.filter(x=>['user','say','text'].includes(x.kind)).map(x=>({id:String(x.seq),role:x.kind==='user'?'user':'assistant',text:String(x.full??x.text??''),delta:x.full==null&&x.delta===true,streamId:[x.round||x._round||1,x.seg||1,x.kind,x.streamId||x.seq].join(':'),done:x.done===true})),segments,nextAfter:latest>end?end:null};
+ return {ok:true,format:'events',items:events.filter(x=>['user','say','text'].includes(x.kind)).map(x=>({id:String(x.seq),role:x.kind==='user'?'user':'assistant',text:String(x.full??x.text??''),delta:x.full==null&&x.delta===true,streamId:[x.round||x._round||1,x.seg||1,x.kind,x.streamId||x.seq].join(':'),done:x.done===true})),segments,cursor:end,nextAfter:latest>end?end:null};
 }
-function create({app,session=require('./agent-runtime/pi-session-bridge'),access=defaultAccess,runner=require('./runner-runtime'),readCloud}){
+function create({app,session=require('./agent-runtime/pi-session-bridge'),access=defaultAccess,runner=require('./runner-runtime'),readCloud,localOnly=false}){
+ const readNativePage=require('./conversation/native-transcript-pages.cjs').create();
  return async function handle(method,p,assertCurrent=()=>{}){
   const captured=access.actor(app);const guard=()=>{access.assertCurrent(app,captured);assertCurrent();};guard();
   if(method==='conversations.list'){
@@ -37,8 +38,9 @@ function create({app,session=require('./agent-runtime/pi-session-bridge'),access
    if(r.ok===false)throw Error(r.reason);const rows=(r.chats||[]).filter(row=>{try{access.assertOwner(app,row.id,captured,row);return true;}catch{return false;}});
    const end=(p.offset||0)+(p.limit||50);return {ok:true,items:rows.slice(p.offset||0,end).map(publicRow),nextOffset:end<rows.length?end:null};
   }
-  const row=await session.archivedConversation(app,p.id);guard();if(!row)throw Error('会话不存在');access.assertOwner(app,p.id,captured,row);
+  const row=await session.archivedConversation(app,p.id,localOnly?{nativeOnly:true,strict:true}:{});guard();if(!row)throw Error('会话不存在');access.assertOwner(app,p.id,captured,row);
   if(row.remoteProjection===true&&row.cloud===true){
+   if(localOnly)throw Error('云端正文尚未保存到本机');
    const taskId=String(row.taskId||''),ref=String(row.ref||'');
    if(!taskId||!ref)throw Error('云端会话执行标识不完整，暂无正文');
    let data;
@@ -52,7 +54,7 @@ function create({app,session=require('./agent-runtime/pi-session-bridge'),access
    return eventsPage(data,p,[]);
   }
   const cloudFile=path.join(app.getPath('userData'),'conversation-handoffs',require('node:crypto').createHash('sha256').update(p.id).digest('hex')+'.json');
-  if(fs.existsSync(cloudFile)){
+  if(!localOnly&&fs.existsSync(cloudFile)){
    require('./plugin-resources').assertNoLinks(app.getPath('userData'),cloudFile);
    const cloud=JSON.parse(await fs.promises.readFile(cloudFile,'utf8'));guard();
    if(cloud.sessionId!==p.id||cloud.owner!==require('./platform-connections/runtime.cjs').connectionScope(captured.identity))throw Error('云端会话归属记录无效');
@@ -84,17 +86,8 @@ function create({app,session=require('./agent-runtime/pi-session-bridge'),access
   const base=path.join(app.getPath('userData'),'pi-agent'),file=found.entry.path;
   const real=await plainArchivePath(base,file);guard();
   const stat=await fs.promises.stat(real);if(!stat.isFile()||stat.size>128*1024*1024)throw Error('会话存档过大或不是普通文件');
-  const input=fs.createReadStream(real,{encoding:'utf8'}),lines=createInterface({input,crlfDelay:Infinity}),items=[];let index=0,more=false,bytes=0;
-  try{for await(const line of lines){guard();let e;try{e=JSON.parse(line);}catch{continue;}
-   const m=e.type==='message'?e.message:null;if(!m||!['user','assistant'].includes(m.role))continue;
-   if(index++<(p.offset||0))continue;
-   if(items.length>=(p.limit||50)){more=true;break;}
-   const text=typeof m.content==='string'?m.content:(Array.isArray(m.content)?m.content:[]).filter(b=>b.type==='text').map(b=>String(b.text||'')).join('\n');
-   if(Buffer.byteLength(text)>1024*1024)throw Error('单条消息超过1MB，当前只读接口无法返回');
-   if(bytes+Buffer.byteLength(text)>1024*1024&&items.length){more=true;index--;break;}bytes+=Buffer.byteLength(text);
-   items.push({id:String(e.id||index),role:m.role,text,timestamp:m.timestamp||e.timestamp||'',hasNonTextContent:Array.isArray(m.content)&&m.content.some(b=>b.type!=='text')});
-  }}finally{lines.close();input.destroy();}guard();
-  return {ok:true,format:'messages',items,segments,nextOffset:more?(p.offset||0)+items.length:null};
+  const page=await readNativePage(real,p,guard);
+  return {ok:true,format:'messages',...page,segments};
  };
 }
 async function handle(app,method,params,guard){return create({app})(method,params,guard);}

@@ -240,10 +240,10 @@ if (typeof electron === 'string') {
         assert.equal(geometry.above, true, JSON.stringify({ width, locale, geometry }));
         assert.equal(geometry.dialogOverflow, false); assert.equal(geometry.bodyOverflow, false);
         assert.equal(geometry.label, locale === 'en-US' ? 'Allow once' : '允许一次'); assert.equal(geometry.path, longTarget); assert.equal(geometry.open, true);
-        const decisions = await js(`(()=>{const buttons=[...document.querySelectorAll('.access-request .nask-btns button')],rects=buttons.map(b=>b.getBoundingClientRect());return{order:buttons.map(b=>b.dataset.uiValue),sameRow:rects.every(r=>Math.abs(r.top-rects[0].top)<1&&Math.abs(r.height-rects[0].height)<1),fits:buttons.every(b=>b.scrollWidth<=b.clientWidth+1),session:buttons[1].textContent}})()`);
-        assert.deepEqual(decisions.order, ['deny', 'session', 'once']);
+        const decisions = await js(`(()=>{const buttons=[...document.querySelectorAll('.access-request .nask-btns button')],rects=buttons.map(b=>b.getBoundingClientRect());return{order:buttons.map(b=>b.dataset.uiValue),sameRow:rects.every(r=>Math.abs(r.top-rects[0].top)<1&&Math.abs(r.height-rects[0].height)<1),fits:buttons.every(b=>b.scrollWidth<=b.clientWidth+1),full:buttons.find(b=>b.dataset.uiValue==='full').textContent}})()`);
+        assert.deepEqual(decisions.order, ['deny', 'once', 'full']);
         assert.equal(decisions.sameRow, true); assert.equal(decisions.fits, true);
-        assert.equal(decisions.session, locale === 'en-US' ? 'Allow for chat' : '本会话允许');
+        assert.equal(decisions.full, locale === 'en-US' ? 'Always allow' : '始终允许');
         await shot('permission-' + width + '-' + locale);
       }
     }
@@ -335,9 +335,9 @@ if (typeof electron === 'string') {
     const remembered = path.join(root, 'remembered-outside.txt');
     turn = fixture.send('write', { path: remembered, content: 'Scoped session grant' });
     await until(overlayVisible, 'real Pi write awaiting session decision');
-    assert.equal(await js('document.querySelector(".access-request [data-ui-value=session]").textContent'), '本会话允许');
-    assert.equal(await js('document.querySelector(".access-request footer small").textContent'), '记住同一目标的操作。');
-    await click('.access-request [data-ui-value=session]'); await turn;
+    assert.equal(await js('document.querySelector(".access-request [data-ui-value=session]")===null'), true);
+    const legacyRequest = fixture.access.broker.pending()[0];
+    await js('soduWorkAPI.conversationSession.answerUi("overlay-real",'+JSON.stringify({...legacyRequest,decision:'session'})+')'); await turn;
     assert.equal(fs.readFileSync(remembered, 'utf8'), 'Scoped session grant');
     await fixture.send('write', { path: remembered, content: 'Scoped session grant' });
     assert.equal(fixture.access.broker.pending().length, 0);

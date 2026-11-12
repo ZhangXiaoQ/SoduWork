@@ -78,7 +78,7 @@ app.whenReady().then(async () => {
     // Acceptance only queues the turn; runtime quota rejection is asynchronous.
     if (!blocked.ok) assert.match(blocked.reason || blocked.error || '', /额度/);
     else assert.equal(blocked.accepted, true);
-    await until(() => run('!!document.querySelector(".soduwork-quota-notice:not([hidden])")'));
+    await until(() => run('!!document.querySelector(".soduwork-quota-card:not([hidden])")'));
     assert.equal(await run('document.body.classList.contains("soduwork-client-auth-open")'), false);
     await delay(1000);
     report.blockedUsage = await quota(); assert.equal(report.blockedUsage.used, report.after.used);

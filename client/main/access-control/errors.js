@@ -19,7 +19,16 @@ const messages = new Map([
   ['Session not found', '会话不在了'],
 ]);
 function message(value) {
-  const text = String(value || '');
+  let text = String(value || '');
+  // Old Runner archives contain the serialized, sanitized Harness2 envelope.
+  // Unwrap only this known failure type; preserve all other native diagnostics.
+  if (text.length <= 65536 && text.trimStart().startsWith('{')) {
+    try {
+      const error = JSON.parse(text);
+      if (error?.name === 'Harness2Error' && typeof error.message === 'string' && error.message.trim())
+        text = error.message;
+    } catch (_) { /* Truncated or non-JSON diagnostics remain unchanged. */ }
+  }
   return messages.get(text) || text;
 }
 module.exports = { message };

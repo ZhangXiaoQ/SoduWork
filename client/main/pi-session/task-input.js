@@ -133,11 +133,16 @@ async function prepare(identity, taskId, conversationId, turnId, instruction, re
     const acceptance = await require('./acceptance-turn').prepare({ identity, taskId, instruction,
       requested, runtime, request });
     const bundle = acceptance.deliveryBundle;
+    const extraIds = [...new Set([...acceptance.referenceAttachmentIds, ...acceptance.optionalAttachmentIds])];
+    if (bundle && extraIds.length + 1 > MAX_FILES)
+      throw new Error('需求附件超过本轮可接收的数量，请先调整附件');
     const attachments = bundle
       ? [await require('./acceptance-bundle').load(identity, route, bundle)]
       : await loadTaskAttachments(identity, route, acceptance.attachmentIds);
-    if (bundle && acceptance.optionalAttachmentIds.length)
-      attachments.push(...await loadTaskAttachments(identity, route, acceptance.optionalAttachmentIds));
+    if (bundle && extraIds.length)
+      attachments.push(...await loadTaskAttachments(identity, route, extraIds));
+    if (attachments.reduce((size, file) => size + file.data.byteLength, 0) > MAX_BYTES)
+      throw new Error('需求附件总大小超过 256 MB');
     return { ...acceptance, attachments };
   }
   const controlled = require('./controlled-task-turn');

@@ -11,6 +11,8 @@ function check(root = ROOT) {
   const errors = [];
   const sourceReview = require('./check-source-provenance.cjs').check(root);
   errors.push(...sourceReview.errors);
+  const lockReviews = require('./lock-license-reviews.cjs').check(root, manifest);
+  errors.push(...lockReviews.errors);
   for (const item of [...manifest.notices, ...manifest.vendored]) {
     const file = path.join(root, item.path);
     if (!fs.existsSync(file)) errors.push('Missing reviewed material: ' + item.path);
@@ -44,7 +46,7 @@ function check(root = ROOT) {
       if (!trustedSource) errors.push('Unreviewed dependency source or integrity: ' + file + ':' + name);
       const evidence = manifest.lockLicenseEvidence[name];
       const license = pkg.license || (evidence?.version === pkg.version ? evidence.license : '');
-      if (!manifest.reviewedLicenses.includes(license)) errors.push('Unreviewed dependency license: ' + file + ':' + name + '@' + pkg.version + ' (' + (license || 'unknown') + ')');
+      if (!manifest.reviewedLicenses.includes(license) && !lockReviews.accepted.has(file + ':' + name)) errors.push('Unreviewed dependency license: ' + file + ':' + name + '@' + pkg.version + ' (' + (license || 'unknown') + ')');
     }
     if (file === 'client/package-lock.json') {
       const pi = lock.packages['node_modules/@earendil-works/pi-coding-agent'];

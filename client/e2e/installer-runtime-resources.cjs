@@ -6,6 +6,7 @@ const sha=bytes=>crypto.createHash('sha256').update(bytes).digest('hex');
 function main(){
   const candidateFile=path.resolve(process.argv[2]),work=path.dirname(candidateFile),candidate=JSON.parse(fs.readFileSync(candidateFile));
   const result=JSON.parse(fs.readFileSync(path.join(work,'payload-result.json'))),root=result.extracted;
+  const executable=require('../scripts/installed-distribution.cjs').installedDistribution(root).windowsExecutableName+'.exe';
   assert.equal(candidate.payloadVerified,true);assert.equal(path.dirname(root),require('node:os').tmpdir());assert.ok(path.basename(root).startsWith('soduwork-package-check-'));
   const manifest=JSON.parse(fs.readFileSync(path.join(root,'.soduwork-payload.json')));
   const legacy=require('./fixtures/installer-runtime-resource-paths.json');assert.equal(legacy.length,66);
@@ -19,12 +20,12 @@ function main(){
   try{
     for(const [name,bytes] of original)fs.writeFileSync(path.join(root,name),Buffer.concat([Buffer.alloc(4096,65),bytes]));
     const report=path.join(work,'runtime-resource-rejection.json');
-    const checked=spawnSync(path.join(root,'SoduWork.exe'),[path.join(root,'.soduwork-verify.cjs'),root,report],{encoding:'utf8',windowsHide:true,timeout:300000,env:{...process.env,ELECTRON_RUN_AS_NODE:'1'}});
+    const checked=spawnSync(path.join(root,executable),[path.join(root,'.soduwork-verify.cjs'),root,report],{encoding:'utf8',windowsHide:true,timeout:300000,env:{...process.env,ELECTRON_RUN_AS_NODE:'1'}});
     assert.equal(checked.status,2,checked.error?.message);rejected=JSON.parse(fs.readFileSync(report));
     assert.equal(rejected.checkedFiles,manifest.files.length);assert.equal(rejected.errorCount,names.length);assert.deepEqual(rejected.errors.map(x=>x.path).sort(),[...names].sort());
     assert.ok(rejected.errors.every(x=>x.actualSize-x.expectedSize===4096));
     const installationReport=path.join(work,'static-text-installation.json');
-    const installed=spawnSync(path.join(root,'SoduWork.exe'),[path.join(root,'.soduwork-verify.cjs'),root,installationReport,'--installation'],{encoding:'utf8',windowsHide:true,timeout:300000,env:{...process.env,ELECTRON_RUN_AS_NODE:'1'}});
+    const installed=spawnSync(path.join(root,executable),[path.join(root,'.soduwork-verify.cjs'),root,installationReport,'--installation'],{encoding:'utf8',windowsHide:true,timeout:300000,env:{...process.env,ELECTRON_RUN_AS_NODE:'1'}});
     assert.equal(installed.status,0,installed.stderr);compatible=JSON.parse(fs.readFileSync(installationReport));
     assert.equal(compatible.staticTextDifferences.length,names.length);assert.equal(compatible.fullContentVerified,false);
     assert.ok(compatible.staticTextDifferences.every(x=>x.sourceSha256===x.expectedSha256));

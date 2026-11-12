@@ -13,6 +13,21 @@ function fixture() {
     create: key => window.WorkspaceSidebarState.create({ storage, key: key || 'one' }) };
 }
 const ids = rows => Array.from(rows, row => row.id);
+test('background timestamp refreshes do not reorder existing recent conversations', () => {
+  const s = fixture().create();
+  const first = [{ id: 'a', at: 300 }, { id: 'b', at: 200 }, { id: 'c', at: 100 }];
+  assert.deepEqual(ids(s.view(first).recent), ['a', 'b', 'c']);
+  const refreshed = [{ id: 'c', at: 900, state: 'running' }, { id: 'b', at: 800 }, { id: 'a', at: 300 }];
+  assert.deepEqual(ids(s.view(refreshed).recent), ['a', 'b', 'c']);
+  assert.deepEqual(ids(s.view([{ id: 'new', at: 1000 }, ...refreshed]).recent), ['new', 'a', 'b', 'c']);
+});
+
+test('replacing a synchronization alias keeps its established position', () => {
+  const s = fixture().create();
+  s.view([{ id: 'a', at: 300 }, { id: 'acct-source', _uiKey: 'shared', at: 100 }]);
+  assert.deepEqual(ids(s.view([{ id: 'native-source', _uiKey: 'shared', at: 900 }, { id: 'a', at: 300 }]).recent),
+    ['a', 'native-source']);
+});
 const a = { id: 'a', title: '需求沟通', adapterId: 'codex', taskIds: ['task-one'], state: 'running' };
 const b = { id: 'b', title: '项目进展', state: 'completed' };
 const appIcon = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jxqkAAAAASUVORK5CYII=';
@@ -58,6 +73,36 @@ test('project sync preserves edits made in flight and does not publish applicati
   const job = sync.run(); await new Promise(resolve => setImmediate(resolve));
   store.saveProject({id, name: '发送期间的改名'}); pause = false; release(); await job;
   await sync.run(); assert.equal(remote.get(id).name, '发送期间的改名'); assert.equal(remote.size, 1);
+});
+
+test('deleting a chat while another project saves cannot restore its old project membership', async () => {
+  const f = fixture(), remote = new Map(), errors = [];
+  let sync, autoSync = false, pause = false, release;
+  const store = f.api.create({storage: f.storage, key: 'one', onChange: () => {
+    if (autoSync) void sync.run();
+  }});
+  const first = store.saveProject({name: 'First'}), second = store.saveProject({name: 'Second'});
+  store.fileChat('deleted-chat', second, {id: 'deleted-chat', title: 'Deleted conversation'});
+  sync = f.api.projectSync({store, storage: f.storage, key: 'one', error: e => errors.push(e), api: {
+    conversationProjects: async () => ({items: [...remote.values()]}),
+    saveConversationProject: async (id, body) => {
+      if (pause && id === first) await new Promise(resolve => { release = resolve; });
+      assert.equal(body.revision, remote.get(id)?.revision || 0);
+      const row = {...body, id, revision: body.revision + 1}; remote.set(id, row); return row;
+    },
+  }});
+  await sync.run();
+  store.saveProject({id: first, name: 'First edited'});
+  autoSync = true; pause = true;
+  const work = sync.run(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(typeof release, 'function');
+  store.forgetMany(['deleted-chat']);
+  assert.deepEqual(Array.from(store.get().projects.find(row => row.id === second).chatIds), []);
+  pause = false; release(); await work;
+  assert.deepEqual(Array.from(store.get().projects.find(row => row.id === second).chatIds), []);
+  assert.deepEqual(Array.from(remote.get(second).chatIds), []);
+  assert.equal(f.create().view([]).projects.find(row => row.id === second).items.length, 0);
+  assert.equal(errors.length, 0);
 });
 
 test('project push during a pending read is reconciled once without recursive remote-write loops', async () => {

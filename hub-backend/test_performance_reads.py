@@ -3,20 +3,33 @@ import os
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 os.environ["CLUSTER_REDIS_URL"] = ""
 import unittest
+import sqlite3
+import uuid
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import event, inspect
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app import models, automation_models, project_context_models
 from app.db import Base
 from app.api.aidesk import ai_agent_tasks
+from test_unified_requirements import _schema_template
 
 
 class ReadTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        # Copy the complete schema into a private database for each test. The
+        # anchor keeps the named in-memory database alive across async sessions.
+        memory_name = "soduwork_read_models_" + uuid.uuid4().hex
+        self._schema_anchor = sqlite3.connect(
+            f"file:{memory_name}?mode=memory&cache=shared", uri=True,
+        )
+        self.addCleanup(self._schema_anchor.close)
+        with closing(sqlite3.connect(_schema_template())) as source:
+            source.backup(self._schema_anchor)
+        database_url = f"sqlite+aiosqlite:///file:{memory_name}?mode=memory&cache=shared&uri=true"
+        self.engine = create_async_engine(database_url)
+        self.addAsyncCleanup(self.engine.dispose)
         self.sessions = async_sessionmaker(self.engine, expire_on_commit=False)
-        async with self.engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
         now = datetime(2026, 9, 1, tzinfo=timezone.utc)
         async with self.sessions() as session:
             self.client = models.Client(id="mine")
@@ -50,9 +63,6 @@ class ReadTests(unittest.IsolatedAsyncioTestCase):
 
     def count(self, *_):
         self.queries += 1
-
-    async def asyncTearDown(self):
-        await self.engine.dispose()
 
     async def read(self, **kwargs):
         async with self.sessions() as session:

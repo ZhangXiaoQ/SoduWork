@@ -123,6 +123,19 @@ def _update_runner_capabilities(runner, value, *, persisted: bool) -> bool:
     return not persisted and bool(runner.capabilities.get("reportedAt"))
 
 
+async def _heartbeat_write(runner, websocket, *, force: bool) -> bool:
+    """Keep registry writes off the reply reader while preserving revocation."""
+    try:
+        return await _persist_runner_heartbeat(runner, force=force)
+    except RunnerIdentityConflict:
+        await websocket.send_json({"op": "bye", "code": RunnerIdentityConflict.code,
+                                   "error": str(RunnerIdentityConflict())})
+        await websocket.close(code=4409)
+    except ValueError:
+        await websocket.close(code=1011, reason="执行机登记失败，请稍后重试")
+    return False
+
+
 async def _auth(token: str, peer: str, device: str = "", secret: str = "",
                 runner_id: str = "", runner_key: str = "") -> tuple[bool, str]:
     """Return authorization and denial reason. Prefer device-specific secrets or per-Runner keys;
@@ -676,16 +689,15 @@ async def runner_ws(websocket: WebSocket, token: str = ""):
     r = None
     telemetry_queue = None
     telemetry_job = None
+    heartbeat_job = None
+    heartbeat_force = False
     try:
         # Bound the handshake phase: an authenticated but silent peer must not
         # pin a coroutine and socket indefinitely. Neither cleanup mechanism
         # covers this window - the connection is not registered in runner_hub
         # yet, so heartbeat-based reaping never sees it.
-        try:
-            hello = await asyncio.wait_for(websocket.receive_json(), timeout=_HELLO_TIMEOUT_S)
-        except asyncio.TimeoutError:
-            await websocket.close(code=4408)
-            log.warning("执行机握手超时未发送 hello: %s", peer)
+        hello = await _receive_hello(websocket, peer, _HELLO_TIMEOUT_S)
+        if hello is None:
             return
         if str(hello.get("op") or "") != "hello":
             await websocket.send_json({"op": "bye", "error": "第一句必须是 hello"})
@@ -741,6 +753,7 @@ async def runner_ws(websocket: WebSocket, token: str = ""):
         async with SessionLocal() as s:
             await runner_registry.record(s, r, force=True)
             await s.commit()
+        capability_report_persisted = bool(r.capabilities.get("reportedAt"))
         # Advertise Hub capabilities in welcome; send binary frames only after negotiating bin1.
         # Legacy hello messages omit caps and retain the original encoding throughout rolling upgrades.
         # The registry becomes dispatchable only after welcome is on the wire.  Previously
@@ -791,6 +804,10 @@ async def runner_ws(websocket: WebSocket, token: str = ""):
                 continue
             op = str(msg.get("op") or "")
             if op == "beat":
+                if heartbeat_job is not None and heartbeat_job.done():
+                    if heartbeat_job.result() and heartbeat_force:
+                        capability_report_persisted = True
+                    heartbeat_job = None
                 r.last_beat = time.time()
                 r.busy = max(0, int(msg.get("busy") or 0))
                 if msg.get("maxConcurrent") is not None:
@@ -834,23 +851,18 @@ async def runner_ws(websocket: WebSocket, token: str = ""):
                 if isinstance(msg.get("skillCatalog"), list):
                     r.skill_catalog = runner_hub.clean_skill_catalog(
                         msg["skillCatalog"])
-                if isinstance(msg.get("capabilities"), dict):
-                    r.capabilities = execution_capabilities.clean_report(
-                        msg["capabilities"])
+                force_capability_write = _update_runner_capabilities(
+                    r, msg.get("capabilities"), persisted=capability_report_persisted)
                 # Persist node metadata every 45 seconds rather than on each 20-second heartbeat.
                 # Use live heartbeat state for availability while reducing redundant database writes.
-                if time.time() - r._registry_write >= runner_registry.PERSIST_EVERY_S:
-                    try:
-                        async with SessionLocal() as s:
-                            await runner_registry.record(s, r)
-                            await s.commit()
-                    except (RunnerIdentityConflict, ValueError):
-                        # Identity and lifecycle rejections (revoked/pending-setup
-                        # runner, credential conflicts) intentionally disconnect the
-                        # socket; the outer handlers keep that semantics.
-                        raise
-                    except Exception:  # noqa: BLE001 - Transient DB errors must not drop the control channel (same guard as _ingest_sessions); record() advances the throttle timestamp only after building the row, so a lost commit retries on the next heartbeat.
-                        log.warning("执行机 %s 心跳落库暂失败，下个心跳周期重试", r.id)
+                # Content RPCs may hold a policy transaction until their reply.
+                # Awaiting a registry write here blocks that reply behind the
+                # same database lock. Coalesce writes, but keep receiving frames.
+                if heartbeat_job is None and (force_capability_write or
+                        time.time() - r._registry_write >= runner_registry.PERSIST_EVERY_S):
+                    heartbeat_force = force_capability_write
+                    heartbeat_job = asyncio.create_task(_heartbeat_write(
+                        r, websocket, force=heartbeat_force))
                 # Persist session events even when no client is watching, enabling later replay.
                 # Notify after persistence; clients refresh by taskId instead of receiving full logs through task WebSockets.
                 if isinstance(msg.get("sessions"), list) and msg["sessions"]:
@@ -905,6 +917,9 @@ async def runner_ws(websocket: WebSocket, token: str = ""):
         except Exception:
             pass
     finally:
+        if heartbeat_job is not None:
+            heartbeat_job.cancel()
+            await asyncio.gather(heartbeat_job, return_exceptions=True)
         if telemetry_queue is not None:
             _stop_telemetry(telemetry_queue)
         if r is not None:

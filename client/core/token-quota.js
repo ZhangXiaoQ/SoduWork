@@ -29,6 +29,12 @@
     return found ? { code: CODE, ...(found.quota ? { quota: found.quota } : {}) } : {};
   }
 
+  function allowsPersonal(quota) {
+    return quota?.quotaVersion === 2 && quota.personalModelsAllowed === true &&
+      quota.exceeded === true && (!quota.reason || quota.reason === 'total_exhausted') &&
+      Number(quota.limit) > 0 && !quota.restrictModels;
+  }
+
   function copy(quota, tx = value => value, locale = 'en-US') {
     const q = quota || {};
     const number = value => new Intl.NumberFormat(locale).format(Math.max(0, Number(value) || 0));
@@ -48,6 +54,10 @@
         (q.models || []).some(model => !model.exceeded && (model.remaining === null || Number(model.remaining) > 0))) {
       guidance = tx('可在模型菜单选择其他可用模型，或联系管理员调整套餐。');
     }
+    if (allowsPersonal(q)) {
+      title = tx('平台模型额度已用完');
+      guidance = tx('可选择账号允许的个人模型继续，或联系管理员调整平台额度。对话和草稿已保留。');
+    }
     const reset = date(q.resetsAt), expiry = date(q.expiresAt);
     const used = q.enabled === false || q.totalLimited === false ? tx('总额度不限额') : Number.isFinite(Number(q.limit))
       ? tx('已用 {used} / {limit} Tokens').replace('{used}', number(q.used)).replace('{limit}', number(q.limit))
@@ -57,7 +67,7 @@
     return { title, guidance, used, timing };
   }
 
-  const api = Object.freeze({ CODE, detail, fields, copy });
+  const api = Object.freeze({ CODE, detail, fields, copy, allowsPersonal });
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else global.SoduWorkQuota = api;
 })(globalThis);

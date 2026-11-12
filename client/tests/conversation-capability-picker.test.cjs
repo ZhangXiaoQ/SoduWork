@@ -128,7 +128,12 @@ test('new conversation exposes local capabilities as selectable session controls
     'service errors must reach the Skill picker before the branch returns');
   assert.match(capUi, /cp-cap-switch/);
   assert.match(composerCss, /\.wc-cap-pop \.cp-cap-switch/);
-  assert.match(skillCss, /\.compose-panel\[data-stage='compose'\] \.cp-skill-menu\{top:/);
+  // The 14-skill Chromium regression covers adaptive placement and final-row
+  // access; this contract keeps CSS from forcing that popup below the window.
+  const skillMenu = skillCss.match(/\.cp-skill-menu\{([^}]*)\}/)?.[1] || '';
+  assert.match(skillMenu, /position:fixed/);
+  assert.match(skillMenu, /max-height:360px;overflow:auto;overscroll-behavior:contain/);
+  assert.doesNotMatch(skillCss, /\.compose-panel\[data-stage=['"]compose['"]\] \.cp-skill-menu\{[^}]*top:calc\(100%/);
 });
 
 test('foundation capability panel grants high-risk controls before selecting them', async () => {

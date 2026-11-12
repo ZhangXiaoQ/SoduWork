@@ -5,9 +5,12 @@ N+1 reads.
 import asyncio
 import os
 import sys
+import tempfile
+from pathlib import Path
 
 sys.path.insert(0, ".")
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./.smoke-apbulk.db"
+_fixture = tempfile.TemporaryDirectory(prefix="soduwork-smoke-apbulk-")
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///" + (Path(_fixture.name) / ".smoke.db").as_posix()
 ok = fail = 0
 
 

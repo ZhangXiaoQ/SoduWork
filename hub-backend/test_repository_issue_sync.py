@@ -26,7 +26,7 @@ os.environ.update({
 })
 
 import httpx
-from sqlalchemy import create_engine, func, select, update
+from sqlalchemy import create_engine, event, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -46,7 +46,7 @@ def upstream(iid=1, *, created=None, **changes):
         "title": "Issue " + str(iid), "description": "Original upstream description",
         "labels": ["type::bug"], "author": {"id": 42, "username": "bound.actor", "name": "External Author"},
         "assignees": [{"id": 114, "username": "external.same"}],
-        "web_url": "https://git.example/example/project/-/issues/" + str(iid), **changes}
+        "web_url": "https://git.example/Industrialagents/soduwork/-/issues/" + str(iid), **changes}
 
 
 class RepositoryIssueSyncTests(unittest.IsolatedAsyncioTestCase):
@@ -88,7 +88,7 @@ class RepositoryIssueSyncTests(unittest.IsolatedAsyncioTestCase):
                         "user": "fixture-account", "secret": "fixture-secret", "kind": "token"}}),
                 models.IntegrationBinding(id="binding", integration_id="integration", external_actor="bound.actor", client_id="trusted-device"),
                 am.ScmRepository(id="catalog", integration_id="integration", org_id="org-a", provider="gitlab",
-                    external_id="149", full_name="example/project", display_name="project", active=True, archived=False),
+                    external_id="149", full_name="Industrialagents/soduwork", display_name="soduwork", active=True, archived=False),
                 am.ScmRepository(id="other-catalog", integration_id="integration", org_id="org-b", provider="gitlab",
                     external_id="150", full_name="Other/private", display_name="private", active=True, archived=False),
             ])
@@ -155,7 +155,7 @@ class RepositoryIssueSyncTests(unittest.IsolatedAsyncioTestCase):
                 enabled=True, config={"orgId": "org-a", "pullAuth": {
                     "user": "github-account", "secret": "github-fixture-token", "kind": "token"}}))
             session.add(am.ScmRepository(id="github-catalog", integration_id="github-integration", org_id="org-a",
-                provider="github", external_id="149", full_name="example/hezi", display_name="project",
+                provider="github", external_id="149", full_name="example/soduwork", display_name="soduwork",
                 active=True, archived=False))
             await session.commit()
         path = "/api/v1/admin/repository-catalog/github-catalog/issue-sync"
@@ -379,7 +379,7 @@ class RepositoryIssueSyncTests(unittest.IsolatedAsyncioTestCase):
                 for iid in (1, 2):
                     result = await aggregation.ingest_one(session, integration, {
                         "external_id": str(iid), "title": "Legacy overwrite", "status": "done",
-                        "external_url": "https://git.example/example/project/-/issues/" + str(iid),
+                        "external_url": "https://git.example/Industrialagents/soduwork/-/issues/" + str(iid),
                     })
                     self.assertEqual(result.get("skipped"), "repository_issue_subscription")
                 task = await session.get(models.Task, task_id)
@@ -434,9 +434,9 @@ class RepositoryIssueSyncTests(unittest.IsolatedAsyncioTestCase):
             await session.commit()
             for fields in (
                 {"external_project_id": 149, "external_url": "https://git.example/Renamed/repository/-/issues/1"},
-                {"external_url": "https://git.example/nested/gitlab/example/project/-/issues/1"},
-                {"external_url": "https://git.example/nested/gitlab/example/project/-/work_items/1"},
-                {"ext_repo": "example/project"},
+                {"external_url": "https://git.example/nested/gitlab/Industrialagents/soduwork/-/issues/1"},
+                {"external_url": "https://git.example/nested/gitlab/Industrialagents/soduwork/-/work_items/1"},
+                {"ext_repo": "Industrialagents/soduwork"},
             ):
                 with self.subTest(fields=fields):
                     result = await aggregation.ingest_one(session, integration,
@@ -444,7 +444,7 @@ class RepositoryIssueSyncTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(result.get("skipped"), "repository_issue_subscription")
             result = await aggregation.ingest_one(session, integration, {
                 "external_id": "100", "external_project_id": 150,
-                "external_url": "https://git.example/nested/gitlab/example/project/-/issues/100",
+                "external_url": "https://git.example/nested/gitlab/Industrialagents/soduwork/-/issues/100",
                 "title": "Stable project identity wins",
             })
             self.assertTrue(result["created"])
@@ -682,6 +682,67 @@ class RepositoryIssueSyncTests(unittest.IsolatedAsyncioTestCase):
         async with self.sessions() as session:
             result = await sync.run(session, "catalog")
             self.assertEqual(result["skipped"], "not_due")
+
+    async def test_source_uses_one_fresh_query_per_operation_under_pressure(self):
+        queries = []
+        def record(_connection, _cursor, statement, _parameters, _context, _many):
+            if statement.lstrip().upper().startswith("SELECT"):
+                queries.append(statement)
+        event.listen(self.engine.sync_engine, "before_cursor_execute", record)
+        try:
+            async with self.sessions() as session:
+                for _ in range(100):
+                    repo, cfg = await sync.source(session, "catalog")
+                    self.assertEqual(repo.external_id, "149")
+                    self.assertEqual(cfg["_auth_user"], "fixture-account")
+                self.assertEqual(len(queries), 100)
+        finally:
+            event.remove(self.engine.sync_engine, "before_cursor_execute", record)
+
+    async def test_source_observes_revocation_and_rotation_despite_retained_identity_map(self):
+        async with self.sessions() as session:
+            repo, cfg = await sync.source(session, "catalog")
+            integration = await session.get(models.Integration, "integration")
+            await session.commit()
+            async with self.sessions() as other:
+                row = await other.get(models.Integration, "integration")
+                row.config = {**row.config, "pullAuth": {"user": "rotated", "secret": "new-test-secret"}}
+                await other.commit()
+            _, cfg = await sync.source(session, "catalog")
+            self.assertEqual(cfg["_auth_user"], "rotated")
+            await session.commit()
+            async with self.sessions() as other:
+                await other.execute(update(am.ScmRepository).where(am.ScmRepository.id == repo.id).values(archived=True))
+                await other.commit()
+            with self.assertRaises(ValueError):
+                await sync.source(session, "catalog")
+            self.assertTrue(repo.archived)
+            self.assertEqual(integration.config["pullAuth"]["user"], "rotated")
+
+    async def test_writeback_stops_new_remote_writes_after_subscription_paused_mid_batch(self):
+        await self.first_import()
+        async with self.sessions() as session:
+            first = await session.scalar(select(Link))
+            first.started_at = self.clock
+            first.writeback_state = "pending"
+            session.add(Link(id="next-writeback", catalog_id="catalog", issue_id="1002", issue_iid=2,
+                task_id=first.task_id + "-second", started_at=self.clock + timedelta(seconds=1), writeback_state="pending"))
+            session.add(models.Task(id=first.task_id + "-second", title="Second isolated issue"))
+            await session.commit()
+        original = sync.call_remote
+        async def remote_then_pause(session, lease, method, *args):
+            result = await original(session, lease, method, *args)
+            async with self.sessions() as other:
+                await other.execute(update(Sync).where(Sync.catalog_id == "catalog").values(enabled=False))
+                await other.commit()
+            return result
+        with patch.object(sync, "call_remote", side_effect=remote_then_pause):
+            async with self.sessions() as session:
+                self.assertEqual(await worker.writebacks(session, "catalog"), 1)
+                second = await session.get(Link, "next-writeback")
+                self.assertEqual(second.writeback_state, "error")
+                self.assertIsNone(second.sent_at)
+        self.assertEqual(self.started.call_count, 1)
 
     async def test_first_start_is_transactional_frozen_and_retries_to_sent_once(self):
         task_id = await self.first_import()

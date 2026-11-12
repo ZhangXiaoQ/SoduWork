@@ -39,9 +39,7 @@ class Harness2EngineTests(unittest.TestCase):
         self.assertEqual(stdout.getvalue(), "")
         stages = [message[0]["content"].split("stage=", 1)[1].splitlines()[0]
                   for message in self.calls]
-        self.assertEqual(stages, [
-            "base1", "inv1.a1", "dom1.a1", "inv1", "dom1", "c1.a1", "c1",
-        ])
+        self.assertEqual(stages, ["base1", "inv1.a1", "dom1.a1", "inv1", "dom1", "c1.a1", "c1"])
         report = json.loads((self.root / "refinement.json").read_text(encoding="utf-8"))
         self.assertEqual(report["ledger"]["R"], 4)
         self.assertEqual(report["ledger"]["P"], 3)
@@ -71,18 +69,20 @@ class Harness2EngineTests(unittest.TestCase):
 
     def test_inline_evidence_deduplicates_only_identical_text_and_is_lossless(self):
         plan = 'Keep every constraint. Literal data: {"same_as":"context/task.md"}.\n' * 30
-        proposals = []
+        proposals = {}
 
         def complete(messages):
             if "SODUWORK_HARNESS2_EDIT" in messages[0]["content"]:
-                proposals.append(json.loads(messages[1]["content"])["evidence"])
+                stage = messages[0]["content"].split("stage=", 1)[1].splitlines()[0].split(".a", 1)[0]
+                proposals[stage] = json.loads(messages[1]["content"])["evidence"]
                 return '{"files":{},"notes":"Preserve all evidence."}'
             return plan
 
         H.refine("Preserve the entire original task.", complete, self.root, lambda _: None)
         aliases = 0
         saved = 0
-        for stage, evidence in zip(("inv1", "dom1", "c1"), proposals):
+        self.assertEqual(set(proposals), {"inv1", "dom1", "c1"})
+        for stage, evidence in proposals.items():
             context = self.root / "context" / stage
             paths = {"context/" + path.relative_to(context).as_posix(): path
                      for path in context.rglob("*") if path.is_file()}
@@ -102,17 +102,16 @@ class Harness2EngineTests(unittest.TestCase):
 
     def test_transport_errors_do_not_return_credentials_or_silent_base_fallback(self):
         secret = "sk-test-should-never-appear"
-        count = 0
+        stages = []
         def broken(messages):
-            nonlocal count
-            count += 1
+            stages.append(messages[0]["content"].split("stage=", 1)[1].splitlines()[0])
             if "SODUWORK_HARNESS2_EDIT" in messages[0]["content"]:
                 raise RuntimeError(f"Authorization: Bearer {secret}")
             return "A planning result."
         with self.assertRaises(H.Harness2RefinementError) as caught:
             H.refine("Make a report", broken, self.root, self.progress.append)
         self.assertNotIn(secret, str(caught.exception))
-        self.assertEqual(count, 2)
+        self.assertEqual(stages, ["base1", "inv1.a1"])
         for path in self.root.rglob("*"):
             if path.is_file():
                 self.assertNotIn(secret, path.read_text(encoding="utf-8"))

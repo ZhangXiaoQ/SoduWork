@@ -248,9 +248,8 @@ async def update_catalog_policy(
 ):
     """Control employee installation without changing immutable versions or bindings.
 
-    Optional ``composeRecommended`` places/removes the app on the new-chat
-    surface in the same transaction (missing key = untouched, so legacy
-    callers keep their exact semantics).
+    Optional ``composeRecommended`` and ``sidebarRecommended`` update their
+    independent placements in the same transaction. Missing keys stay untouched.
     """
     plugin = await _plugin(session, user, plugin_id)
     if plugin.org_id is None and not user.is_super:
@@ -258,6 +257,10 @@ async def update_catalog_policy(
     before = plugin_marketplace.public_policy(
         await plugin_marketplace.get(session, plugin_id))
     before_compose = await plugin_marketplace.app_recommended_on(session, plugin_id)
+    before_sidebar = await plugin_marketplace.app_recommended_on(session, plugin_id, "sidebar")
+    for key in ("composeRecommended", "sidebarRecommended"):
+        if key in body and not isinstance(body[key], bool):
+            raise HTTPException(422, f"{key} 必须是布尔值")
     if body.get("featured", before["featured"]) is True:
         from ..services import plugin_covers, plugin_catalog
         versions = list((await session.execute(select(am.PluginVersion).where(
@@ -285,17 +288,24 @@ async def update_catalog_policy(
         await plugin_marketplace.sync_app_recommendation(
             session, plugin_id, plugin.org_id,
             body["composeRecommended"], str(user.id), commit=False)
+    if "sidebarRecommended" in body:
+        await plugin_marketplace.sync_app_recommendation(
+            session, plugin_id, plugin.org_id,
+            body["sidebarRecommended"], str(user.id), commit=False, surface="sidebar")
     await session.commit()
     await session.refresh(row)
     after = plugin_marketplace.public_policy(row)
     after_compose = await plugin_marketplace.app_recommended_on(session, plugin_id)
+    after_sidebar = await plugin_marketplace.app_recommended_on(session, plugin_id, "sidebar")
     await audit.log(
         session, user, "plugin.catalog_policy", "plugin", plugin.id, plugin.name,
         {"before": before, "after": after,
          "beforeComposeRecommended": before_compose,
          "afterComposeRecommended": after_compose,
+         "beforeSidebarRecommended": before_sidebar,
+         "afterSidebarRecommended": after_sidebar,
          "taskBindingsUnaffected": True})
-    return {**after, "composeRecommended": after_compose}
+    return {**after, "composeRecommended": after_compose, "sidebarRecommended": after_sidebar}
 
 
 @router.get("/{plugin_id}/recommendation")
@@ -304,9 +314,10 @@ async def get_plugin_recommendation(
     user: User = Depends(require_perm("plugin.manage")),
     session: AsyncSession = Depends(get_session),
 ):
-    """Echo current compose-surface placement for the recommendation dialog."""
+    """Echo current application placements for the recommendation dialog."""
     plugin = await _plugin(session, user, plugin_id)
-    return {"composeRecommended": await plugin_marketplace.app_recommended_on(session, plugin.id)}
+    return {"composeRecommended": await plugin_marketplace.app_recommended_on(session, plugin.id),
+            "sidebarRecommended": await plugin_marketplace.app_recommended_on(session, plugin.id, "sidebar")}
 
 
 @router.delete("/{plugin_id}")

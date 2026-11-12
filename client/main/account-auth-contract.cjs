@@ -29,6 +29,7 @@ function request(action, raw, device) {
   if (action === 'resetPassword') body.newPassword = String(raw.newPassword || '');
   if (action === 'register') {
     body.consents = { terms: String(raw.consents?.terms || ''), privacy: String(raw.consents?.privacy || '') };
+    if (raw.consentLocales) body.consentLocales = { terms: String(raw.consentLocales.terms || '').slice(0, 32), privacy: String(raw.consentLocales.privacy || '').slice(0, 32) };
     body.displayName = String(raw.displayName || '').trim().slice(0, 64);
   }
   if (spec.session) for (const key of ['name', 'platform', 'version', 'workRoot']) {

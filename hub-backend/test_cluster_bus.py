@@ -3,8 +3,9 @@ import os
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 os.environ["CLUSTER_REDIS_URL"] = ""
 import unittest
+import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from cryptography.exceptions import InvalidTag
 from app.config import Settings
 from app.services.cluster_bus import ClusterBus, ClusterUnavailable, PacketCodec
@@ -27,6 +28,57 @@ class BroadcastTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ClusterUnavailable):
                 await bus.broadcast({"kind": "publish"}, strict=True)
         self.assertEqual({c.args[0] for c in bus.send.await_args_list}, {"healthy", "full"})
+
+
+class TerminalRelayTests(unittest.IsolatedAsyncioTestCase):
+    async def test_overflow_jobs_are_owned_and_joined_before_transport_shutdown(self):
+        from app.services import cluster_runtime as runtime
+        queue = asyncio.Queue(maxsize=1)
+        queue.put_nowait(("node", {"kind": "terminal"}))
+        blocked = asyncio.Event()
+        entered, cancelled = [], []
+        async def send(_node, packet):
+            entered.append(packet["event"]["task"])
+            try:
+                await blocked.wait()
+            finally:
+                cancelled.append(packet["event"]["task"])
+        async def stopped():
+            self.assertEqual(len(cancelled), 100)
+            self.assertFalse(runtime._RELAY_CLOSE_JOBS)
+        runner = SimpleNamespace(id="runner", cluster_token="test-token", term_subs={str(i): None for i in range(100)})
+        with patch.object(runtime, "_STOPPING", False), patch.object(runtime, "_RELAY", queue), patch.object(runtime.bus, "send", side_effect=send), \
+                patch.object(runtime.bus, "stop", side_effect=stopped):
+            for i in range(100):
+                runtime._relay("node", runner, str(i), b"private terminal bytes")
+            for _ in range(1000):
+                runtime._relay("node", runner, "0", b"late bytes")
+            self.assertEqual(len(runtime._RELAY_CLOSE_JOBS), 100)
+            await asyncio.sleep(0)
+            self.assertEqual(len(entered), 100)
+            self.assertFalse(runner.term_subs)
+            await runtime.stop()
+            runner.term_subs["late"] = None
+            runtime._relay("node", runner, "late", b"shutdown bytes")
+            self.assertFalse(runtime._RELAY_CLOSE_JOBS)
+            await asyncio.wait_for(queue.join(), 1)
+            self.assertTrue(queue.empty())
+
+    async def test_overflow_failure_is_observed_and_recovery_errors_do_not_escape(self):
+        from app.services import cluster_runtime as runtime
+        queue = asyncio.Queue(maxsize=1)
+        queue.put_nowait(("node", {}))
+        runner = SimpleNamespace(id="runner", cluster_token="test-token", term_subs={"task": None})
+        with patch.object(runtime, "_STOPPING", False), patch.object(runtime, "_RELAY", queue), \
+                patch.object(runtime.bus, "send", side_effect=RuntimeError("private transport content")), \
+                patch.object(runtime, "on_failure", side_effect=RuntimeError("private recovery content")) as recovery:
+            with self.assertLogs("uvicorn.error", level="WARNING") as captured:
+                runtime._relay("node", runner, "task", b"private terminal bytes")
+                await asyncio.gather(*runtime._RELAY_CLOSE_JOBS)
+                await asyncio.sleep(0)
+            self.assertFalse(runtime._RELAY_CLOSE_JOBS)
+            recovery.assert_awaited_once()
+            self.assertTrue(all("private" not in line for line in captured.output))
 
 
 class PacketTests(unittest.TestCase):

@@ -124,11 +124,16 @@
 .wi-brief.schedule .wi-schedule-row { grid-row: 1; }
 .wi-schedule-row {
   min-width: 0; min-height: 36px; box-sizing: border-box; grid-column: 2;
-  display: flex; align-items: center; gap: 8px; padding: 2px 10px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 2px 10px;
   border: 1px solid color-mix(in srgb, var(--line, #e4e8ee) 78%, transparent); border-radius: 9px;
   background: color-mix(in srgb, var(--bg-1, #fafbfc) 82%, var(--bg-0, #fff));
 }
 .wi-schedule-row[hidden] { display: none; }
+.wi-schedule-row [hidden] { display: none!important; }
+.wi-schedule-custom { display:flex;flex-direction:column;gap:5px;flex:1 1 100%;min-width:0;color:var(--ink-3);font-size:var(--font-min-readable,14.5px); }
+.wi-schedule-custom textarea { width:100%;min-height:96px;max-height:220px;box-sizing:border-box;resize:vertical;padding:8px;border:1px solid var(--line);border-radius:7px;background:var(--bg-0);color:var(--ink);font:14px/1.6 var(--font-mono,monospace); }
+.wi-schedule-custom textarea:focus-visible { outline:2px solid var(--accent);outline-offset:1px; }
+.wi-schedule-custom small { color:var(--ink-4);line-height:1.5; }
 .wi-schedule-row > span {
   color: var(--ink-3, #7b8491); font-size: max(var(--font-min-readable, 14.5px), 11.5px); font-weight: 520; white-space: nowrap;
 }
@@ -145,6 +150,55 @@
   overflow: hidden; color: var(--ink-5, #a1a8b2); font-size: max(var(--font-min-readable, 14.5px), 10.5px); font-style: normal;
   text-overflow: ellipsis; white-space: nowrap;
 }
+.wi-schedule-row > [data-wi-weekdays], .wi-schedule-row > [data-wi-monthdays],
+.wi-schedule-row > [data-wi-range] {
+  flex: 1 1 100%; min-width: 0;
+}
+.wi-schedule-row > [data-wi-weekdays] > span, .wi-schedule-row > [data-wi-monthdays] > span {
+  display: block; margin-bottom: 4px; color: var(--ink-4, #8f98a5); font-size: max(var(--font-min-readable, 12px), 12px); font-weight: 520;
+}
+.wi-schedule-row > [data-wi-weekdays] > div, .wi-schedule-row > [data-wi-monthdays] > div {
+  display: flex; flex-wrap: wrap; gap: 4px;
+}
+.wi-schedule-row [data-wi-weekday], .wi-schedule-row [data-wi-monthday],
+.wi-schedule-row [data-wi-lastday] {
+  position: absolute; opacity: 0; pointer-events: none;
+}
+.wi-schedule-row [data-wi-weekdays] label, .wi-schedule-row [data-wi-monthdays] > div label {
+  min-width: 28px; height: 25px; box-sizing: border-box; padding: 0 5px; display: inline-flex;
+  align-items: center; justify-content: center; border: 1px solid var(--line, #e4e8ee);
+  border-radius: 6px; background: var(--bg-0, #fff); color: var(--ink-3, #7b8491); cursor: pointer;
+}
+.wi-schedule-row [data-wi-weekdays] label:has(input:checked),
+.wi-schedule-row [data-wi-monthdays] > div label:has(input:checked),
+.wi-schedule-row .wi-schedule-lastday:has([data-wi-lastday]:checked) {
+  border-color: color-mix(in srgb, var(--accent, #3478f6) 42%, var(--line, #e4e8ee));
+  background: color-mix(in srgb, var(--accent, #3478f6) 10%, var(--bg-0, #fff)); color: var(--accent, #3478f6);
+}
+.wi-schedule-row [data-wi-range] {
+  display: flex; align-items: center; gap: 5px;
+}
+.wi-schedule-row [data-wi-range] label {
+  display: flex; align-items: center; gap: 3px; color: var(--ink-4, #8f98a5); font-size: max(var(--font-min-readable, 12px), 12px); white-space: nowrap;
+}
+.wi-schedule-row [data-wi-range] input[type="date"] {
+  width: 116px; height: 26px; box-sizing: border-box; padding: 0 5px;
+  border: 1px solid color-mix(in srgb, var(--line, #e4e8ee) 90%, transparent); border-radius: 7px;
+  background: var(--bg-0, #fff); color: var(--ink-1, #293241); font: 400 max(var(--font-min-readable, 12px), 12px)/1 var(--font-ui, sans-serif);
+}
+.wi-schedule-lastday {
+  display: inline-flex; align-items: center; gap: 5px; margin-top: 5px; color: var(--ink-4, #8f98a5);
+  font-size: max(var(--font-min-readable, 12px), 12px); cursor: pointer;
+}
+.wi-schedule-row [data-wi-weekdays] label:focus-within,
+.wi-schedule-row [data-wi-monthdays] label:focus-within,
+.wi-schedule-row .wi-schedule-lastday:focus-within,
+.wi-schedule-row [data-wi-range] input:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent, #3478f6) 32%, transparent); outline-offset: 1px;
+}
+.wi-schedule-row [data-wi-monthdays] { max-height: 86px; overflow-y: auto; }
+.wi-schedule-row [data-wi-monthdays] > div { max-width: 310px; }
+.wi-schedule-row [data-wi-monthdays] > div label { min-width: 25px; padding: 0 3px; }
 .wi-brief-clear {
   width: 28px; height: 28px; padding: 0; border: 0; border-radius: 8px;
   display: grid; place-items: center; background: transparent; color: var(--ink-5, #a1a8b2); cursor: pointer;

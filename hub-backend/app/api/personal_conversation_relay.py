@@ -121,6 +121,12 @@ async def prepare(request_id: str, body: dict = Body(...), client=Depends(curren
         request_id=request_id, request_hash=digest, instruction=instruction,
         source_epoch=source.source_epoch, source_revision=source.source_revision,
         phase="prepared", reason="", expires_at=now() + timedelta(seconds=60))
+    from . import desktop_capabilities
+    from ..services import conversation_content
+    if source.storage_mode == "endpoint" or conversation_content.metadata_only():
+        _, endpoint = await desktop_capabilities.resolve(session, client, device.id)
+        row.content_ref = await conversation_content.put_json(endpoint.id, uid, "relay:" + rid, {"instruction": instruction}, session=session)
+        row.instruction = ""
     session.add(row)
     try:
         await session.commit()
@@ -225,8 +231,12 @@ async def poll(client=Depends(current_client), session=Depends(get_session), bod
         source = sources.get(row.conversation_id)
         if source is None:
             continue
+        instruction = row.instruction
+        if row.content_ref:
+            from ..services import conversation_content
+            instruction = (await conversation_content.get_json(row.content_ref, uid, "relay:" + row.id, session=session))["instruction"]
         result.append({**public(row), "sourceSessionId": source.source_session_id,
-                       "instruction": row.instruction, "sourceEpoch": row.source_epoch,
+                       "instruction": instruction, "sourceEpoch": row.source_epoch,
                        "sourceRevision": row.source_revision})
     return {"requests": result, "discoveryProtocol": 1}
 

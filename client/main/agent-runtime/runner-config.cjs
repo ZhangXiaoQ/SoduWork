@@ -2,6 +2,7 @@
 
 const contextWindow = require('../conversation/context-window');
 const modelSelection = require('../conversation/model-selection');
+const thinkingCapabilities = require('../conversation/thinking-capabilities');
 
 // Ordinary turns and workflow nodes use the same managed-model contract,
 // including when a running node receives a renewed model ticket.
@@ -12,10 +13,14 @@ function create(model, adapterId, capabilityIds) {
     ? capabilityIds : []).map(value => String(value || '').trim().toLowerCase()).filter(Boolean)));
   if (requiredCapabilities.length) cfg.requiredCapabilities = requiredCapabilities;
   if (model && model.baseUrl && model.key && model.id) {
-    const thinking = require('../conversation/thinking-capabilities').profile(model);
+    const thinking = thinkingCapabilities.profile(model);
     cfg.llm = {
       base: String(model.baseUrl), key: String(model.key), model: String(model.id),
       maxOutputTokens: modelSelection.outputLimit(model),
+      ...(['none', 'always', 'controllable'].includes(model.thinkingMode)
+        ? { thinkingMode: model.thinkingMode } : {}),
+      ...(typeof model.thinkingAlwaysOn === 'boolean' ? { thinkingAlwaysOn: model.thinkingAlwaysOn } : {}),
+      ...(thinkingCapabilities.LEVELS.includes(model.thinkingLevel) ? { thinkingLevel: model.thinkingLevel } : {}),
       ...(thinking.reasoning && (model.reasoning === true || ['always', 'controllable'].includes(model.thinkingMode)) ? {
         reasoning: true,
         thinkingFormat: thinking.format,

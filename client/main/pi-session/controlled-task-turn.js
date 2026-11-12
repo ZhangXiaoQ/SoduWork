@@ -81,6 +81,14 @@ function create({ request, task, spec, scope, interval = 1500, wait = ms => new 
     return stopPromise;
   }
   async function execute(handle, text, files) {
+    const startedAt = Date.now();
+    let waitingAt = null;
+    const changed = value => {
+      // Repeated failed reads keep the original pause boundary.
+      waitingAt = value.status === 'waiting' ? (waitingAt ?? Date.now()) : null;
+      handle.taskExecutionChanged({ ...value,
+        timing: { startedAt, updatedAt: waitingAt ?? Date.now() } });
+    };
     const outputs = new Map();
     const cursors = new Map();
     async function readOutput(ref) {
@@ -93,18 +101,24 @@ function create({ request, task, spec, scope, interval = 1500, wait = ms => new 
         agentId: page.activeExecutionSelection?.agentId || page.engine || page.cli,
         runId: ref,
       });
-      if (!outputs.has(ref)) outputs.set(ref, liveOutput.create(handle, task.id, { sourceAgent }));
+      if (!outputs.has(ref)) outputs.set(ref, liveOutput.create(handle, task.id, { sourceAgent, coalesceText: true }));
       const output = outputs.get(ref);
       output.setSourceAgent(sourceAgent);
       const items = continuation ? continuation.items(page) : page.items;
       // An older Hub can learn the runtime after its first page. Keep already consumed events idempotent.
       await output.consume(ref, (items || []).filter(item => Number(item.seq) > since));
       const last = Math.max(since, Number(page.last || 0), ...(page.items || []).map(x => Number(x.seq) || 0));
+      const drained = last >= Number(page.seq || last);
+      // A terminal receipt can omit the final text event. Flush only after all
+      // pages arrive, and before advancing the cursor so failed saves retry.
+      const pageStatus = continuation ? { status: continuation.status(page) } : page;
+      if (drained && outcome(pageStatus, 'dispatch')) await output.finish(ref);
       cursors.set(ref, last);
-      return { page, drained: last >= Number(page.seq || last) };
+      return { page, drained };
     }
     handle.appendTaskMessage('user', text, files, task.id);
-    handle.taskExecutionChanged({ taskId: task.id, executor: spec.mode, status: 'running', sameMessageStream: true });
+    changed({ taskId: task.id, runId: '', executor: spec.mode, status: 'running',
+      reason: '', waitingReason: '', sameMessageStream: true });
     if (stopping) return { ok: true, cancelled: true };
     let started;
     try {
@@ -118,8 +132,9 @@ function create({ request, task, spec, scope, interval = 1500, wait = ms => new 
     } catch (error) {
       if (error.authRequired || error.permissionRequired) {
         const reason = error.authRequired ? '登录已过期，请重新连接后继续' : '当前连接没有执行此操作的权限';
-        handle.taskExecutionChanged({ taskId: task.id, runId: '', executor: spec.mode,
-          status: 'waiting', authRequired: !!error.authRequired, permissionRequired: !!error.permissionRequired, reason });
+        changed({ taskId: task.id, runId: '', executor: spec.mode,
+          status: 'waiting', waitingReason: error.authRequired ? 'auth' : 'permission',
+          authRequired: !!error.authRequired, permissionRequired: !!error.permissionRequired, reason });
         return { ok: true, paused: true, authRequired: !!error.authRequired,
           permissionRequired: !!error.permissionRequired, reason };
       }
@@ -132,8 +147,8 @@ function create({ request, task, spec, scope, interval = 1500, wait = ms => new 
       if (stopping && !stopAcknowledged) {
         try { await cancel(); }
         catch (_) {
-          handle.taskExecutionChanged({ taskId: task.id, runId, executor: spec.mode,
-            status: 'waiting', reason: '停止尚未确认；后续需求继续等待' });
+          changed({ taskId: task.id, runId, executor: spec.mode,
+            status: 'waiting', waitingReason: 'stop', reason: '停止尚未确认；后续需求继续等待' });
           await wait(interval); continue;
         }
       }
@@ -153,17 +168,21 @@ function create({ request, task, spec, scope, interval = 1500, wait = ms => new 
           latest = result.page;
           drained = result.drained;
         }
+        if (drained && outcome(continuation ? { status: continuation.status(latest) } : latest, spec.mode)) {
+          for (const [ref, output] of outputs) await output.finish(ref);
+        }
       } catch (error) {
         if (error.authRequired || error.permissionRequired) {
           const reason = error.authRequired ? '登录已过期，请重新连接后继续' : '当前连接没有执行此操作的权限';
-          handle.taskExecutionChanged({ taskId: task.id, runId, executor: spec.mode,
-            status: 'waiting', authRequired: !!error.authRequired, permissionRequired: !!error.permissionRequired, reason });
+          changed({ taskId: task.id, runId, executor: spec.mode,
+            status: 'waiting', waitingReason: error.authRequired ? 'auth' : 'permission',
+            authRequired: !!error.authRequired, permissionRequired: !!error.permissionRequired, reason });
           return { ok: true, paused: true, authRequired: !!error.authRequired,
             permissionRequired: !!error.permissionRequired, reason };
         }
         // A transient read failure cannot mean completion or permit another run.
-        handle.taskExecutionChanged({ taskId: task.id, runId, executor: spec.mode,
-          status: 'waiting', reason: '正在重新连接执行记录；后续需求继续等待' });
+        changed({ taskId: task.id, runId, executor: spec.mode,
+          status: 'waiting', waitingReason: 'connection', reason: '正在重新连接执行记录；后续需求继续等待' });
         await wait(interval); continue;
       }
       const returnedId = String((spec.mode === 'workflow' ? latest.id || latest.runId : latest.ref || latest.runId) || '');
@@ -171,8 +190,9 @@ function create({ request, task, spec, scope, interval = 1500, wait = ms => new 
       const status = outcome(continuation ? { status: continuation.status(latest) } : latest, spec.mode);
       const waiting = /waiting/.test(latest.state || latest.status || '') ||
         (latest.nodes || []).some(node => /^(waiting_human|waiting_external)$/.test(node.state || ''));
-      handle.taskExecutionChanged({ taskId: task.id, runId, executor: spec.mode,
+      changed({ taskId: task.id, runId, executor: spec.mode,
         sameMessageStream: true,
+        reason: '', waitingReason: '', authRequired: false, permissionRequired: false,
         status: status || (waiting ? 'waiting' : 'running'),
         run: latest });
       if (drained && status && !(spec.mode === 'workflow' && status === 'failed')) {

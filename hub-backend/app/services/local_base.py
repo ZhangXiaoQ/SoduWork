@@ -24,8 +24,8 @@ _IDLE_LIMIT_S = int(os.environ.get("SODUWORK_LOCAL_IDLE_LIMIT_S") or 15 * 60)
 _HARD_LIMIT_S = int(os.environ.get("SODUWORK_LOCAL_HARD_LIMIT_S") or 8 * 3600)
 _TIMEOUT_S = _HARD_LIMIT_S          # Compatibility alias for older callers.
 
-# Context window: when the model service does not report its actual size,
-# use a configurable estimate and label it as estimated in the UI. Learn the actual size from overflow errors (see _learn_window).
+# Use a configurable context-window estimate when the gateway cannot report the real limit.
+# Label estimates in the UI and replace them with observed limits when overflow errors provide one.
 _CTX_WINDOW_DEFAULT = int(os.environ.get("SODUWORK_LOCAL_CTX_WINDOW") or 128000)
 _COMPACT_AT = 0.85                  # Compact before the next turn when context occupancy reaches this threshold.
 
@@ -902,18 +902,13 @@ def _prepare_codex_home(env: dict) -> None:
 
 def _env_for(prof: dict, cfg: dict, runtime_ref: str = "") -> dict:
     """Build the child-process environment; inject OpenCode model configuration and credentials through environment variables instead of files."""
-    # The bundled Harness² adapter supplies both its own model-only stages and
-    # the existing OpenCode executor environment. It must not fall through to
-    # the default managed-CLI branch below.
-    if prof is _PROFILES.get("harness2"):
-        return _harness2_runtime.environment(dict(os.environ), cfg, runtime_ref=runtime_ref)
     env = dict(os.environ)
     from . import runtime_images
     env.pop(runtime_images.ENV_KEY, None)
     if cfg.get(runtime_images.CFG_KEY):
         if not runtime_ref:
             raise runtime_images.ImageInputError("图片附件缺少会话归属，请重新发送")
-        if (prof.get("acp_key") or prof is _PROFILES.get("opencode")) and not runtime_images.transport_supported(cfg.get("llm")):
+        if (prof.get("acp_key") or prof is _PROFILES.get("opencode") or prof is _PROFILES.get("harness2")) and not runtime_images.transport_supported(cfg.get("llm")):
             raise runtime_images.ImageInputError("当前所选模型未启用图片输入，请手动选择支持图片的模型后重试；原图已保留，未自动更换模型")
         env[runtime_images.ENV_KEY] = runtime_images.environment(cfg, os.path.join(_store_dir(runtime_ref), "inputs"))
     # Agent skills may launch Python subprocesses. Keep their text boundary
@@ -969,6 +964,9 @@ def _env_for(prof: dict, cfg: dict, runtime_ref: str = "") -> dict:
     # Add repository hosts to NO_PROXY while preserving system proxies for other requests.
     # Set this before the needs_llm early return so agents using native accounts also inherit it.
     _git_host_no_proxy(env, str((cfg or {}).get("repoGitUrl") or ""))
+    if prof is _PROFILES.get("harness2"):
+        return _no_proxy_for(_harness2_runtime.environment(env, cfg, runtime_ref=runtime_ref),
+                             str((cfg.get("llm") or {}).get("base") or ""))
     if not prof.get("needs_llm"):
         if prof.get("acp_key"):
             _acp_agents.home_env(prof["acp_key"], env, _data_root())
@@ -1037,7 +1035,7 @@ def _env_for(prof: dict, cfg: dict, runtime_ref: str = "") -> dict:
         "provider": {"company": {
             "npm": provider_pkg, "name": "SoduWork 模型服务",
             "options": {"baseURL": base, "apiKey": "{env:SODUWORK_LLM_KEY}"},
-            "models": {model: {"name": "编码模型",
+            "models": {model: {"name": "公司 coding 模型",
                 "limit": {"context": context_limit, "output": min(output_limit, context_limit)},
                 "modalities": {
                 "input": ["text", "image"] if runtime_images.transport_supported(llm) else ["text"],
@@ -1106,7 +1104,7 @@ def _write_pi_models(base: str, model: str, kind: str = "openai-compat", context
             "baseUrl": base,
             "api": "anthropic-messages" if kind == "anthropic" else "openai-completions",
             "apiKey": "$SODUWORK_LLM_KEY",
-            "models": [{"id": model, "name": "编码模型",
+            "models": [{"id": model, "name": "公司 coding 模型",
                         "input": ["text", "image"] if runtime_images.transport_supported(llm) else ["text"],
                         "contextWindow": context_window,
                         "maxTokens": min(runtime_images.model_fields(llm).get("maxOutputTokens", DEFAULT_OUTPUT), context_window)}],

@@ -913,7 +913,15 @@ def _finish(ref: str, code: int, term: dict, hard_err: str) -> None:
         # Check terminal event failures as well as the process exit code.
         # Some CLIs return zero after authentication errors while marking the result as failed.
         # Do not misreport such failures as successful executions without outputs.
-        bad = code != 0 or term.get("isError") or hard_err
+        # Pi can emit its final answer and leave the print process alive. The
+        # process watchdog marks its deliberate cleanup kill; only that current,
+        # successful Pi response may tolerate the resulting nonzero exit.
+        watchdog_cleanup = bool(run.pop("piSettledByWatchdog", False))
+        pi_settled = (watchdog_cleanup and run.get("cli") == "pi"
+                      and run.get("piFinalResponseAt") and term.get("piFinalResponse")
+                      and not (timed or stopping or overflow or term.get("outputTruncated")
+                               or run.get("permissionDenied") or run.get("executionPolicyViolation")))
+        bad = (code != 0 and not pi_settled) or term.get("isError") or hard_err
     if stopping and not timed:
         with _LOCK:
             violation = dict(run.get("executionPolicyViolation") or {})

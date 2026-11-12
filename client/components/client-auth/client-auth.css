@@ -172,6 +172,10 @@ body.soduwork-client-auth-open {
 .soduwork-auth-form input::placeholder {
   color: #b0b8c5;
 }
+.soduwork-auth-form #soduWorkAuthAccount {
+  line-height: 20px;
+  white-space: nowrap;
+}
 .soduwork-auth-pw-wrap {
   position: relative;
   display: block;

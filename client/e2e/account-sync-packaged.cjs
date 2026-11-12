@@ -34,7 +34,17 @@ if (typeof electron === 'string') {
       assert.equal((await store.jobs()).length, 1);
       await store.ack('fixture', { conversationId: 'fixture-conversation' });
       assert.equal((await store.session('fixture')).ackedRevision, 1);
-      assert.equal((await store.pending()).length, 0); ok = true;
+      assert.equal((await store.pending()).length, 0);
+      await store.saveDirectory('fixture-owner', [{ id: 'fixture-conversation', revision: 1, archived: false }], 1);
+      await store.saveDirectory('fixture-owner', [{ id: 'fixture-conversation', sourceSessionId: 'fixture-session',
+        revision: 9, lifecycleRevision: 9, deleted: true }]);
+      await store.saveDirectory('fixture-owner', [{ id: 'fixture-conversation', revision: 2, deleted: false }], 2);
+      const directory = await store.directory('fixture-owner');
+      assert.equal(directory.cursor, 2, 'a single lifecycle receipt must not skip directory pages');
+      assert.equal(directory.items[0].deleted, true);
+      assert.equal(directory.items[0].lifecycleRevision, 9);
+      assert.equal(directory.items[0].sourceSessionId, 'fixture-session');
+      ok = true;
     } catch (error) { console.error(error); }
     finally {
       await store.close(); console.log(JSON.stringify({ ok, asarWorker: true })); app.exit(ok ? 0 : 1);

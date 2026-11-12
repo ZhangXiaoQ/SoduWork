@@ -417,6 +417,7 @@
             ctx._render();
           }).catch(() => {});
         }
+        await _restoreTaskTranscript(entry, () => current() && entry.loadSeq === seq && ctx._collabTasks.get(id) === entry);
         if (!entry.nativeTurn && !entry.executionElsewhere) _loadCollabRun(id);
       }
     } catch (error) {
@@ -424,6 +425,56 @@
       if (current() && [403, 404, 410].includes(Number(error?.status)) &&
           entry.loadSeq === seq && ctx._collabTasks.get(id) === entry) entry.unavailable = true;
     }
+  }
+
+  async function _restoreTaskTranscript(entry, current) {
+    const api = global.SoduWorkAPI;
+    if (!entry.controlledTurn || entry.executionElsewhere || !api?.aiSession ||
+        entry.controlledExecution?.sameMessageStream ||
+        ctx._snap?.messages?.some(message => message.taskId === entry.taskId && message.taskOutputKey)) return;
+    const sessions = entry.trace?.execution?.sessions || [];
+    if (!sessions.length || !current()) return;
+    const transcripts = entry.transcripts || (entry.transcripts = new Map());
+    entry.transcriptPending = true;
+    let budget = 8;
+    // Trace events are bounded excerpts. Restore from the authorized task/ref
+    // endpoint; never display a tail excerpt as a complete conversation.
+    for (const session of sessions) {
+      const ref = String(session.ref || '');
+      if (!ref) continue;
+      let replay = transcripts.get(ref);
+      if (!replay) {
+        replay = { ...session, items: [], last: 0, hasMore: true };
+        transcripts.set(ref, replay);
+      }
+      while (budget > 0 && current() && (replay.hasMore || Number(session.seq) > replay.last)) {
+        budget--;
+        const page = await api.aiSession(entry.taskId, replay.last, ref);
+        if (!current()) return;
+        if (!page || page.ok === false || page.ref !== ref ||
+            (page.conversationId && page.conversationId !== ctx._sessionId)) break;
+        const last = Number(page.last);
+        if (!Number.isSafeInteger(last) || last < replay.last || !Array.isArray(page.items)) break;
+        const additions = page.items.filter(item => {
+          const owner = item.conversationId || item.conversation_id || item.scope?.conversationId || item.eventScope?.conversationId;
+          return (!owner || owner === ctx._sessionId) && Number.isSafeInteger(item.seq) &&
+            item.seq > replay.last && item.seq <= last;
+        }).sort((a, b) => a.seq - b.seq);
+        const advanced = last > replay.last;
+        replay = { ...page, items: [...replay.items, ...additions],
+          hasMore: page.hasMore === true || last < Number(page.seq || 0) };
+        transcripts.set(ref, replay);
+        ctx._render();
+        if (!advanced) break;
+      }
+    }
+    if (!current()) return;
+    entry.transcriptPending = sessions.some(session => {
+      const replay = transcripts.get(String(session.ref || ''));
+      return replay && (replay.hasMore || Number(session.seq) > replay.last);
+    });
+    ctx._render();
+    if (entry.transcriptPending) _scheduleCollabPoll();
   }
 
   async function _loadCollabRun(taskId) {
@@ -491,11 +542,12 @@
 
   function _scheduleCollabPoll() {
     if (ctx._collabPollTimer || !_collabEntries().some(entry => !entry.unavailable &&
-        !_collabTerminal.has(_collabEntryStatus(entry)))) return;
+        (entry.transcriptPending || !_collabTerminal.has(_collabEntryStatus(entry))))) return;
     const epoch = ctx._viewEpoch;
     ctx._collabPollTimer = setTimeout(async () => {
       try {
-        const entries = _collabEntries().filter(entry => !entry.unavailable && !_collabTerminal.has(_collabEntryStatus(entry)));
+        const entries = _collabEntries().filter(entry => !entry.unavailable &&
+          (entry.transcriptPending || !_collabTerminal.has(_collabEntryStatus(entry))));
         await Promise.all(entries.map(entry => entry.nativeTurn || entry.executionElsewhere ? _loadCollabTask(entry.taskId) : _loadCollabRun(entry.taskId)));
       } finally {
         if (epoch === ctx._viewEpoch) { ctx._collabPollTimer = null; _scheduleCollabPoll(); }
@@ -960,7 +1012,7 @@
     return true;
   }
 
-    return { _taskExecutionConfig, _collabState, _ensureCollabView, _collabAction, _openTaskPicker, _selectCollabTask, _loadCollabTask, _clearFinishedAcceptanceContext, _loadCollabRun, _scheduleCollabPoll, _taskSnapshotIsStale, _isEmptyStalledSnapshot, _collabTerminal, _collabRunning, _collabStatus, _collabEntryStatus, _collabEntries, _collabQueueMode, _collabProjectId, _setCollabEntryStatus, _nextCollabEntry, _persistTaskBinding, _bindCollaborationTask, _restoreCollaboration, _openTask, _renderTaskStartPrompt, _startTask, _startTaskCommand, enqueueTask };
+    return { _taskExecutionConfig, _collabState, _ensureCollabView, _collabAction, _openTaskPicker, _selectCollabTask, _loadCollabTask, _restoreTaskTranscript, _clearFinishedAcceptanceContext, _loadCollabRun, _scheduleCollabPoll, _taskSnapshotIsStale, _isEmptyStalledSnapshot, _collabTerminal, _collabRunning, _collabStatus, _collabEntryStatus, _collabEntries, _collabQueueMode, _collabProjectId, _setCollabEntryStatus, _nextCollabEntry, _persistTaskBinding, _bindCollaborationTask, _restoreCollaboration, _openTask, _renderTaskStartPrompt, _startTask, _startTaskCommand, enqueueTask };
   }
   global.ChatTaskController = { create, isPickableTask, acceptanceDraft, reworkDraft, acceptanceResolution };
 })(window);

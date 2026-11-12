@@ -157,9 +157,7 @@ class CatalogInitializationTests(IsolatedDatabase):
                 self.assertEqual(actual, legacy, "Report settings remain; no startup markers are written")
 
     async def test_startup_does_not_rename_repair_or_enable_existing_catalog_without_markers(self):
-        # Public source has no company-specific aliases; persisted administrator
-        # names must survive bootstrap regardless of the configured catalog.
-        old_name = "retired-self-hosted-model"
+        old_name = next(iter(model_catalog.MODEL_ALIASES))
         async with self.sessions() as session:
             session.add(models.ModelProvider(id="company", name="Admin company", builtin=True,
                                              enabled=False, base_url="", api_key="isolated-kept-key"))

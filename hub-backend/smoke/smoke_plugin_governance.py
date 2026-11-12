@@ -47,13 +47,13 @@ async def main():
         am.Plugin(id="p-review", org_id="org-a", key="review", name="待审插件",
                   enabled=False, source_kind="codex"),
         am.Plugin(id="p-ready", org_id="org-a", key="ready", name="待绑定插件",
-                  enabled=True, source_kind="personal"),
+                  enabled=True, source_kind="soduwork"),
         am.Plugin(id="p-quality", org_id="org-a", key="quality", name="质量插件",
                   enabled=True, source_kind="claude"),
         am.Plugin(id="p-runtime", org_id="org-a", key="runtime", name="运行插件",
-                  enabled=True, source_kind="personal"),
+                  enabled=True, source_kind="soduwork"),
         am.Plugin(id="p-other", org_id="org-b", key="other", name="其他组织插件",
-                  enabled=True, source_kind="personal"),
+                  enabled=True, source_kind="soduwork"),
     ]
     versions = [
         am.PluginVersion(

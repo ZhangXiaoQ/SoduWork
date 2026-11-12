@@ -287,7 +287,7 @@ function isArchived(app, id) { return archiveState.isArchived(archiveRoot(app), 
 function setArchived(app, id, archived) { return archiveState.setArchived(archiveRoot(app), id, archived); }
 
 async function archiveHistory(app, id) {
-  const found = await historyEntry(app, id);
+  const found = await historyEntry(app, id, { strict: true });
   if (!found || !found.ok || !found.entry) return found || { ok: false, reason: '找不到这条会话' };
   const at = archiveState.setArchived(archiveRoot(app), id, true);
   return { ok: true, id: String(id), archived: true, archivedAt: at, entry: found.entry };
@@ -299,7 +299,7 @@ async function restoreHistory(app, id) {
   if (!archiveState.isArchived(archiveRoot(app), wanted)) {
     return { ok: false, reason: '这条会话不在归档历史中' };
   }
-  const found = await historyEntry(app, wanted);
+  const found = await historyEntry(app, wanted, { strict: true });
   if (!found || !found.ok || !found.entry) return found || { ok: false, reason: '找不到这条会话' };
   archiveState.setArchived(archiveRoot(app), wanted, false);
   return { ok: true, id: wanted, archived: false, entry: found.entry };
@@ -327,7 +327,7 @@ async function permanentlyDeleteHistory(app, id) {
   const root = archiveRoot(app);
   if (!await _plainArchiveRoot(root)) return { ok: false, reason: '会话存档目录不受信任，已拒绝删除' };
   if (!archiveState.isArchived(root, wanted)) return { ok: false, reason: '只能从归档历史彻底删除会话' };
-  const found = await historyEntry(app, wanted);
+  const found = await historyEntry(app, wanted, { strict: true });
   if (!await _plainArchiveRoot(root)) return { ok: false, reason: '会话存档目录不受信任，已拒绝删除' };
   if (!found?.ok && !found?.notFound) return found || { ok: false, reason: '读取会话存档失败，请重试' };
   if (!found.ok || !found.entry || !found.entry.path) {
@@ -363,11 +363,11 @@ async function permanentlyDeleteHistory(app, id) {
  * Accept indexed conversation IDs only and revalidate real paths, file versions, and IDs.
  * History lookup does not load the Agent SDK or prepare model execution.
  */
-async function historyEntry(app, id) {
+async function historyEntry(app, id, options = {}) {
   const wanted = String(id || '').trim();
   if (!wanted) return { ok: false, reason: '没有指定会话' };
   try {
-    const row = await _historyIndex(app).find(wanted);
+    const row = await _historyIndex(app).find(wanted, { strict: options.strict === true });
     if (!row) return { ok: false, notFound: true, reason: '这条会话已经不存在了' };
     return { ok: true, entry: row };
   } catch (error) {

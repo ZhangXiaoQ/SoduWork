@@ -175,3 +175,54 @@ test('usage interleaved with a command does not split it or erase its real failu
   assert.equal(rows.length, 1); assert.equal(rows[0].type, 'tool');
   assert.equal(rows[0].result, 'test failed');
 });
+
+test('restored task deltas preserve repeated tokens and whitespace in one paragraph', () => {
+  const chunks = ['A', ' ', 'very', ' very', ' ', 'short', '\n\n', 'reply.'];
+  const events = chunks.map((text, index) => ({ seq: index + 1, kind: 'say',
+    streamId: 'answer', sourceId: 'provider-message', delta: true, text, round: 1, seg: 1 }));
+  events.splice(4, 0, { ...events[3] }); // A repeated page boundary is not a new token.
+  events.push({ seq: 9, kind: 'say', streamId: 'answer', delta: true, text: '', done: true });
+  const before = JSON.stringify(events);
+  const rows = stream.rows(events, 'done').filter(row => row.type === 'say');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].item.text, chunks.join(''));
+  assert.equal(JSON.stringify(events), before, 'rendering never rewrites archived events');
+  assert.equal((stream.rowsHtml(events, 'done').match(/dks-message/g) || []).length, 1);
+});
+
+test('restored reply snapshots replace deltas without merging tools or later rounds', () => {
+  const events = [
+    { seq: 1, kind: 'say', streamId: 'answer', delta: true, text: 'First', round: 1 },
+    { seq: 2, kind: 'say', streamId: 'answer', delta: true, text: ' preview', full: 'First answer', round: 1 },
+    { seq: 3, kind: 'say', streamId: 'answer', text: '', done: true, round: 1 },
+    { seq: 4, kind: 'do', tool: 'read', text: 'file', round: 1 },
+    { seq: 5, kind: 'out', tool: 'read', text: 'file contents', round: 1 },
+    { seq: 6, kind: 'say', streamId: 'after-tool', text: 'Second answer', done: true, round: 1 },
+    { seq: 7, kind: 'user', text: 'Revise', round: 2 },
+    { seq: 8, kind: 'say', streamId: 'answer', delta: true, text: 'New answer', round: 2 },
+    { seq: 9, kind: 'say', streamId: 'answer', delta: true, text: 'New segment', round: 2, seg: 2 },
+    { seq: 10, kind: 'user', text: 'Legacy follow-up' },
+    { seq: 11, kind: 'say', delta: true, text: 'Legacy' },
+    { seq: 12, kind: 'say', delta: true, text: ' reply' },
+    { seq: 13, kind: 'user', text: 'Another follow-up' },
+    { seq: 14, kind: 'say', delta: true, text: 'Separate reply' },
+  ];
+  const rows = stream.rows(events, 'done');
+  assert.deepEqual(Array.from(rows, row => row.type),
+    ['say', 'tool', 'say', 'user', 'say', 'say', 'user', 'say', 'user', 'say']);
+  assert.deepEqual(Array.from(rows.filter(row => row.type === 'say'), row => row.item.text),
+    ['First answer', 'Second answer', 'New answer', 'New segment', 'Legacy reply', 'Separate reply']);
+  assert.equal(new Set(rows.map(row => row.key)).size, rows.length);
+});
+
+test('ten thousand restored deltas keep one stable row across repeated projections', () => {
+  const events = Array.from({length:10000}, (_, index) => ({seq:index + 1,
+    kind:'say', streamId:'answer', delta:true, text:index % 2 ? ' ' : 'token'}));
+  const first = stream.rows(events.slice(0, 250), 'running').find(row => row.type === 'say');
+  for (let iteration = 0; iteration < 10; iteration++) {
+    const rows = stream.rows(events, 'done');
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].key, first.key);
+    assert.equal(rows[0].item.text, 'token '.repeat(5000));
+  }
+});

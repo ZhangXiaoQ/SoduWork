@@ -31,6 +31,8 @@ if (typeof electron === 'string') {
   function bounded(state) {
     assert.equal(state.main.display, 'flex', 'message cannot override the chat flex column');
     assert(state.main.width <= state.frame.width + 1, 'chat column stays inside its frame');
+    assert(state.message.width >= Math.min(300, state.frame.width - 40), 'history message keeps a readable width');
+    assert(state.message.width <= state.frame.width + 1, 'history message stays inside its chat column');
     assert(state.footer.bottom <= state.viewport.height + 1, 'composer remains in the viewport');
     assert(state.footer.top >= 0 && state.footer.height > 0, 'composer remains visible');
     assert.equal(state.unsafeTags, 0, 'raw global styling/navigation markup is removed');
@@ -67,6 +69,7 @@ if (typeof electron === 'string') {
         const rect = selector => { const node=document.querySelector(selector), r=node.getBoundingClientRect(); return {top:r.top,bottom:r.bottom,width:r.width,height:r.height,display:getComputedStyle(node).display}; };
         const list=document.getElementById('list');
         return { viewport:{width:innerWidth,height:innerHeight}, frame:rect('#frame'), main:rect('.nchat-main'), footer:rect('.nchat-foot'),
+          message:rect('#list .nmsg.ai'),
           unsafeTags:list.querySelectorAll('style,link,meta,base').length, inlineStyles:list.querySelectorAll('[style]').length, text:list.textContent };
       }; void 0;
     `);

@@ -59,7 +59,7 @@
     pluginId: 'market-' + index, key: 'market-' + index, name, description: [
       '从材料出发，生成结构清晰、可以复核的交付成果。',
       '按团队工作方法处理输入，保留来源、检查结果和下一步建议。',
-    ][index % 2], sourceKind: index % 2 ? 'codex' : 'personal', authorName: '隔离示例团队',
+    ][index % 2], sourceKind: index % 2 ? 'codex' : 'soduwork', authorName: '隔离示例团队',
     version: '1.1.0', installed: index < 3, enabled: true, personal: false, listed: true,
     organizationWide: true, projectCount: 1, updateAvailable: index === 1,
     entrypoints: { conversation: true, task: true, automation: true },

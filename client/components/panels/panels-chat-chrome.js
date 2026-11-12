@@ -23,7 +23,7 @@
   let pendingHistory = null;
   let workbench = { open: false, maximized: false, count: 0, has: false, summary: {} };
   let summaryOpen = false;
-  /* Initially show twelve files; expand the full list within the overlay so its content matches the total badge. */
+  /* Initially show twelve files; expand within the panel to match the total badge. */
   let summaryExpanded = false;
   const SUMMARY_FILE_LIMIT = 12;
   let titleMenuOpen = false;
@@ -49,13 +49,14 @@
       '<div class="nchat-head-actions">' +
         '<button type="button" class="nchat-head-action" data-chat-open-location title="打开当前工作位置">' +
           ICONS.folder + '<span>打开位置</span></button>' +
-        '<button type="button" class="nchat-head-icon" data-chat-summary aria-expanded="false" title="查看本次成果摘要">' +
+        '<button type="button" class="nchat-head-icon" data-chat-summary aria-expanded="false" aria-controls="nchatSummary" aria-label="切换成果摘要面板" title="切换成果摘要面板">' +
           ICONS.summary + '<i data-chat-result-count></i></button>' +
         '<button type="button" class="nchat-head-icon" data-chat-pane aria-pressed="false" title="显示成果承载区">' +
           ICONS.pane + '</button>' +
         (appChat ? '<button type="button" class="nchat-head-icon" data-app-chat-new title="新建对话" aria-label="新建对话"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>' : '') +
-        '<section class="nchat-summary" data-chat-summary-pop hidden>' +
-          '<header><b>本次工作</b><span data-chat-summary-count></span></header>' +
+        '<section class="nchat-summary" id="nchatSummary" data-chat-summary-pop aria-label="本次工作" hidden>' +
+          '<header><b>本次工作</b><span data-chat-summary-count></span>' +
+            '<button type="button" class="nchat-summary-close" data-chat-summary-close aria-label="关闭成果摘要" title="关闭成果摘要">' + ICONS.close + '</button></header>' +
           '<div data-chat-summary-body></div></section>' +
       '</div></header>';
   }
@@ -84,8 +85,21 @@
     return html || '<div class="nchat-summary-empty">成果、运行页面和变更会集中显示在这里。</div>';
   }
 
+  function mountSummary() {
+    const panel = root?.querySelector('[data-chat-summary-pop]');
+    // Escape the scrolling chat column without reserving any layout width.
+    if (panel && panel.parentElement !== root) root.append(panel);
+  }
+
+  function closeSummary(restoreFocus = false) {
+    summaryOpen = false;
+    paint();
+    if (restoreFocus) root?.querySelector('[data-chat-summary]')?.focus({ preventScroll: true });
+  }
+
   function paint() {
     if (!root) return;
+    root.classList.toggle('nchat-summary-open', summaryOpen);
     const context = typeof getContext === 'function' ? getContext() : null;
     global.ChatCloudHandoff?.sync(root, context?.snapshot, context);
     const titleNode = root.querySelector('#nchatTitle');
@@ -124,11 +138,13 @@
     root = nextRoot;
     getContext = context;
     global.SoduWorkAppConversations?.bind(root);
+    mountSummary();
     if (!root || root.dataset.chatChromeBound) { paint(); return; }
     root.dataset.chatChromeBound = '1';
     if (unbindDocument) unbindDocument();
     const outside = event => {
       if (titleMenuOpen && !event.target.closest('.nchat-title-tools')) closeTitleMenu();
+      if (summaryOpen && !event.target.closest('[data-chat-summary-pop],[data-chat-summary]')) closeSummary();
     };
     const keyboard = event => {
       if (!root || !root.isConnected || renameDialog) return;
@@ -137,6 +153,8 @@
         event.preventDefault(); openRename();
       } else if (titleMenuOpen && event.key === 'Escape') {
         event.preventDefault(); event.stopPropagation(); closeTitleMenu(true);
+      } else if (summaryOpen && event.key === 'Escape') {
+        event.preventDefault(); event.stopPropagation(); closeSummary(true);
       }
     };
     document.addEventListener('pointerdown', outside);
@@ -155,18 +173,12 @@
       } else if (event.key === 'Tab' && titleMenuOpen) closeTitleMenu(true);
     });
     root.addEventListener('click', (event) => {
-      const hit = event.target.closest('[data-chat-menu],[data-chat-rename],[data-chat-cloud],[data-chat-cloud-status],[data-chat-execution],[data-chat-open-location],[data-chat-summary],[data-chat-pane],[data-chat-summary-expand],' +
+      const hit = event.target.closest('[data-chat-menu],[data-chat-rename],[data-chat-cloud],[data-chat-cloud-status],[data-chat-execution],[data-chat-open-location],[data-chat-summary],[data-chat-summary-close],[data-chat-pane],[data-chat-summary-expand],' +
         '[data-chat-open-file],[data-wb-file],[data-wb-service],[data-wb-tool]');
-      if (!hit) {
-        if (summaryOpen && !event.target.closest('[data-chat-summary-pop]')) {
-          summaryOpen = false;
-          paint();
-        }
-        return;
-      }
+      if (!hit) return;
       if (hit.hasAttribute('data-chat-menu')) {
         if (!sessionId) return;
-        titleMenuOpen = !titleMenuOpen; summaryOpen = false; paint();
+        titleMenuOpen = !titleMenuOpen; paint();
         if (titleMenuOpen) root.querySelector('[data-chat-rename]')?.focus();
         return;
       }
@@ -189,6 +201,7 @@
         paint();
         return;
       }
+      if (hit.hasAttribute('data-chat-summary-close')) { closeSummary(true); return; }
       if (hit.hasAttribute('data-chat-summary-expand')) {
         summaryExpanded = !summaryExpanded;
         paint();

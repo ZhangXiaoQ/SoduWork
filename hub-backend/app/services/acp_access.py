@@ -386,6 +386,7 @@ class BridgeAccess:
             available = {str(item.get("id")) for item in modes.get("availableModes", [])
                          if isinstance(item, dict)}
             mapping = {
+                "harness2": {"standard": ("standard",), "readonly": ("readonly",), "full": ("full",)},
                 # New adapters reserve 'agent' for a remote auto-review service.
                 # Prefer the advertised user-approval mode; older adapters expose
                 # only 'agent', whose historical contract is workspace access.

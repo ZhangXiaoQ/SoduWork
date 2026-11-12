@@ -234,6 +234,29 @@ test('operation receipts remain between their delivery and the next conversation
   }
 });
 
+test('same-person pending acceptance follows the native task delivery in the transcript', () => {
+  const harness = setupRender();
+  const { renderer, ctx, list, sandbox } = harness;
+  sandbox.__teamCap = { meId: 'self' };
+  sandbox.TaskTraceApproval = { html: () => '<section data-acceptance-marker="1"></section>', bind() {} };
+  ctx._pending = '';
+  ctx._sessionOptions = {};
+  const entry = { taskId: 'task', task: { title: 'Delivery', createdBy: 'self' }, nativeTurn: true,
+    trace: { approvals: [{ id: 'direct:task', action: 'review', status: 'pending', createdAt: 10 }] } };
+  ctx._collabEntries = () => [entry];
+  ctx._collabTasks.set(entry.taskId, entry);
+  ctx._collabEntryStatus = () => 'completed';
+  ctx._snap = { status: 'idle', tools: [], messages: [
+    { role: 'user', text: 'Execute', sentAt: 5 },
+    { role: 'assistant', taskId: 'task', taskOutputKey: 'task:result', sentAt: 20, done: true,
+      blocks: [{ kind: 'text', text: 'Delivery output', done: true }] },
+  ], execution: { running: false, harness: { phases: [] }, quality: {} } };
+  renderer._render();
+  const output = list.innerHTML.indexOf('Delivery output');
+  const approval = list.innerHTML.indexOf('data-acceptance-marker="1"');
+  assert.ok(output >= 0 && approval > output, `${output},${approval}`);
+});
+
 test('legacy projected delivery precedes its receipt and a pending follow-up', () => {
   const { renderer, ctx, list, sandbox } = setupRender();
   sandbox.TaskTraceApproval = { html: () => '', bind() {} };
@@ -423,6 +446,35 @@ function setupPickerRender(getTasksSnapshot) {
   ctx._collabState = controller._collabState;
   return { ...harness, controller, views, transcriptWrites: () => transcriptWrites };
 }
+
+test('passive local history renders every saved assistant answer across reopen and stream pages', async () => {
+  const { create } = require('../main/conversation/local-history-view.cjs');
+  for (const format of ['messages', 'events']) {
+    const items = Array.from({ length: 5 }, (_, i) => [
+      { id: 'u' + i, role: 'user', text: 'Saved question ' + i },
+      ...(format === 'messages' && i > 0 ? [{ id: 'usage' + i, role: 'assistant', text: '', done: true }] : []),
+      ...(format === 'events' ? [
+        { id: 'a' + i, streamId: 's' + i, role: 'assistant', text: 'Saved ', delta: true },
+        { id: 'b' + i, streamId: 's' + i, role: 'assistant', text: 'answer ' + i, delta: true },
+      ] : [{ id: 'a' + i, role: 'assistant', text: 'Saved answer ' + i }]),
+    ]).flat();
+    for (let reopen = 0; reopen < 2; reopen++) {
+      const view = await create({ row: { id: 'history' }, read: async (_id, { after }) => ({
+        format, items: items.slice(after, after + 2), nextCursor: after + 2 < items.length ? after + 2 : null,
+      }) });
+      const { renderer, ctx, list } = setupRender();
+      ctx._pending = ''; ctx._sessionOptions = {}; ctx._snap = view.snapshot();
+      renderer._render();
+      for (let i = 0; i < 5; i++) {
+        assert.ok(list.innerHTML.includes('Saved question ' + i));
+        assert.ok(list.innerHTML.includes('Saved answer ' + i));
+      }
+      assert.equal((list.innerHTML.match(/class="nmsg ai/g) || []).length, 5);
+      assert.equal((await view.send('Do not execute')).accepted, false);
+      await view.close();
+    }
+  }
+});
 
 test('new waiting, thinking and tool turns never stream a completed acceptance card', () => {
   for (const kind of ['验收分析结果','验收退回卡','验收确认卡']) {

@@ -8,6 +8,43 @@ const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 const publication = read('components/panels/plugin-publication-ux.js');
 const catalog = read('components/panels/panels-capability-plugins.js');
 
+async function submitCopy({ application = false, template = 'app', proof = 'trusted', fail = false } = {}) {
+  const handlers = {}, notices = [], button = { disabled: false, textContent: '' };
+  const draft = { template, name: 'Fixture', version: '1.0.0' };
+  const control = { addEventListener() {} };
+  const layer = { hidden: false, querySelectorAll: () => [], querySelector(selector) {
+    if (selector === '#capPublishDo') return button;
+    if (selector === 'input[name="capAudience"]:checked') return { value: 'organization' };
+    if (['#capPublishAppCategory', '#capAudienceSearch', '#capAudienceUnitSearch'].includes(selector)) return null;
+    return control;
+  } };
+  // The production stale-dialog check requires the same live button identity.
+  button.addEventListener = (_type, fn) => { handlers.submit = fn; };
+  const api = { personalPlugin: async () => ({ plugin: { localDraft: draft } }),
+    pluginAudienceCandidates: async () => ({}), personalPluginPublisherIdentity: async () => ({ identity: {} }),
+    signPersonalPluginDraft: async () => ({}), publishPersonalPlugin: async () => {
+      if (fail) throw Error();
+      return { message: '插件已上传企业隔离区，管理员审核发布后按所选范围可用', preview: { signature: { state: proof } } };
+    } };
+  const window = {};
+  require('node:vm').runInNewContext(publication, { window });
+  await window.SoduWorkPluginPublication.openPersonalPublish({ pluginId: 'fixture' }, {
+    openModal: () => layer, closeModal() {}, say: text => notices.push(text), refresh() {},
+    errorText: (_error, fallback) => fallback,
+  }, { api, application, load: async () => {} });
+  await handlers.submit.call(button);
+  return notices.at(-1);
+}
+
+test('application review copy replaces generic server plugin text including identity and failure paths', async () => {
+  assert.match(await submitCopy(), /^应用已提交审核/);
+  assert.match(await submitCopy({ template: 'skill', application: true }), /^应用已提交审核/);
+  assert.match(await submitCopy({ proof: 'unknown-key' }), /^应用已签名并提交审核/);
+  assert.equal(await submitCopy({ fail: true }), '应用没有提交成功');
+  assert.match(await submitCopy({ template: 'skill' }), /^插件已上传企业隔离区/);
+  assert.match(await submitCopy({ template: 'skill', proof: 'unknown-key' }), /^插件已签名并进入隔离区/);
+});
+
 test('personal receipts require the current key and version and select the newest server record', () => {
   const window = {};
   require('node:vm').runInNewContext(publication, { window });

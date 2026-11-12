@@ -6,10 +6,23 @@
 <style>
   :root { color-scheme:light; --bg:#f3f4f6; --text:#3f3f46; --hover:#e4e4e7; --active:#fff; --focus:#6366f1; }
   * { box-sizing:border-box; }
-  html,body { margin:0; height:100%; background:var(--bg); overflow:hidden; color:var(--text); font:12px 'Segoe UI','Microsoft YaHei',sans-serif; cursor:default; }
+  html,body { margin:0; height:100%; background:var(--bg); overflow:hidden; color:var(--text); font:12px 'Alibaba PuHuiTi','Segoe UI',sans-serif; cursor:default; }
+  #startup { position:absolute; inset:30px 0 0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; padding:32px; text-align:center; }
+  #startup[hidden] { display:none; }
+  #startup-icon { width:56px; height:56px; border-radius:12px; object-fit:contain; }
+  #startup-mark { display:grid; place-items:center; width:64px; height:64px; border-radius:16px; background:var(--active); }
+  #startup-fallback { width:32px; height:32px; }
+  #startup-mark [hidden] { display:none; }
+  /* Older running main processes can load this file into a title-only view. */
+  @media (max-height:60px) { #startup { display:none; } }
+  #startup-name { margin:0; font-size:18px; font-weight:600; }
+  #startup-note { margin:0; font-size:14px; opacity:.75; }
+  #retry { padding:9px 18px; border:1px solid var(--hover); border-radius:7px; background:var(--active); }
   #bar { display:flex; align-items:center; gap:5px; height:30px; padding:0 150px 0 10px; -webkit-app-region:drag; user-select:none; }
   /* macOS native traffic lights occupy the left edge of the hidden title bar. */
   html[data-platform="darwin"] #bar { padding-left:88px; padding-right:10px; }
+  html[data-embedded="true"] #bar { padding:0 10px; -webkit-app-region:no-drag; }
+  html[data-embedded="true"] #tabs, html[data-embedded="true"] #drag-space { -webkit-app-region:no-drag; }
   #logo { display:grid; place-items:center; width:22px; height:22px; margin-right:3px; flex:none; border-radius:6px; color:var(--text); background:transparent; }
   #logo img { width:100%; height:100%; object-fit:contain; border-radius:6px; }
   svg { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; pointer-events:none; }
@@ -40,6 +53,12 @@
   <div id="drag-space" aria-hidden="true"></div>
   <button id="refresh" class="action" type="button" title="刷新当前页面，保留右侧对话" aria-label="刷新当前页面"><svg viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M19 11a7 7 0 0 0-12-5L4 9m1 4a7 7 0 0 0 12 5l3-3"/></svg></button>
 </div>
+<section id="startup" role="status" aria-live="polite">
+  <div id="startup-mark"><svg id="startup-fallback" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg><img id="startup-icon" alt="" hidden></div>
+  <h1 id="startup-name">应用</h1>
+  <p id="startup-note">正在打开…</p>
+  <button id="retry" type="button" hidden>重新加载</button>
+</section>
 <script>
   (() => {
     const api = window.soduWorkWindowChrome, tabs = document.getElementById('tabs');
@@ -47,6 +66,17 @@
     const act = (name, id) => api.action(name, id).catch(() => {});
     function render(state) {
       if (!state || !Array.isArray(state.tabs)) return;
+      document.documentElement.dataset.embedded = String(!!state.embedded);
+      const startup = document.getElementById('startup');
+      startup.hidden = state.startup === 'ready';
+      document.getElementById('startup-name').textContent = state.appLabel || '应用';
+      document.getElementById('startup-note').textContent = '正在打开…';
+      document.getElementById('retry').hidden = state.startup === 'ready' || !state.canRetry;
+      const startupIcon = document.getElementById('startup-icon');
+      startupIcon.hidden = !state.icon;
+      document.getElementById('startup-fallback').style.display = state.icon ? 'none' : '';
+      startupIcon.onerror = () => { startupIcon.hidden = true; document.getElementById('startup-fallback').style.display = ''; };
+      if (state.icon && startupIcon.getAttribute('src') !== state.icon) startupIcon.src = state.icon;
       document.getElementById('back').disabled = !state.canBack;
       const ids = new Set(state.tabs.map(tab => tab.id));
       for (const node of [...tabs.children]) if (!ids.has(node.dataset.id)) node.remove();
@@ -78,6 +108,7 @@
       if (state.icon && !logo.querySelector('img')) { const img = document.createElement('img'); img.src = state.icon; img.alt = ''; logo.replaceChildren(img); }
     }
     api.onTabs(render);
+    document.getElementById('retry').onclick = () => act('refresh');
     api.action('state').then(result => render(result.state)).catch(() => {});
     for (const [id, action] of [['back','back'],['refresh','refresh']]) document.getElementById(id).onclick = () => act(action);
     document.getElementById('bar').ondblclick = event => { if (!event.target.closest('button,.tab')) act('maximize'); };

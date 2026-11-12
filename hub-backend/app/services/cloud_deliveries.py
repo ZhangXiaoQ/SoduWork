@@ -48,7 +48,7 @@ async def _mark(session, execution, state, *, delivery_id="", error="", revision
     meta = dict(execution.metadata_ or {})
     round_no = round_no or int(meta.get("round") or 1)
     mark = {"state": state, "deliveryId": delivery_id, "error": error,
-        "revision": revision, "round": round_no,
+        "revision": revision, "round": round_no, "executionRef": execution.ref,
         "updatedAt": datetime.now(timezone.utc).isoformat()}
     # Patch only this derived field. A new message can advance the execution
     # while object storage is slow; never restore its old round/status/cursor.
@@ -79,9 +79,14 @@ def _current_mark(execution):
     return mark
 
 
-def _response(mark, delivery=None, *, artifact_url=""):
+def _response(mark, delivery=None, *, artifact_url="", execution=None):
     state = mark.get("state") or "pending"
+    meta = (execution.metadata_ or {}) if execution is not None else {}
+    # A commit/refresh can observe a newer turn after the mark was persisted.
+    # Keep the receipt bound to its mark instead of relabeling it with that turn.
     return {"ok": True, "state": state, "delivery": delivery,
+            "executionRef": mark.get("executionRef") or (execution.ref if execution is not None else ""),
+            "round": int(mark.get("round") or meta.get("round") or (1 if execution is not None else 0)),
             "artifactUrl": str(artifact_url or "")[:600],
             "error": mark.get("error") or "", "retryable": state in {"pending", "failed"}}
 
@@ -90,12 +95,12 @@ async def status(session, client, task_id):
     task, handoff, execution = await _authorized(session, client, task_id)
     artifact_url = getattr(task, "artifact_url", "") or ""
     if execution is None:
-        return _response({"state": "pending"}, artifact_url=artifact_url)
+        return _response({"state": "pending"}, artifact_url=artifact_url, execution=execution)
     mark = _current_mark(execution)
     if execution.state not in {"done", "failed", "cancelled", "canceled", "error", "stopped"}:
-        return _response({"state": "running"}, artifact_url=artifact_url)
+        return _response({"state": "running"}, artifact_url=artifact_url, execution=execution)
     if execution.state != "done":
-        return _response({"state": "incomplete", "error": "本轮未完成，已保留的过程文件不作为最终成果同步"}, artifact_url=artifact_url)
+        return _response({"state": "incomplete", "error": "本轮未完成，已保留的过程文件不作为最终成果同步"}, artifact_url=artifact_url, execution=execution)
     delivery = None
     if mark.get("deliveryId"):
         try:
@@ -103,7 +108,7 @@ async def status(session, client, task_id):
             delivery = collections.public(row)
         except HTTPException:
             mark = {"state": "removed", "error": "成果已从资料库删除，可在回收站恢复"}
-    return _response(mark, delivery, artifact_url=artifact_url)
+    return _response(mark, delivery, artifact_url=artifact_url, execution=execution)
 
 
 async def _collect(session, task, handoff, execution):
@@ -146,32 +151,32 @@ async def archive_task(session, task_id, *, propagate=False):
     task, handoff, execution = await _context(session, task_id)
     artifact_url = getattr(task, "artifact_url", "") or ""
     if execution is None or execution.state not in {"done", "failed", "cancelled", "canceled", "error", "stopped"}:
-        return _response({"state": "running"}, artifact_url=artifact_url)
+        return _response({"state": "running"}, artifact_url=artifact_url, execution=execution)
     if execution.state != "done":
-        return _response({"state": "incomplete", "error": "本轮未完成，已保留的过程文件不作为最终成果同步"}, artifact_url=artifact_url)
+        return _response({"state": "incomplete", "error": "本轮未完成，已保留的过程文件不作为最终成果同步"}, artifact_url=artifact_url, execution=execution)
     settlement = dict((execution.metadata_ or {}).get("terminalSettlement") or {})
     if (settlement.get("round") != int((execution.metadata_ or {}).get("round") or 1)
             or settlement.get("state") not in {"done", "done_no_output", "incomplete"}):
-        return _response({"state": "pending", "error": "正在收集本轮的完整成果"}, artifact_url=artifact_url)
+        return _response({"state": "pending", "error": "正在收集本轮的完整成果"}, artifact_url=artifact_url, execution=execution)
     old = _current_mark(execution)
     if old.get("state") == "synced" and old.get("deliveryId"):
         try:
             row = await collections.get(session, handoff.owner_user_id, old["deliveryId"])
-            return _response(old, collections.public(row), artifact_url=artifact_url)
+            return _response(old, collections.public(row), artifact_url=artifact_url, execution=execution)
         except HTTPException:
-            return _response({"state": "removed", "error": "成果已从资料库删除，可在回收站恢复"}, artifact_url=artifact_url)
+            return _response({"state": "removed", "error": "成果已从资料库删除，可在回收站恢复"}, artifact_url=artifact_url, execution=execution)
     execution_id = execution.id
     round_no = int((execution.metadata_ or {}).get("round") or 1)
     try:
         manifest, data = await _collect(session, task, handoff, execution)
         if manifest is None:
             mark = await _mark(session, execution, "empty", round_no=round_no)
-            return _response(mark, artifact_url=artifact_url)
+            return _response(mark, artifact_url=artifact_url, execution=execution)
         row, _ = await collections.persist(session, handoff.owner_user_id, manifest, data)
         mark = await _mark(session, execution, "synced", delivery_id=row.id,
                            revision=manifest["revision"], round_no=round_no)
         return _response(mark, collections.public(row) if mark.get("state") == "synced" else None,
-                         artifact_url=artifact_url)
+                         artifact_url=artifact_url, execution=execution)
     except Exception as exc:
         await session.rollback()
         execution = await session.get(ExecutionSession, execution_id, populate_existing=True)
@@ -179,7 +184,7 @@ async def archive_task(session, task_id, *, propagate=False):
         mark = await _mark(session, execution, "failed", error=reason[:240], round_no=round_no)
         if propagate:
             raise
-        return _response(mark, artifact_url=artifact_url)
+        return _response(mark, artifact_url=artifact_url, execution=execution)
 
 
 async def retry(session, client, task_id):

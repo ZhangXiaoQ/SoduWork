@@ -94,7 +94,7 @@ if (typeof electron === 'string') {
     win.webContents.on('console-message', event => { if (/Uncaught|React error|Each child in a list/.test(event.message)) errors.push(event.message) })
     win.webContents.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
     await win.loadURL(origin)
-    await until('document.querySelectorAll(".public-platform-packages a").length===6', 'six desktop downloads')
+    await until('document.querySelectorAll(".public-platform-packages a").length===7', 'seven platform downloads')
     assert.equal(await js('document.querySelector(".public-hero-actions a").getAttribute("href")'), '/api/v1/download/client')
     for (const [width, height] of [[1440, 1000], [1024, 900], [768, 1024], [390, 844], [320, 740]]) await geometry('landing-zh-' + width, width, height)
     for (const width of [1440, 390]) {
@@ -135,7 +135,7 @@ if (typeof electron === 'string') {
     assert.equal(await js('localStorage.getItem("soduwork_hub_admin_token")'), 'local-synthetic-token')
     results.push({ name: 'successful local login calls existing application route', ok: true })
     await win.loadURL(origin + '/?locale=en-US')
-    await until('document.querySelectorAll(".public-platform-packages a").length===6', 'English landing')
+    await until('document.querySelectorAll(".public-platform-packages a").length===7', 'English landing')
     for (const width of [1440, 390, 320]) await geometry('landing-en-' + width, width, 1000)
     await js('document.querySelector(".public-nav-login").click()')
     await until('!!document.querySelector(".login-sso-button")', 'English login')
@@ -151,7 +151,7 @@ if (typeof electron === 'string') {
     mode = 'error'; await win.loadURL(origin)
     await until('!!document.querySelector(".w-meta .public-text-button")', 'retry state')
     mode = 'available'; await js('document.querySelector(".w-meta .public-text-button").click()')
-    await until('document.querySelectorAll(".public-platform-packages a").length===6', 'download retry recovers')
+    await until('document.querySelectorAll(".public-platform-packages a").length===7', 'download retry recovers')
     mode = 'windows-only'
     win.webContents.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36')
     await win.loadURL(origin)
@@ -161,9 +161,7 @@ if (typeof electron === 'string') {
     mode = 'available'
     win.webContents.setUserAgent('Mozilla/5.0 (Linux; Android 14; Pixel) AppleWebKit/537.36 Mobile')
     await win.loadURL(origin)
-    await until('document.querySelector(".w-meta")?.textContent.includes("尚未发布")', 'Android is not distributed')
-    assert.equal(await js('document.querySelector(".public-hero-actions button").disabled'), true)
-    assert.ok(!requests.some(request => request.path.includes('/download/mobile/')), 'public source never requests private mobile packages')
+    await until('document.querySelector(".public-hero-actions a")?.getAttribute("href") === "/api/v1/download/mobile/android"', 'Android APK selected')
     await geometry('landing-android-390', 390, 844)
     mode = 'none'; await win.loadURL(origin)
     await until('document.querySelector(".w-meta")?.textContent.includes("尚未发布")', 'Android unpublished')

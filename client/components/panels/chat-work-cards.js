@@ -383,73 +383,91 @@
     async function restore(sessionId) {
       if (!sessionId || !ctx._api()?.workCards) return null;
       const owner = scope(), epoch = ctx._viewEpoch, authEpoch = scopeEpoch, nav = ++navigation;
-      const valid = () => owner === scope() && epoch === ctx._viewEpoch && authEpoch === scopeEpoch && nav === navigation;
-      const list = rows(owner, sessionId);
-      await Promise.all([...list.values()].map(record => persist(record)));
-      if (!valid()) return {stale: true};
-      const pendingSelection = draftSelections.get(key(owner, String(sessionId)));
-      if (pendingSelection) {
-        pendingSelection.error = '';
-        if (!await persistSelection(pendingSelection) &&
-            !['STALE_DRAFT_SELECTION', 'WORK_CONVERSATION_STARTED'].includes(pendingSelection.errorCode)) {
-          return valid() ? {blocked:true, reason:pendingSelection.error || '会话模型选择尚未保存，请重试'} : {stale:true};
+      let expired = false, timer;
+      const valid = () => !expired && owner === scope() && epoch === ctx._viewEpoch && authEpoch === scopeEpoch && nav === navigation;
+      const load = async () => {
+        const list = rows(owner, sessionId);
+        await Promise.all([...list.values()].map(record => persist(record)));
+        if (!valid()) return {stale: true};
+        const pendingSelection = draftSelections.get(key(owner, String(sessionId)));
+        if (pendingSelection) {
+          pendingSelection.error = '';
+          if (!await persistSelection(pendingSelection) &&
+              !['STALE_DRAFT_SELECTION', 'WORK_CONVERSATION_STARTED'].includes(pendingSelection.errorCode)) {
+            return valid() ? {blocked:true, reason:pendingSelection.error || '会话模型选择尚未保存，请重试'} : {stale:true};
+          }
         }
-      }
-      if (!valid()) return {stale: true};
-      const readVersion = pendingSelection?.version;
-      const result = await ctx._api().workCards(sessionId);
-      if (!valid()) return {stale: true};
-      if (!result?.ok) {
-        const reason = String(result?.reason || '工作卡片暂时无法读取，请重新打开这条会话');
-        tell('工作卡片读取失败：' + reason); return {blocked: true, reason};
-      }
-      if (result.workOnly && !ctx._ref && result.draftSelection != null &&
-          (!validSelection(result.draftSelection) || !Number.isSafeInteger(result.draftSelectionRevision) || result.draftSelectionRevision < 0)) {
-        return {blocked:true, reason:'会话模型选择格式异常，请重新打开会话后重试'};
-      }
-      for (const value of result.cards || []) {
-        const existing = list.get(value.id);
-        if (existing?.dirty || existing?.pending) continue;
-        const files = (value.files || []).map(file => new File([Uint8Array.from(atob(file.data), c => c.charCodeAt(0))],
-          file.name, {type: file.type, lastModified: file.lastModified}));
-        // Preserve object identity so pending submission callbacks update the restored card.
-        list.set(value.id, Object.assign(existing || {}, value, {files, owner, scopeEpoch, sessionId, version: existing?.version || 0}));
-      }
-      const retainedDraft = !ctx._ref && ctx._sessionId === String(sessionId) && ctx._snap?.workOnly === true;
-      ctx._sessionId = String(sessionId); ctx._draftKey = ctx._sessionId; viewSession = ctx._sessionId;
-      if (result.workOnly && !ctx._ref) {
-        const selected = result.draftSelection || (retainedDraft ? ctx._sessionOptions : {});
-        const latest = draftSelections.get(key(owner, String(sessionId)));
-        // A user can select another model while this same form is being read.
-        // Keep that newer choice and its pending write instead of the older reply.
-        const record = latest && (latest !== pendingSelection || latest.version !== readVersion) ? latest
-          : draftRecord(sessionId, selected, result.draftSelectionRevision || 0, !result.draftSelection);
-        Object.assign(ctx._sessionOptions, record.selection);
-        ctx._model = record.selection.modelName ? {id:record.selection.modelName,
-          label:record.selection.modelLabel || record.selection.modelName} : null;
-        ctx._snap = {status: 'idle', messages: [], tools: [], workOnly: true, adapterId:record.selection.adapterId,
-          modelSelection:{name:record.selection.modelName, model:ctx._model}};
-        global.ChatChrome?.resume(result.presence?.title || ctx._sessionOptions?.chatTitle || '工作记录');
-        global.ChatChrome?.identify(sessionId);
-        if (result.presence?.cwd) ctx._wd = {dir: result.presence.cwd, name: '工作区'};
-        ctx._render?.();
-      } else {
-        draftSelections.delete(key(owner, String(sessionId)));
-        if (result.workOnly === false && retainedDraft) {
-          // Another window may already have initialized this archive. Its
-          // runtime now owns the selection; pending draft options must neither
-          // trigger another draft write nor override the authoritative resume.
-          for (const name of selectionFields) delete ctx._sessionOptions[name];
-          ctx._model = null; ctx._snap = {...ctx._snap, workOnly:false};
-          for (const name of ['adapterId', 'displayName', 'modelSelection', 'thinking']) delete ctx._snap[name];
+        if (!valid()) return {stale: true};
+        const readVersion = pendingSelection?.version;
+        const result = await ctx._api().workCards(sessionId);
+        if (!valid()) return {stale: true};
+        if (!result?.ok) {
+          const reason = String(result?.reason || '工作卡片暂时无法读取，请重新打开这条会话');
+          tell('工作卡片读取失败：' + reason); return {blocked: true, reason};
         }
-      }
-      ctx._render?.(); paint();
-      // Successful requirement receipts are durable conversation content. Older
-      // detail navigation marked them closed; still restore those receipts,
-      // while keeping deliberately dismissed drafts and automation unchanged.
-      if (result.workOnly) await restoreActive();
-      return result;
+        if (result.workOnly && !ctx._ref && result.draftSelection != null &&
+            (!validSelection(result.draftSelection) || !Number.isSafeInteger(result.draftSelectionRevision) || result.draftSelectionRevision < 0)) {
+          return {blocked:true, reason:'会话模型选择格式异常，请重新打开会话后重试'};
+        }
+        for (const value of result.cards || []) {
+          const existing = list.get(value.id);
+          if (existing?.dirty || existing?.pending) continue;
+          const files = (value.files || []).map(file => new File([Uint8Array.from(atob(file.data), c => c.charCodeAt(0))],
+            file.name, {type: file.type, lastModified: file.lastModified}));
+          // Preserve object identity so pending submission callbacks update the restored card.
+          list.set(value.id, Object.assign(existing || {}, value, {files, owner, scopeEpoch, sessionId, version: existing?.version || 0}));
+        }
+        const retainedDraft = !ctx._ref && ctx._sessionId === String(sessionId) && ctx._snap?.workOnly === true;
+        ctx._sessionId = String(sessionId); ctx._draftKey = ctx._sessionId; viewSession = ctx._sessionId;
+        if (result.workOnly && !ctx._ref) {
+          const selected = result.draftSelection || (retainedDraft ? ctx._sessionOptions : {});
+          const latest = draftSelections.get(key(owner, String(sessionId)));
+          // A user can select another model while this same form is being read.
+          // Keep that newer choice and its pending write instead of the older reply.
+          const record = latest && (latest !== pendingSelection || latest.version !== readVersion) ? latest
+            : draftRecord(sessionId, selected, result.draftSelectionRevision || 0, !result.draftSelection);
+          Object.assign(ctx._sessionOptions, record.selection);
+          ctx._model = record.selection.modelName ? {id:record.selection.modelName,
+            label:record.selection.modelLabel || record.selection.modelName} : null;
+          ctx._snap = {status: 'idle', messages: [], tools: [], workOnly: true, adapterId:record.selection.adapterId,
+            modelSelection:{name:record.selection.modelName, model:ctx._model}};
+          global.ChatChrome?.resume(result.presence?.title || ctx._sessionOptions?.chatTitle || '工作记录');
+          global.ChatChrome?.identify(sessionId);
+          if (result.presence?.cwd) ctx._wd = {dir: result.presence.cwd, name: '工作区'};
+          ctx._render?.();
+        } else {
+          draftSelections.delete(key(owner, String(sessionId)));
+          if (result.workOnly === false && retainedDraft) {
+            // Another window may already have initialized this archive. Its
+            // runtime now owns the selection; pending draft options must neither
+            // trigger another draft write nor override the authoritative resume.
+            for (const name of selectionFields) delete ctx._sessionOptions[name];
+            ctx._model = null; ctx._snap = {...ctx._snap, workOnly:false};
+            for (const name of ['adapterId', 'displayName', 'modelSelection', 'thinking']) delete ctx._snap[name];
+          }
+        }
+        ctx._render?.(); paint();
+        // Successful requirement receipts are durable conversation content. Older
+        // detail navigation marked them closed; still restore those receipts,
+        // while keeping deliberately dismissed drafts and automation unchanged.
+        if (result.workOnly) await restoreActive();
+        return result;
+      };
+      // Card recovery precedes runtime opening, so the runtime watchdog cannot
+      // bound this wait. Fence late replies without cancelling durable writes.
+      try {
+        return await Promise.race([load(), new Promise(resolve => {
+          timer = setTimeout(() => {
+            const current = valid();
+            expired = true;
+            resolve(current ? {blocked: true, reason: '工作卡片暂时无法读取，请重新打开这条会话'} : {stale: true});
+          }, ctx.OPEN_TIMEOUT_MS || 30000);
+        })]);
+      } catch (_) {
+        // Normalize rejected reads to the same recoverable archive result as
+        // a timeout, while keeping obsolete navigation failures silent.
+        return valid() ? {blocked: true, reason: '工作卡片暂时无法读取，请重新打开这条会话'} : {stale: true};
+      } finally { clearTimeout(timer); }
     }
     async function restoreActive() {
       const last = [...rows(scope(), String(ctx._sessionId)).values()].filter(record =>

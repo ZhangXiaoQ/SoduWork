@@ -1,6 +1,10 @@
 """Real stream/settlement entrypoints with isolated state; no model or DB calls."""
 import json
 import os
+import subprocess
+import sys
+import threading
+import time
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -132,6 +136,91 @@ class TurnOutcomeTests(unittest.TestCase):
             local_stream._finish(self.ref, -9, terminal, "")
         resume.assert_not_called()
         self.assertEqual(self.run["state"], "done")
+        self.assertEqual(self.run["exit"], -9, "retain the actual process exit for diagnostics")
+        self.assertNotIn("piSettledByWatchdog", self.run, "cleanup ownership is consumed once")
+
+    def test_watchdog_marker_cannot_hide_real_failures_or_later_events(self):
+        cases = [
+            ("unmarked kill", {"piSettledByWatchdog": False}, {}, "", "failed"),
+            ("other agent", {"cli": "codex"}, {}, "", "failed"),
+            ("no current candidate", {"piFinalResponseAt": 0}, {}, "", "failed"),
+            ("no final response", {}, {"piFinalResponse": False}, "", "failed"),
+            ("model error", {}, {"isError": True, "result": "model rejected"}, "", "failed"),
+            ("transport error", {}, {}, "transport failed", "failed"),
+            ("truncated output", {}, {"outputTruncated": True}, "", "failed"),
+            ("permission denied", {"permissionDenied": True}, {}, "", "failed"),
+            ("policy violation", {"executionPolicyViolation": {"reason": "policy blocked"}}, {}, "", "failed"),
+            ("explicit stop", {"stopping": True}, {}, "", "stopped"),
+            ("timeout exhausted", {"timedOut": "fixture timeout", "stallRetries": 99}, {}, "", "failed"),
+        ]
+        for name, changes, fields, error, expected in cases:
+            with self.subTest(name=name):
+                self.run.clear()
+                self.run.update(state="running", cli="pi", ws=_data.name, seq=0, lines=[], cfg={},
+                                artifactMode="files", expectedOutputPaths=[], piSettledByWatchdog=True)
+                terminal = self.event("stop")
+                self.run.update(changes)
+                terminal.update(fields)
+                with patch.object(local_stream, "_resume", return_value={"ok": True}) as resume:
+                    local_stream._finish(self.ref, -9, terminal, error)
+                resume.assert_not_called()
+                self.assertEqual(self.run["state"], expected)
+                self.assertNotIn("piSettledByWatchdog", self.run)
+        # A subsequent event invalidates the earlier candidate even if the
+        # watchdog marker was already set during its cleanup race.
+        self.run.update(state="running", cli="pi", piSettledByWatchdog=True,
+                        stopping=False, permissionDenied=False, executionPolicyViolation={})
+        terminal = self.event("stop")
+        local_stream._on_line(self.ref, json.dumps({"type": "agent_settled"}), terminal)
+        local_stream._finish(self.ref, -9, terminal, "")
+        self.assertEqual(self.run["state"], "failed")
+
+    def test_real_process_final_response_watchdog_cleanup_settles_successfully(self):
+        from app.services import local_process
+        source = (
+            "import json,time; print(json.dumps({'type':'message_end','message':"
+            "{'role':'assistant','stopReason':'stop','content':"
+            "[{'type':'text','text':'Synthetic final answer'}]}}),flush=True); time.sleep(45)")
+        child = subprocess.Popen(
+            [sys.executable, "-u", "-c", source], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL, text=True, encoding="utf-8",
+            **({"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt"
+               else {"start_new_session": True}))
+        observed = []
+        ready = threading.Event()
+        def read_first_line():
+            observed.append(child.stdout.readline())
+            ready.set()
+        reader = threading.Thread(target=read_first_line, daemon=True)
+        reader.start()
+        before = set(local_process._THREADS)
+        try:
+            self.assertTrue(ready.wait(5), "synthetic process must emit its final response")
+            self.assertTrue(observed[0], "child exited before emitting a response")
+            self.run.update(proc=child, pid=child.pid, started=time.time(), lastOut=time.time(),
+                            expectedOutputPaths=[])
+            terminal = {}
+            local_stream._on_line(self.ref, observed[0], terminal)
+            self.assertTrue(terminal["piFinalResponse"])
+            local_process._watchdog(self.ref, child, finish=local_stream._finish,
+                                    kill_tree=local_stream._kill_tree)
+            code = child.wait(timeout=20)
+            self.assertNotEqual(code, 0, "the real hung process must be killed by the watchdog")
+            for thread in set(local_process._THREADS) - before:
+                thread.join(timeout=5)
+                self.assertFalse(thread.is_alive(), "watchdog must finish after its owned kill")
+            self.assertTrue(self.run.get("piSettledByWatchdog"))
+            local_stream._finish(self.ref, code, terminal, "")
+            self.assertEqual(self.run["state"], "done")
+            self.assertEqual(self.run["error"], "")
+            self.assertEqual(self.run["exit"], code)
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.wait(timeout=5)
+            child.stdout.close()
+            child.stderr.close()
+            reader.join(timeout=1)
 
     def test_progress_and_other_agent_events_do_not_mark_truncation(self):
         for cli, kind in (("pi", "message_update"), ("codex", "message_end")):

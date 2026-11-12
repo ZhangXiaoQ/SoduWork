@@ -89,6 +89,7 @@
   function work(snapshot, pending, ref) {
     const snap = snapshot || {};
     const execution = snap.execution || {};
+    if (!pending && waiting(snap)) return notice(snap.statusText || execution.controlled?.reason || '等待输入');
     const harness = execution.harness || {};
     if (snap.modelRetry && snap.modelRetry.active) {
       const remaining = Math.ceil((Number(snap.modelRetry.retryAt) - Date.now()) / 1000);
@@ -146,8 +147,15 @@
     return answered ? tx('正在把结果讲清楚…') : tx('正在理解你的要求…');
   }
 
+  function waiting(snapshot) {
+    return snapshot?.status === 'waiting-user' || Boolean(snapshot?.pendingUi ||
+      snapshot?.pendingPermissions?.length || snapshot?.execution?.waitingPermission);
+  }
+
   function runtimeBusy(snapshot, pending, pendingSentAt) {
     const snap = snapshot || {};
+    // An occupied queue is not evidence of model execution while it waits.
+    if (!pending && waiting(snap)) return false;
     const execution = snap.execution || {};
     const quality = execution.quality || {};
     const queue = execution.turnQueue || {};
@@ -294,7 +302,7 @@
       return { value, estimated, known, initial };
     }
     function elapsedText(elapsedMs) {
-      if (elapsedMs === null) return '—';
+      if (elapsedMs === null) return tx('未记录');
       const seconds = Math.max(0, Math.floor(Number(elapsedMs || 0) / 1000));
       if (seconds < 60) return seconds + 's';
       const minutes = Math.floor(seconds / 60);
@@ -302,6 +310,7 @@
     }
     function runtimeActive(current) {
       const snap = current && current.snap || {};
+      if (waiting(snap)) return false;
       const execution = snap.execution || {};
       const phase = execution.quality && execution.quality.phase;
       if (execution.stopKind === 'agent-stall') return false;
@@ -310,7 +319,8 @@
     }
     function snapshotElapsedMs() {
       const current = state();
-      if (!runtimeActive(current) && (current.pending || !current.snap?.messages?.some(message => message.role === 'assistant'))) return null;
+      if (!runtimeActive(current) && (current.pending || !current.snap?.execution?.controlled &&
+          !current.snap?.messages?.some(message => message.role === 'assistant'))) return null;
       const raw = current.snap?.execution?.elapsedMs;
       if (raw == null) return null;
       const value = Number(raw);
@@ -319,6 +329,7 @@
     function completedElapsedMs(current) {
       if (current.pending || runtimeActive(current)) return null;
       const snap = current.snap || {}, messages = snap.messages || [];
+      if (snap.execution?.controlled) return snapshotElapsedMs();
       if (snap.execution?.cloud) return snapshotElapsedMs();
       let final = -1, from = -1;
       for (let i = messages.length - 1; i >= 0; i--) {
@@ -334,8 +345,8 @@
       return Number.isFinite(start) && start > 0 && Number.isFinite(end) && end >= start ? end - start : null;
     }
     function turnKey(current) {
-      if (!current.pending && current.snap?.execution?.cloud && current.snap.execution.timingTurn) {
-        return 'cloud:' + current.snap.execution.timingTurn;
+      if (!current.pending && current.snap?.execution?.timingTurn) {
+        return 'runtime:' + current.snap.execution.timingTurn;
       }
       const pendingAt = Number(current && current.pendingSentAt);
       if (current && current.pending && Number.isFinite(pendingAt) && pendingAt > 0) {
@@ -352,6 +363,7 @@
     }
     function elapsedMs() {
       const current = state();
+      if (!current.pending && waiting(current.snap)) return snapshotElapsedMs();
       const completed = completedElapsedMs(current);
       if (current.snap?.execution?.cloud && !current.pending && snapshotElapsedMs() === null) return null;
       if (completed !== null) return completed;
@@ -360,7 +372,9 @@
         if (sameTurn && thinkingElapsedMs > 0) return thinkingElapsedMs;
         const saved = snapshotElapsedMs();
         if (saved > 0) return saved;
-        if (current.snap?.messages?.some(message => message.role === 'assistant')) return null;
+        // Restored delegated history can contain only the initiating user
+        // message until its execution pages arrive. No clock means unknown.
+        if (current.snap?.messages?.some(message => ['user', 'assistant'].includes(message.role))) return null;
       }
       // A fresh submit owns the clock. The runtime snapshot may still carry
       // the previous turn's elapsed value while the new request is being
@@ -375,6 +389,7 @@
       const base = String(baseText == null
         ? (typeof current.workStatus === 'function' ? current.workStatus() : work(current.snap, current.pending, current.ref))
         : baseText).trim();
+      if (!current.pending && waiting(current.snap)) return base;
       if (Number(elapsed || 0) < 12000) return base;
       const slot = Math.floor((Number(elapsed || 0) - 12000) / 14000);
       const promo = tx(promos[slot % promos.length]);
@@ -391,8 +406,9 @@
     }
     function metricsHtml(busy) {
       const tokens = tokenInfo();
+      const label = busy ? '处理中' : '已处理';
       return '<div data-chat-node="turn-metrics" class="nturn-metrics" aria-label="' + escape(tx('当前工作统计')) + '">' +
-        '<span class="nstatus-metric"><span data-thinking-label>' + (busy ? tx('处理中') : tx('已处理')) + '</span> ' +
+        '<span class="nstatus-metric"><span data-thinking-label>' + tx(label) + '</span> ' +
         '<b data-thinking-elapsed>' + elapsedText(elapsedMs()) + '</b></span><span class="nstatus-divider">·</span>' +
         '<span class="nstatus-metric" title="' + escape(tx('包含深度思考与回复；估算值以模型返回用量为准。')) + '">' +
         '<span data-thinking-estimate' + (tokens.estimated ? '' : ' hidden') + ' aria-label="估算">≈</span>' +
@@ -400,6 +416,9 @@
         '</b><em>tokens</em></span></div>';
     }
     function statusHtml(busy) {
+      const current = state();
+      if (!current.pending && waiting(current.snap)) return '<div data-chat-node="runtime-status" class="nstatus show">' +
+        '<span class="nstatus-copy">' + escape(work(current.snap, '', current.ref)) + '</span></div>';
       return '<div data-chat-node="runtime-status" class="nstatus' + (busy ? ' show' : '') + '">' +
         '<span class="ndot"></span><span class="nstatus-copy">' + escape(displayText(elapsedMs())) + '</span></div>';
     }
@@ -449,7 +468,8 @@
         thinkingElapsedMs = 0;
         thinkingObservedElapsed = null;
         const sentAt = Number(current.pendingSentAt);
-        const hasSubmitTime = (!current.snap?.execution?.cloud || Boolean(current.pending)) &&
+        const runtimeClock = current.snap?.execution?.cloud || current.snap?.execution?.controlled;
+        const hasSubmitTime = (!runtimeClock || Boolean(current.pending)) &&
           Number.isFinite(sentAt) && sentAt > 0 && sentAt <= now;
         thinkingStartedAt = hasSubmitTime ? sentAt : now - (observed == null ? 0 : observed);
         thinkingUseSubmitTime = hasSubmitTime;

@@ -64,6 +64,27 @@ test('expired model proxy tickets can refresh while generic 401 credentials stay
   assert.equal(generic.retryable, false);
 });
 
+test('billing exhaustion is actionable and permanent without exposing the provider envelope', async () => {
+  for (const value of [
+    { error: { status: 429, code: '1113', message: '余额不足 Bearer fixture-secret https://private.invalid' } },
+    { error: { status: 429, code: 'upstream_billing_error', providerCode: '1113', type: 'soduwork_proxy_error' } },
+    '429 模型服务余额不足（billing_required；供应商错误码 1113）',
+    '429 余额不足或无可用资源包',
+    { error: { status: 429, code: 'insufficient_quota', message: 'fixture-secret' } },
+  ]) {
+    const info = errors.describe(value);
+    assert.equal(info.retryable, false);
+    assert.equal(info.code, 'upstream_billing_error');
+    assert.match(info.publicText, /余额不足.*账单.*接口地址/);
+    assert.doesNotMatch(info.publicText, /fixture-secret|private.invalid|Bearer/);
+  }
+  assert.match(errors.forDisplay({ error: { status: 429, code: '1113' } }), /供应商错误码 1113/);
+  assert.equal(errors.describe({ error: { status: 429, code: '11130', message: 'rate limited' } }).retryable, true);
+  const sdk = await import('@earendil-works/pi-ai');
+  assert.equal(sdk.isRetryableAssistantError({ stopReason: 'error', errorMessage:
+    '429 模型服务余额不足或计费额度不可用（billing_required；供应商错误码 1113）' }), false);
+});
+
 test('image rejection errors explain the safe recovery path without offering a blind retry', () => {
   const value = { error: { code: 'image_input_rejected', message: 'Image input rejected.', status: 400 } };
   const info = errors.describe(value);

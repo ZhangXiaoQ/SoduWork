@@ -88,7 +88,15 @@ function create(handle, taskId, options = {}) {
     const beforeTranscript = transcripts.has(ref) ? new Map(transcripts.get(ref)) : null;
     const batched = typeof handle.appendTaskBatch === 'function';
     const call = (method, ...args) => {
-      if (batched) operations.push({ method, args });
+      if (batched) {
+        const previous = operations.at(-1), item = args[0], prior = previous?.args[0];
+        // Adjacent cumulative snapshots have one observable final value in a
+        // batch. Keep tool/paragraph boundaries and completed receipts intact.
+        if (method === 'appendTaskRuntimeEvent' && previous?.method === method &&
+            item.kind === 'text' && prior.kind === 'text' && !item.delta && !prior.delta &&
+            !prior.done && item.streamId && item.streamId === prior.streamId) operations.pop();
+        operations.push({ method, args });
+      }
       else if (method === 'appendTaskRuntimeEvent') handle[method]?.(...args);
       else handle[method](...args);
     };
@@ -137,7 +145,7 @@ function create(handle, taskId, options = {}) {
             if (item.full) row.text = String(item.full);
             else if (item.delta) row.text += String(item.text || '');
             else if (raw || !item.done) row.text = raw;
-            row.text = row.text.slice(-50000);
+            // Preserve the complete answer; stream buffering is not a display window.
             streams.set(streamKey, row);
             if (liveStreams) {
               const text = protocolGuard.inspect(visibleText(row.text, item.done === true), { final: item.done === true }).text;
@@ -188,7 +196,10 @@ function create(handle, taskId, options = {}) {
     }
   }
   // Late authoritative metadata must not reset cursors, pending tools, or text buffers.
-  function setSourceAgent(value) { source = agentSource.fields(value); }
+  function setSourceAgent(value) {
+    const next = agentSource.fields(value);
+    if (next.sourceAgent) source = next;
+  }
   return { consume, finish, setSourceAgent, lastText: ref => lastTexts.get(ref) || '', answers: () => answers,
     text: ref => [...(transcripts.get(ref)?.values() || [])].filter(Boolean).join('\n\n') };
 }

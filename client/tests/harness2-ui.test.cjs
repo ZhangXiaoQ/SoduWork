@@ -95,16 +95,16 @@ test('health-projected Harness² still requires a current probe and returns afte
   assert.equal(f.element('#cpRuntimeName').textContent, 'Google Harness²');
   const row = f.runtime.catalog().find(row => row.id === 'harness2');
   assert.equal(row.modelMode, 'managed');
-  assert.match(row.summary, /Harness² 文本推演后由 OpenCode 执行/);
+  assert.match(row.summary, /Harness² 文本推演后独立执行工具/);
   assert.match(row.summary, /增加耗时与模型用量/);
   const catalog = JSON.parse(source('../hub-backend/app/agent_catalog.json'));
   const shared = catalog.agents.find(item => item.id === 'harness2');
   assert.equal(shared.summary, row.summary);
-  assert.match(shared.install.blurb, /每轮先运行.*七阶段文本推演.*再由 OpenCode 执行工具/);
-  assert.match(shared.install.blurb, /增加耗时与模型用量.*失败时不会切换底座/);
+  assert.match(shared.install.blurb, /每轮先运行.*七阶段文本推演.*独立执行器调用工具/);
+  assert.match(shared.install.blurb, /无需其他底座.*增加耗时与模型用量/);
 });
 
-test('Harness² management provides lifecycle actions while explaining the bundled core and shared executor', () => {
+test('Harness² management provides lifecycle actions while explaining its independent executor', () => {
   const context = { AgentBrand: brand, addEventListener() {}, esc: value => String(value || '') };
   context.window = context;
   vm.runInNewContext(source('components/panels/panels-agents.js'), context);
@@ -122,7 +122,7 @@ test('Harness² management provides lifecycle actions while explaining the bundl
   assert.match(context._agRowHtml(agent), /data-ainstall="harness2"/);
   const details = context._agBodyHtml(agent, 'missing');
   assert.match(details, /核心/);
-  assert.match(details, /首次.*执行组件/);
+  assert.match(details, /独立执行器.*无需安装其他底座/);
   assert.doesNotMatch(details, /不需要单独安装、更新或卸载/);
   assert.doesNotMatch(details, /data-aunin=/);
   assert.match(context._agRowHtml({ ...agent, installed: true }), /data-aprobe="harness2"/);
@@ -131,11 +131,11 @@ test('Harness² management provides lifecycle actions while explaining the bundl
   assert.match(installed, /data-ainstall="harness2"[^>]*>重装 \/ 升到最新/);
   assert.match(installed, /data-aunin="harness2"[^>]*>卸载/);
   assert.match(installed, /核心.*随 SoduWork 升级/);
-  assert.match(installed, /SoduWork 支持的执行组件版本/);
+  assert.match(installed, /独立执行器随 SoduWork 升级/);
   vm.runInContext("_agConfirm = 'harness2'", context);
   const confirmation = context._agBodyHtml({ ...agent, installed: true }, 'ready');
   assert.match(confirmation, /停用.*Harness²/);
-  assert.match(confirmation, /保留.*OpenCode/);
+  assert.match(confirmation, /保留内置文件和任务记录/);
   assert.doesNotMatch(confirmation, /手上正在跑的活会失败/);
   vm.runInContext("_agJobs = { harness2: { state: 'running', action: 'install', lines: [] } }", context);
   const busy = context._agBodyHtml({ ...agent, installed: true }, 'ready');
@@ -146,8 +146,8 @@ test('Harness² management provides lifecycle actions while explaining the bundl
   assert.doesNotMatch(pi, /data-aunin=/);
   const probeJob = { key: 'fixture-device~harness2', action: 'probe', state: 'running', lines: [] };
   const executionProbe = context._agJobHtml(probeJob);
-  assert.match(executionProbe, /仅验证 OpenCode 执行组件/);
-  assert.match(executionProbe, /不运行 Harness² 推演/);
+  assert.match(executionProbe, /验证 Harness² 独立执行器/);
+  assert.match(executionProbe, /不运行推演/);
   assert.match(executionProbe, /模型额度/);
   assert.match(executionProbe, /最多 3 分钟/);
   assert.doesNotMatch(executionProbe, /7 轮推演|10 分钟/);

@@ -84,6 +84,11 @@
         mark(true);
         return r || { items: [] };
       },
+      async sidebarRecommendations() {
+        var r = await jfetch('/plugins/recommendations?surface=sidebar', { cache: 'no-store' });
+        mark(true);
+        return r || { items: [] };
+      },
       async pluginCatalog() {
         var scope = taskStorageKey('ops'), generation = registrationEpoch();
         if (catalogFlight && catalogFlight.scope === scope && catalogFlight.generation === generation) {

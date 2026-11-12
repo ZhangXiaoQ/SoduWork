@@ -40,7 +40,7 @@ app.on('window-all-closed', () => {});
 app.whenReady().then(async () => {
   ipcMain.handle('recent-workspace-get', () => ({ ok: true, dir: '', name: '' }));
   ipcMain.handle('pi-session-open-session-workdir', () => { locationOpens++; return {ok:true}; });
-  ipcMain.handle('pi-session-history', () => deferredHistory || { ok: true, chats: historyRows });
+  ipcMain.handle('pi-session-history', require('./fixtures/history-ipc.cjs').create(() => deferredHistory || { ok: true, chats: historyRows }));
   const composerFile = path.join(temp, 'composer.html');
   fs.writeFileSync(composerFile, `<!doctype html><html data-desk-panel="chatbar"><head><meta charset="utf-8">
     <link rel="stylesheet" href="${asset('theme/variables.css')}"><link rel="stylesheet" href="${asset('components/workspace/workspace-navigation.css')}"><link rel="stylesheet" href="${asset('components/panels/panels-chat.css')}"><link rel="stylesheet" href="${asset('desk-window.css')}">
@@ -75,8 +75,17 @@ app.whenReady().then(async () => {
     const count = windows.length;
     assert.equal((await js(host.webContents, 'soduWorkAPI.workPreview.showDetached(' + JSON.stringify(value) + ')')).ok, true);
     await until(() => windows.length > count && windows.at(-1).contentView.children.length === 3, 'native surfaces');
-    const win = windows.at(-1), composer = win.contentView.children[2].webContents;
-    await until(() => !composer.isLoading(), 'composer loaded'); await js(composer, 'historyReady');
+    const win = windows.at(-1);
+    await until(() => win.contentView.children.some(view => /\/app-composer-launcher\.html(?:\?|$)/.test(view.webContents.getURL()) && !view.webContents.isLoading()),
+      'composer launcher loaded');
+    const launcher = win.contentView.children.find(view => /\/app-composer-launcher\.html(?:\?|$)/.test(view.webContents.getURL())).webContents;
+    await tap(launcher, 'button');
+    await until(() => win.contentView.children.some(view => view.webContents.getURL().startsWith(pathToFileURL(composerFile).href)),
+      'composer fixture navigation');
+    const composer = win.contentView.children.find(view => view.webContents.getURL().startsWith(pathToFileURL(composerFile).href)).webContents;
+    await until(() => composer.getURL().startsWith(pathToFileURL(composerFile).href) && !composer.isLoading(), 'composer loaded');
+    await until(() => js(composer, 'typeof window.historyReady !== "undefined"'), 'composer history initialized');
+    await js(composer, 'historyReady');
 
     await js(composer, 'soduWorkAPI.workPreview.composerSetMode({expanded:true})');
     await delay(100); // Let the native view apply its expanded bounds before pointer input/capture.

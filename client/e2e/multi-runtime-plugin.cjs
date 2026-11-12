@@ -176,7 +176,9 @@ app.whenReady().then(async () => {
     const env = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8',
       HOME: path.join(root, 'runner-home'), USERPROFILE: path.join(root, 'runner-home') };
     delete env.ELECTRON_RUN_AS_NODE; delete env.NODE_OPTIONS;
-    child = spawn(path.join(backend, '.venv/Scripts/python.exe'),
+    const python = process.env.SODUWORK_TEST_PYTHON || path.join(backend, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
+    assert.ok(fs.existsSync(python), 'Set SODUWORK_TEST_PYTHON to the backend virtualenv interpreter');
+    child = spawn(python,
       [path.join(__dirname, 'fixtures/plugin-runner-local.py'), backend, root],
       { env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     child.stdout.setEncoding('utf8');
@@ -195,6 +197,9 @@ app.whenReady().then(async () => {
     child.stderr.on('data', value => { runnerLog = (runnerLog + value).slice(-8000); });
     child.on('exit', code => { for (const item of pending.values()) {
       clearTimeout(item.timer); item.reject(Error('Runner exited: ' + code));
+    } pending.clear(); });
+    child.on('error', error => { for (const item of pending.values()) {
+      clearTimeout(item.timer); item.reject(error);
     } pending.clear(); });
     await rpc('runtime.ping');
     const example = personal.get(app, personal.BUILDER_ID).localDraft.instructions.split('\n')

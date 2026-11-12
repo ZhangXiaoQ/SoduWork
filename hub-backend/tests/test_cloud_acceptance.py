@@ -2,6 +2,8 @@
 import hashlib
 import json
 import unittest
+import tempfile
+from types import SimpleNamespace
 from unittest.mock import patch, AsyncMock
 
 from fastapi import HTTPException
@@ -51,6 +53,20 @@ class MobileAcceptanceTests(unittest.IsolatedAsyncioTestCase):
 
     async def settle(self):
         return await svc.settle(self.session, self.task, self.execution)
+
+    async def test_review_directory_uses_fixed_delivery_identity_without_prompt(self):
+        from app.services import conversation_review_projection
+        api = {'id': self.task.id, 'title': self.task.title, 'note': ''}
+        await conversation_review_projection.decorate_many(self.session, [self.task], [api])
+        self.assertEqual(api['conversationReview']['artifactVersionId'], self.binding['artifactVersionId'])
+        self.assertEqual(api['conversationReview']['approvalId'], self.binding['approvalId'])
+        self.assertEqual(api['title'], f'自动验收 · {self.fixture.task.title} · 第{self.fixture.artifact.seq}版')
+        self.assertEqual(self.task.title, 'Mobile review', 'projection must not mutate saved history')
+        self.handoff.options = {**self.handoff.options, 'acceptance': {**self.binding, 'taskId': 'unrelated'}}
+        await self.session.flush()
+        other = {'title': 'Original'}
+        await conversation_review_projection.decorate_many(self.session, [self.task], [other])
+        self.assertEqual(other, {'title': 'Original'})
 
     async def test_success_persists_actual_decision_and_reopens_without_resubmission(self):
         result = await self.settle()
@@ -161,7 +177,8 @@ class MobileAcceptanceTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(repeated['idempotent'])
 
     async def test_prompt_is_built_from_authorized_fixed_context_and_no_followup(self):
-        files, prompt = await svc.inputs(self.session, self.handoff)
+        files, prompt = await svc.inputs(self.session, self.handoff,
+                                       instruction=self.handoff.options['instruction'])
         self.assertEqual(files, [])
         self.assertIn(svc.report_name(self.handoff), prompt)
         self.assertIn('criterion-1', prompt)
@@ -187,6 +204,36 @@ class MobileAcceptanceTests(unittest.IsolatedAsyncioTestCase):
         files, body = await cloud_conversations.dispatch_inputs(self.session, self.handoff, {})
         self.assertEqual(files, [])
         self.assertIn(svc.report_name(self.handoff), body['brief'])
+
+    async def test_endpoint_only_instruction_is_used_without_restoring_hub_body(self):
+        from app.services import conversation_content, runner_hub
+        from app.services.runner_content_store import Store
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(directory)
+
+            async def call(op, body, timeout):
+                return store.handle({'op': op, **body})
+
+            runner = SimpleNamespace(caps=['conversationContent1'], alive=lambda: True, call=call)
+            with patch.object(runner_hub, 'get', return_value=runner):
+                self.handoff.options = await conversation_content.save_options(
+                    'runner-review', self.handoff.owner_user_id, 'handoff:' + self.handoff.id,
+                    {**self.handoff.options, 'userText': 'Review the fixed version'},
+                    session=self.session)
+                await self.session.commit()
+                self.assertNotIn('instruction', self.handoff.options)
+                for _ in range(2):
+                    files, body = await cloud_conversations.dispatch_inputs(self.session, self.handoff, {})
+                    self.assertEqual(files, [])
+                    self.assertIn('Check the result', body['brief'])
+                    self.assertIn('criterion-1', body['brief'])
+                    self.assertIn(svc.report_name(self.handoff), body['brief'])
+                    self.assertEqual(body['conversationUserText'], 'Review the fixed version')
+                await self.session.refresh(self.handoff)
+                self.assertNotIn('instruction', self.handoff.options)
+                self.assertNotIn('userText', self.handoff.options)
+                self.assertEqual(self.fixture.request.status, 'pending')
 
 
 if __name__ == '__main__':

@@ -18,6 +18,39 @@ function fixture(overrides = {}) {
 }
 const params = text => ({text,context:{spaceId:'space-a',spaceName:'研发空间',page:'https://ops.example/资料/index.html',appName:'示例云端资料库'}});
 
+test('conditional and literal enable text never reactivates a paused direct creation', async () => {
+  for (const suffix of ['如果审批通过，创建后启用。', 'If approval passes, enable after creation.',
+    '工作内容是 `说明。创建后启用。`', '工作内容如下：\n~~~text\n创建后启用\n~~~']) {
+    const f = fixture();
+    await f.direct.create(params('每天23:55执行，只回复 OK。保存为暂停状态。' + suffix));
+    assert.equal(f.writes.length, 1);
+    assert.equal(f.writes[0].enabled, false, suffix);
+  }
+});
+
+test('pause intent composes with monthly and custom recurrence from main', async () => {
+  const rule = 'DTSTART;TZID=Asia/Shanghai:20990101T105100\nRRULE:FREQ=HOURLY;INTERVAL=3;COUNT=6';
+  for (const [text, every] of [['每月5日收集资料。保存为暂停状态。', 'monthly'],
+    ['保存为暂停状态。\n采集资料\n' + rule, 'custom']]) {
+    const f = fixture();
+    await f.direct.create(params(text));
+    assert.equal(f.writes[0].enabled, false);
+    assert.equal(f.writes[0].every, every);
+    if (every === 'custom') assert.equal(f.writes[0].customRule, rule);
+    else assert.deepEqual([...f.writes[0].monthDays], [5]);
+  }
+});
+
+test('pause directive reaches the created schedule and survives unrelated refinement', async () => {
+  const f = fixture();
+  await f.direct.create(params('每天23:55执行，只回复 AUTO-1110-OK。保存为暂停状态，不立即运行。'));
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.writes[0].enabled, false);
+  const catalogs = {seed: {}, agents: [{id: 'local:pi'}], repos: [], methods: []};
+  const refined = f.window.WorkAutomationSheet.draft({title: 'Updated'}, '名称改为 Updated', f.writes[0], catalogs);
+  assert.equal(refined.enabled, false);
+});
+
 test('a hosted character creates a pinned schedule without inventing an external business space',async()=>{
   const f=fixture(),method={pluginId:'local:idea',key:'jiyong-bot-idea',name:'灵感扭蛋机',version:'1.0.0',checksum:'a'.repeat(64),enabled:true,personal:true,entrypoints:{automation:true},inputs:[],capabilities:{mcpServers:['soduwork-jiyong']}};
   f.window._schmLoad=async()=>[method];
@@ -34,16 +67,39 @@ test('direct entry parses /自动化 and creates once without opening a form; fu
   assert.ok(f.parses[0][0].startsWith('/自动化 '));assert.equal(f.parses[0][3].kind,'automation');
   assert.equal(f.window.WorkAutomationSheet.hasSurface(),false);
 });
-test('one-off keeps its date; missing date and unsupported monthly frequency never become daily',async()=>{
+test('one-off keeps its date; missing date is rejected and monthly frequency is preserved',async()=>{
   const f=fixture();
   const once=await f.direct.create(params('2030年12月20日晚上8点执行一次，采集资料'));
   assert.equal(once.schedule.every,'once');assert.equal(f.writes[0].runAt,'2030-12-20T12:00:00.000Z');
   await assert.rejects(f.direct.create(params('执行一次，收集资料')),/日期|时间/);
-  await assert.rejects(f.direct.create(params('每月5日收集资料')),/月度|支持/);
+  const monthly=await f.direct.create(params('每月5日收集资料'));
+  assert.equal(monthly.schedule.every,'monthly');assert.deepEqual([...monthly.schedule.monthDays],[5]);
   await assert.rejects(f.direct.create(params('每两小时收集资料')),/支持/);
   await assert.rejects(f.direct.create(params('每天25点收集资料')),/时间无效/);
-  assert.equal(f.writes.length,1);
+  assert.equal(f.writes.length,2);
 });
+
+test('direct automation accepts explicit custom recurrence and returns the saved rule', async () => {
+  const f = fixture();
+  const rule = 'DTSTART;TZID=Asia/Shanghai:20990101T105100\nRRULE:FREQ=HOURLY;INTERVAL=3;COUNT=6';
+  const result = await f.direct.create(params('每三小时采集资料\n' + rule));
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.writes[0].every, 'custom');
+  assert.equal(f.writes[0].customRule, rule);
+  assert.equal(result.schedule.customRule, rule);
+  assert.ok(f.writes[0].note.includes(rule));
+  const offsetRule = rule.replace('Asia/Shanghai', 'Etc/GMT+8');
+  assert.equal((await f.direct.create(params('采集资料\n' + offsetRule))).schedule.customRule, offsetRule);
+});
+test('unsupported calendar exclusions cannot silently reach direct creation', async () => {
+  const f = fixture();
+  const rule = 'DTSTART;TZID=Asia/Shanghai:20990101T105100\nRRULE:FREQ=DAILY';
+  for (const extra of ['\nEXDATE:20990102T105100', ';COUNT=1\n 0']) {
+    await assert.rejects(f.direct.create(params('Generate a report\n' + rule + extra)));
+  }
+  assert.equal(f.writes.length, 0);
+});
+
 test('parse errors, unavailable named executor, missing agent and blocked preflight cannot create',async()=>{
   for(const overrides of [
     {parseTaskText:async()=>({_parseError:'模型解析失败'})},

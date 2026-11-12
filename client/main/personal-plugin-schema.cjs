@@ -319,7 +319,7 @@ function create({ pluginWorkflow, pluginResources, pluginPlatforms }) {
       throw new Error('插件入口必须使用 conversation、task、automation 布尔配置');
     }
     const importedKind = text(body.sourceKind, 32).toLowerCase();
-    const sourceKind = ['codex', 'claude', 'agent-plugins', 'adapter'].includes(importedKind)
+    const sourceKind = ['codex', 'claude', 'agent-plugins', 'soduwork', 'adapter'].includes(importedKind)
       ? importedKind : 'personal';
     const importChecksum = /^[a-f0-9]{64}$/i.test(text(body.importChecksum, 64))
       ? text(body.importChecksum, 64).toLowerCase() : '';

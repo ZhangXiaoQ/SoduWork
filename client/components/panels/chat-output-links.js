@@ -347,7 +347,7 @@
     return decorated;
   }
   const isPluginDraft = file => !file?.taskId && (file?.pluginDraft === true ||
-    ['soduwork-plugin-draft.json'].includes(basename(file?.relative || file?.name || file?.path).toLowerCase()));
+    ['soduwork-plugin-draft.json', 'soduwork-plugin-draft.json'].includes(basename(file?.relative || file?.name || file?.path).toLowerCase()));
   // One install entry per plugin; revisions belong to their own turn's final reply.
   const pluginIdentityOf = file => String(file && file.pluginIdentity || '') || key(file);
   function supersededDraftCard(node, files) {

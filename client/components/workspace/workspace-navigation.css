@@ -32,6 +32,16 @@ html[data-desk-panel="workspace"][data-workspace-layout="utility"] .ws-resizer{d
   background:var(--ws-side);border-right:0;overflow:visible}
 .ws-rail-top,.ws-rail-bottom{display:flex;flex-direction:column;align-items:center;gap:6px;width:100%}
 .ws-rail-bottom{margin-top:auto}
+.ws-sidebar-apps{display:flex;flex-direction:column;align-items:center;gap:6px;max-height:30vh;overflow-y:auto;overflow-x:hidden;scrollbar-width:none;width:100%;flex-shrink:0}
+.ws-sidebar-apps:empty{display:none}
+.ws-sidebar-app img{width:23px;height:23px;object-fit:contain;border-radius:5px}
+.workspace-app-panel{display:none;position:fixed;left:var(--ws-main-left,52px);right:0;top:0;bottom:0;background:var(--bg-0);z-index:10}
+.workspace-app-panel.show{display:block}
+.workspace-app-status{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;color:var(--ink-3);padding:24px;text-align:center}
+.workspace-app-status b{font-size:18px;font-weight:600;color:var(--ink)}
+.workspace-app-status p{margin:0;font-size:14px}
+.workspace-app-mark{width:64px;height:64px;display:grid;place-items:center;border-radius:16px;background:var(--bg-1);font-size:24px}
+.workspace-app-mark img{width:56px;height:56px;object-fit:contain;border-radius:12px}
 .ws-rail-more-wrap{position:relative;width:100%;display:flex;justify-content:center}
 
 
@@ -129,10 +139,18 @@ html[data-desk-panel="workspace"][data-workspace-layout="utility"] .ws-resizer{d
 /* Empty sections use only heading and hint height without sharing remaining space. */
 .ws-list.is-empty{flex:0 0 auto}
 .ws-list-body{flex:0 0 auto;min-height:0;display:flex;flex-direction:column;gap:1px}
-/*
- * Use a 6px scrollbar thumb without arrows or a track. Avoid scrollbar-width, which can
- * select Electron's native Windows scrollbar styling.
- */
+/* History controls stay in the sidebar scrollport and follow the active theme. */
+.ws-history-actions{display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:4px 10px 8px}
+.ws-history-actions[hidden],.ws-history-status[hidden]{display:none}
+.ws-history-status{margin:0;padding:4px 10px;color:var(--ink-4);font-size:var(--font-min-readable,14.5px);line-height:1.45;overflow-wrap:anywhere}
+.ws-history-status:empty,.ws-history-actions>span:empty{display:none}
+.ws-history-actions>span{padding:0;color:var(--ink-4);font-size:var(--font-min-readable,14.5px);line-height:1.45;overflow-wrap:anywhere}
+.ws-history-actions button{appearance:none;min-height:30px;max-width:100%;padding:4px 8px;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--ink-3);font:inherit;white-space:normal;text-align:start;cursor:pointer}
+.ws-history-actions button:hover{background:var(--ws-active);color:var(--ink-2)}
+.ws-history-actions button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.ws-history-actions button:disabled{opacity:.6;cursor:default}
+/* 最近聊天 / 最近任务是高频侧栏，滚动条只做位置提示：6px 胶囊滑块，不显示系统箭头和轨道。
+   不写 scrollbar-width，避免 Electron 回退成 Windows 原生粗条。 */
 :is(.ws-side-scroll,#wsRecent)::-webkit-scrollbar{width:6px;height:6px}
 :is(.ws-side-scroll,#wsRecent)::-webkit-scrollbar-button{display:none;width:0;height:0}
 :is(.ws-side-scroll,#wsRecent)::-webkit-scrollbar-track,:is(.ws-side-scroll,#wsRecent)::-webkit-scrollbar-corner{background:transparent}

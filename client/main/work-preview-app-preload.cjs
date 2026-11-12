@@ -23,7 +23,7 @@ const bridge = Object.freeze({
   mcp: Object.freeze({ connect: params => request('mcp.connect', params || {}) }),
   events: Object.freeze({ onDataChanged(callback) {
     if(typeof callback!=='function')return ()=>{};
-    const listener=(_event,value)=>{if(['identity','notifications','conversations','library'].includes(value?.topic))callback({topic:value.topic});};
+    const listener=(_event,value)=>{if(value?.topic==='content'&&typeof value.spaceId==='string'&&value.spaceId.length<=200)callback({topic:'content',spaceId:value.spaceId,...(typeof value.topicId==='string'?{topicId:value.topicId}:{})});else if(['identity','notifications','conversations','library'].includes(value?.topic))callback({topic:value.topic});};
     ipcRenderer.on('app-data-changed',listener);return ()=>ipcRenderer.removeListener('app-data-changed',listener);
   }, onTurnSettled(callback) {
     if (typeof callback !== 'function') return () => {};

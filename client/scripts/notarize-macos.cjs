@@ -30,9 +30,33 @@ function notarizeEnabled(env = process.env) {
   return Boolean(signingIdentity(env)) && !['1', 'true', 'yes'].includes(skip);
 }
 
+function unlockSigningKeychain(env, run) {
+  const password = env.SODUWORK_MAC_KEYCHAIN_PASSWORD;
+  if (!password) return;
+  const keychain = env.SODUWORK_MAC_KEYCHAIN || env.CSC_KEYCHAIN ||
+    (env.HOME ? path.join(env.HOME, 'Library/Keychains/login.keychain-db') : '');
+  if (!keychain) throw new Error('Configure the signing keychain before notarization');
+  try {
+    // Signing and compression can outlast the earlier CI unlock. Refresh access
+    // in the submitting process, including when the profile uses the search list.
+    run('security', ['unlock-keychain', '-p', password, keychain],
+      { env, stdio: 'pipe', timeout: 30000 });
+  } catch {
+    // execFileSync errors include command arguments; never propagate the password.
+    throw new Error('Unable to unlock the signing keychain before notarization');
+  }
+}
+
 // `--wait` blocks until Apple's notary service issues the verdict; a rejected
 // or invalid submission must fail the build instead of shipping a blocked DMG.
+function assertPublicNotaryOptions(env) {
+  if (env.SODUWORK_MAC_NOTARY_STATE_DIR || env.SODUWORK_MAC_BUILD_INPUT_ID)
+    throw new Error('Private notarization checkpoints are unavailable in the public source');
+}
+
 function notarizeArtifact({ artifactPath, env, run, staple = true }) {
+  assertPublicNotaryOptions(env);
+  unlockSigningKeychain(env, run);
   const args = ['notarytool', 'submit', artifactPath, '--keychain-profile', notaryProfile(env)];
   const keychain = notaryKeychain(env);
   // iCloud keychains are valid search-list entries but are not accepted by
@@ -46,6 +70,7 @@ function notarizeArtifact({ artifactPath, env, run, staple = true }) {
 
 // Signers see the app as a bundle; notarytool accepts a zip of it.
 function notarizeApp({ appPath, env, run }) {
+  assertPublicNotaryOptions(env);
   const zipPath = appPath + '.notarize.zip';
   run('ditto', ['-c', '-k', '--keepParent', appPath, zipPath]);
   try {
@@ -63,7 +88,7 @@ exports.default = async function afterSign(context) {
   const env = process.env;
   if (!notarizeEnabled(env)) return;
   const appPath = path.join(context.appOutDir, context.packager.appInfo.productFilename + '.app');
-  notarizeApp({ appPath, env, run: (file, args) => execFileSync(file, args, { stdio: 'inherit' }) });
+  notarizeApp({ appPath, env, run: (file, args, options) => execFileSync(file, args, { stdio: 'inherit', ...options }) });
 };
 
 exports.signingIdentity = signingIdentity;

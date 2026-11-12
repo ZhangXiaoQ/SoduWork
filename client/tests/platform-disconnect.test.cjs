@@ -8,6 +8,62 @@ const feishu = require('../main/platform-connections/feishu.cjs');
 const { identity } = require('./helpers/platform-session-fixture.cjs');
 const turn = () => new Promise(resolve => setImmediate(resolve));
 function deferred() { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; }
+
+for (const authenticated of [true,false]) test('interrupted DingTalk browser completion is reconciled from CLI status: '+authenticated,async t=>{
+  const f=fixture(t),scope=runtime.platformScope(f.app,f.state.identity,'dingtalk',true);
+  life.begin(f.app,'dingtalk',scope,false);
+  let calls=0;t.mock.method(runtime,'launch',async (_app,provider,owner,args)=>{
+    assert.equal(provider,'dingtalk');assert.equal(owner,scope);
+    assert.deepEqual(args,['auth','status','--format','json']);calls++;
+    return {completion:Promise.resolve({code:0,output:JSON.stringify({success:true,authenticated})}),cancel(){}};
+  });
+  const results=await Promise.all(Array.from({length:64},()=>f.service.refresh('dingtalk')));
+  assert.equal(calls,1);assert.ok(results.every(row=>row.connected===authenticated));
+  assert.equal(life.read(f.app,'dingtalk',scope).connecting,false);
+});
+
+test('a failed Feishu registration permits a later check without another QR consent',async t=>{
+  const f=fixture(t);let attempts=0,restores=0;
+  t.mock.method(feishu,'connect',async()=>{attempts++;throw Object.assign(Error('Conflict'),{conflictId:'other'})});
+  t.mock.method(feishu,'restore',async()=>{restores++;return {connected:true}});
+  await f.service.connect('feishu');await turn();
+  const failed=await f.service.status('feishu');assert.equal(failed.state,'error');assert.equal(failed.conflictId,'other');
+  const result=await f.service.refresh('feishu');assert.equal(result.connected,true);assert.equal(result.conflictId,'');
+  assert.equal(attempts,1);assert.equal(restores,1);
+});
+
+test('DingTalk verifies a persisted profile after a nonzero login exit instead of repeating consent',async t=>{
+  const f=fixture(t),calls=[];
+  t.mock.method(runtime,'launch',async (_app,key,_scope,args)=>{
+    assert.equal(key,'dingtalk');calls.push(args[1]);
+    return {completion:Promise.resolve(args[1]==='login'?{code:1,output:''}:
+      {code:0,output:'{"success":true,"authenticated":true}'}),cancel(){}};
+  });
+  await f.service.connect('dingtalk');await turn();
+  const row=await f.service.status('dingtalk');
+  assert.equal(row.connected,true);assert.match(row.message,/本机已有/);assert.deepEqual(calls,['login','status']);
+});
+
+test('Feishu reuses a scoped registration only after a live credential proof; upsert preserves the original revision',async t=>{
+  const scope=runtime.scope(identity()),url='http://127.0.0.1:23456/mcp';
+  const row={id:'previous-'+scope.slice(0,23),name:'feishu',type:'http',url,headers:{Authorization:'••••'}};
+  let accepted=false,writes=0,closed=0;
+  t.mock.method(global,'fetch',async (target,options)=>{
+    if(options.method==='GET')return {ok:true,json:async()=>({personal:[row],company:[]})};
+    const body=JSON.parse(options.body);
+    if(target.endsWith('/probe')){
+      if(body.url.endsWith('/proof'))assert.equal(body.headers.Authorization,'••••');
+      return {ok:true,json:async()=>({tools:['read']})};
+    }
+    assert.ok(target.endsWith('/upsert'));assert.deepEqual(body.original,row);assert.equal(body.server.id,row.id);
+    writes++;return {ok:true,json:async()=>({ok:true})};
+  });
+  const register=()=>feishu.register(identity(),scope,{port:23456,bearer:'fixture'},async()=>{},
+    ()=>({url:url+'/proof',confirmed:()=>accepted,close:()=>{closed++}}));
+  await assert.rejects(register(),e=>e.conflictId===row.id);assert.equal(writes,0);
+  accepted=true;assert.equal((await register()).registrationId,row.id);assert.equal(writes,1);assert.equal(closed,2);
+  row.id='foreign';await assert.rejects(register(),e=>e.conflictId==='foreign');assert.equal(writes,1);assert.equal(closed,2);
+});
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-disconnect-'));
   t.after(() => { assert.equal(path.dirname(root), path.resolve(os.tmpdir())); fs.rmSync(root, { recursive: true, force: true }); });

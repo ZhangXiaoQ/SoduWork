@@ -111,11 +111,13 @@ def issue_session(client: Client) -> tuple[str, int]:
     return token, SESSION_TTL_SECONDS
 
 
-def issue_proxy_ticket(client: Client) -> tuple[str, int]:
+def issue_proxy_ticket(client: Client, *, quota_runtime: str = "", quota_binding: str = "") -> tuple[str, int]:
     if client.auth_state != "active" or not client.user_ref:
         raise DeviceAuthError("这台 SoduWork 还没有被管理员激活", 403)
     token = sign_claims(
-        {"cid": client.id, "uid": client.user_ref, "ver": int(client.auth_version or 1)},
+        {"cid": client.id, "uid": client.user_ref, "ver": int(client.auth_version or 1),
+         **({"quotaRuntime": "pi", "quotaBinding": quota_binding}
+            if quota_runtime == "pi" and quota_binding else {})},
         ttl_seconds=AGENT_TTL_SECONDS,
         token_type="ai-proxy",
     )
@@ -197,17 +199,21 @@ async def _binding(session: AsyncSession, client_id: str, *, include_quota=False
         .outerjoin(User, Client.user_ref == User.id)
         .where(Client.id == client_id).execution_options(populate_existing=True))
     if include_quota:
-        from . import client_access, quota_plans
+        from . import client_access, legal_publications, quota_plans
         default, personal, grant = (aliased(AppSetting, name="quota_" + name)
                                     for name in ("default", "personal", "grant"))
-        query = (query.add_columns(default.value, personal.value, grant.value)
+        legal = aliased(AppSetting, name="legal_publication")
+        query = (query.add_columns(default.value, personal.value, grant.value, legal.key)
                  .outerjoin(default, default.key == client_access.POLICY_KEY)
                  .outerjoin(personal, personal.key == client_access.USER_QUOTA_PREFIX + Client.user_ref)
-                 .outerjoin(grant, grant.key == quota_plans.GRANT_PREFIX + Client.user_ref))
+                 .outerjoin(grant, grant.key == quota_plans.GRANT_PREFIX + Client.user_ref)
+                 .outerjoin(legal, legal.key == legal_publications.MARKER))
     row = (await session.execute(query)).one_or_none()
     if row:
         row[0].__dict__.pop("_quota_policy_rows", None)
+        row[0].__dict__.pop("_legal_publications_enabled", None)
         if include_quota:
+            row[0]._legal_publications_enabled = row[7] is not None
             row[0]._quota_policy_rows = {
                 client_access.POLICY_KEY: row[4],
                 client_access.USER_QUOTA_PREFIX + str(row[0].user_ref or ""): row[5],
@@ -239,8 +245,10 @@ async def client_from_session(session: AsyncSession, token: str, *, include_quot
 async def client_from_proxy_ticket(session: AsyncSession, token: str) -> Client:
     from . import auth_principals, shared_auth_cache
     if shared_auth_cache.reads_enabled():
-        principal, _ = await auth_principals.from_token(session, token, token_type="ai-proxy")
+        principal, claims = await auth_principals.from_token(session, token, token_type="ai-proxy")
         client = await _load_verified_client(session, principal, include_quota=True)
+        client._proxy_quota_runtime = claims.get("quotaRuntime", "") if claims.get("quotaBinding") else ""
+        client._proxy_quota_binding = claims.get("quotaBinding", "")
         return client
     claims = verify_claims(token, token_type="ai-proxy")
     if not claims:
@@ -248,6 +256,9 @@ async def client_from_proxy_ticket(session: AsyncSession, token: str) -> Client:
     row = await _binding(session, str(claims.get("cid") or ""), include_quota=True)
     client = row[0] if row else None
     _assert_active_binding_loaded(client, row[1] if row else None, claims)
+    if client is not None:
+        client._proxy_quota_runtime = claims.get("quotaRuntime", "") if claims.get("quotaBinding") else ""
+        client._proxy_quota_binding = claims.get("quotaBinding", "")
     return client
 
 
@@ -282,6 +293,7 @@ async def _load_verified_client(session, principal, *, include_quota=False):
         client = await session.get(Client, principal.id, populate_existing=True)
         if client is not None:
             client.__dict__.pop("_quota_policy_rows", None)
+            client.__dict__.pop("_legal_publications_enabled", None)
     if (client is None or client.auth_state != "active" or
             client.user_ref != principal.user_ref or
             int(client.auth_version or 1) != int(principal.auth_version or 1)):

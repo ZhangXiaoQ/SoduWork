@@ -247,7 +247,7 @@ async def main():
         chk("★两步都记下来了（装没装 / 能不能干活分开说）",
             len(pi["probe"].get("steps") or []) == 2, pi.get("probe"))
     else:
-        reason = "SODUWORK_SMOKE_OFFLINE=1" if OFFLINE else "共享模型服务未配置，或这台机器没有安装 Pi"
+        reason = "SODUWORK_SMOKE_OFFLINE=1" if OFFLINE else "公司网关未配置，或这台机器没有安装 Pi"
         log.append("  SKIP  探活正例（%s）" % reason)
 
     # Remove test records and restore Pi configuration.

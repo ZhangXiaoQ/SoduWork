@@ -18,7 +18,7 @@ async function main() {
   const output = path.resolve(outputArg || path.join(root, 'html-regression.json'));
   const initial = JSON.parse(fs.readFileSync(path.join(root, '.soduwork-payload.json')));
   const oldVerify = require(path.join(root, '.soduwork-verify.cjs')).verify;
-  const piRoot = path.join(root, 'resources/pi/node_modules/@earendil-works/pi-coding-agent');
+  const piRoot = path.join(root, 'resources/pi/@earendil-works/pi-coding-agent');
   const sessionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-html-runtime-'));
   const session = path.join(sessionDir, 'fixture.jsonl');
   const sessionId = crypto.randomUUID();

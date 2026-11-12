@@ -30,14 +30,15 @@ HTTP = build_opener(ProxyHandler({}))
 def default_state() -> Path:
     if os.name == "nt":
         base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local"))
-        current = base / "SoduWork/source-service"
+        current, previous = base / "SoduWork/source-service", base / "SoduWork/source-service"
     elif sys.platform == "darwin":
         base = Path.home() / "Library/Application Support"
-        current = base / "SoduWork/source-service"
+        current, previous = base / "SoduWork/source-service", base / "SoduWork/source-service"
     else:
         base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share"))
-        current = base / "soduwork/source-service"
-    return current
+        current, previous = base / "soduwork/source-service", base / "soduwork/source-service"
+    # Preserve existing source-service data in place; only fresh installs use the new name.
+    return previous if not current.exists() and (previous / "local-service.json").is_file() else current
 
 
 def secure_directory(state: Path) -> None:
@@ -162,8 +163,8 @@ def assert_available(host: str, port: int) -> None:
         if os.name == "nt":
             probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         else:
-            # Match the server's POSIX bind semantics after a clean shutdown:
-            # TIME_WAIT connections must not be mistaken for a live listener.
+            # Match Uvicorn's POSIX listener: closed connections in TIME_WAIT
+            # must not block restart, while a live listener still rejects bind.
             probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             probe.bind((host, port))

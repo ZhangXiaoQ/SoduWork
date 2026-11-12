@@ -3,9 +3,15 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-// Resolve only the distributor's configured executable, never a parallel installation.
+/* Stable entry points use the SoduWork name since the brand rename, while
+   payloads installed before it still ship SoduWork.exe. Accept both so the
+   launcher of any installed generation can be located. */
 const { current } = require('./distribution.cjs');
-function launcherNames(profile = current()) { return [profile.windowsExecutableName + '.exe']; }
+function launcherNames(profile = current()) {
+  return profile.distributionId === 'internal' || profile.distributionId === 'stage'
+    ? [profile.windowsExecutableName + '.exe', 'SoduWork.exe', 'SoduWork.exe']
+    : [profile.windowsExecutableName + '.exe'];
+}
 
 function rootLauncher(root, exists = fs.existsSync, profile = current()) {
   for (const name of launcherNames(profile)) {

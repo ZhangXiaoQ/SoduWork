@@ -38,7 +38,7 @@
   }
 
   function sourceName(kind) {
-    return ({ codex: 'Codex 插件', claude: 'Claude Code 插件', 'agent-plugins': 'Agent Plugins 标准包',
+    return ({ codex: 'Codex 插件', claude: 'Claude Code 插件', 'agent-plugins': 'Agent Plugins 标准包', soduwork: 'SoduWork 插件',
       adapter: 'SoduWork 标准插件', builtin: 'SoduWork 内置', personal: '个人插件' })[kind] || '企业插件';
   }
 

@@ -62,12 +62,11 @@ function openAdd() {
   _fillAddGo();
 }
 
-
-
-
-
-
-const _GO_KEY = 'soduwork_work_lastgo_v2';          /* Remember only the last valid execution method, runtime, and project. */
+/*
+ * Offer immediate AI dispatch within requirement creation and restore the previous valid
+ * repository, executor, and workflow selections.
+ */
+const _GO_KEY = 'soduwork_work_lastgo_v2';          /* Remember only the last valid execution mode, runtime, and repository. */
 function _addSameId(left, right) {
   return String(left == null ? '' : left).trim().toLowerCase() ===
     String(right == null ? '' : right).trim().toLowerCase();

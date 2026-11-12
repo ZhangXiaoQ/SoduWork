@@ -34,29 +34,155 @@
     return String(api?.taskStorageKey?.('tasks') || '');
   }
   let historyOwner = accountOwner(), hadOwner = Boolean(historyOwner), historyEpoch = 0;
+  let mutationGeneration = 0, accountMutationGeneration = 0, lifecycleOverflow = false;
+  const lifecycle = new Map(), MAX_LIFECYCLE_IDS = 1024;
+  let localRows = [], localLoad = null, localReady = false, localNext = null, localRestart = false;
+  let localCatalog = null, localRecords = new Map(), localAliases = new Set();
+  let localError = '', accountError = '', nativeRefreshStarted = false;
+  let localRefreshTimer = null, localRefreshPending = false, closed = false;
+  const historyApi = () => global.soduWorkAPI && (global.soduWorkAPI.conversationSession || global.soduWorkAPI.piSession);
+  const supportsLocalHistory = () => historyApi()?.localHistorySupported === true;
+  const isLocalId = id => localAliases.has(String(id || ''));
+  const canonicalLocalId = id => global.WorkspaceSidebarState?.localHistoryId(id) || '';
+  const localVisible = row => {
+    const record = localRecords.get(canonicalLocalId(row?.id));
+    return record && !record.archived && !record.deleted;
+  };
+  const historyText = (key, fallback) => global.SoduWorkI18n?.t(key, fallback) || fallback;
+  function rowIds(row, fallback) {
+    return [...new Set([fallback, row?.id, row?.localId,
+      ...(Array.isArray(row?.historyAliasIds) ? row.historyAliasIds : []),
+      ...(Array.isArray(row?.aliasIds) ? row.aliasIds : [])].filter(Boolean).map(String))];
+  }
+  function hiddenRow(row) {
+    return rowIds(row).some(id => lifecycle.get(id)?.hidden);
+  }
+  function activeConversationIds() {
+    const ids = new Set(rowIds({ id: ctx.activeChatId }));
+    try {
+      const info = global.NativeChat?.sessionInfo?.();
+      for (const key of ['sessionId', 'ref', 'runtimeConversationId']) {
+        if (info?.[key]) ids.add(String(info[key]));
+      }
+    } catch (_) { /* The native bridge may be unavailable during teardown. */ }
+    return ids;
+  }
+  async function openNewConversation() {
+    const payload = { newSession: true, tab: 'chat' };
+    try {
+      if (typeof global.WorkspaceHost?.open === 'function') {
+        const opened = await Promise.resolve(global.WorkspaceHost.open('create', payload));
+        if (opened !== false) return true;
+      }
+      if (typeof global.openComposePanel === 'function')
+        return (await Promise.resolve(global.openComposePanel(payload))) !== false;
+    } catch (_) {
+      try {
+        if (typeof global.openComposePanel === 'function')
+          return (await Promise.resolve(global.openComposePanel(payload))) !== false;
+      } catch (_) { /* Keep the list usable even when the shell is closing. */ }
+    }
+    return false;
+  }
+  function needsHistoryConfirmation(row) {
+    return lifecycleOverflow && !row.pending && !rowIds(row).some(id =>
+      lifecycle.get(id)?.hidden === false || ctx.chatItems.some(item => rowIds(item).includes(id)));
+  }
+  function applyLifecycle(row, fallback, startedAt = Infinity) {
+    const hidden = row.archived === true || row.deleted === true;
+    const ids = new Set(rowIds(row, fallback));
+    // Canonical IDs, authenticated aliases and an existing record form one lifecycle.
+    // Do not join by title/task/sourceSessionId: foreign copies can be independent.
+    for (const id of ids) {
+      for (const alias of lifecycle.get(id)?.ids || []) ids.add(alias);
+      for (const item of ctx.chatItems) {
+        const aliases = rowIds(item);
+        if (aliases.includes(id)) for (const alias of aliases) ids.add(alias);
+      }
+    }
+    if (!ids.size) return false;
+    const previous = [...new Set([...ids].map(id => lifecycle.get(id)).filter(Boolean))];
+    const suppliedRevision = Number(row.lifecycleRevision ?? row.revision);
+    const revision = Number.isFinite(suppliedRevision) && suppliedRevision > 0 ? suppliedRevision : 0;
+    if (previous.some(record => revision && record.revision > revision ||
+        record.generation > startedAt && record.hidden !== hidden)) return false;
+    const retainedRevision = Math.max(revision, ...previous.map(record => record.revision), 0);
+    const changed = [...ids].some(id => {
+      const record = lifecycle.get(id);
+      return !record || record.hidden !== hidden || record.revision !== retainedRevision;
+    });
+    if (changed) {
+      mutationGeneration++;
+      // A device tombstone cannot invalidate an unrelated account directory
+      // reply that is loading concurrently with the local catalog.
+      if (!supportsLocalHistory() || [...ids].some(id => !isLocalId(id))) {
+        accountMutationGeneration++; ctx.historyLoad = null;
+      }
+    }
+    const record = { hidden, revision: retainedRevision, generation: mutationGeneration, ids: new Set(ids) };
+    for (const id of ids) {
+      lifecycle.get(id)?.ids.delete(id);
+      lifecycle.delete(id); lifecycle.set(id, record);
+    }
+    while (lifecycle.size > MAX_LIFECYCLE_IDS) {
+      const oldest = lifecycle.keys().next().value;
+      lifecycle.get(oldest).ids.delete(oldest); lifecycle.delete(oldest);
+      // After eviction, unknown presence is only an invalidation hint. The
+      // authoritative history read confirms it instead of reviving an old row.
+      lifecycleOverflow = true;
+    }
+    if (hidden) ctx.chatItems = ctx.chatItems.filter(item => !hiddenRow(item));
+    return { changed, hidden, ids: [...ids] };
+  }
   function syncHistoryOwner() {
     const next = accountOwner();
     if (next === historyOwner) return false;
     historyOwner = next;
     // The initial bootstrap only binds the already-open local history. Token
     // renewal and device replacement have the same Hub/account owner key.
-    if (!hadOwner) { hadOwner = Boolean(next); return false; }
+    if (!hadOwner) { hadOwner = Boolean(next); return Boolean(next); }
     historyEpoch++;
+    mutationGeneration++;
+    lifecycle.clear(); lifecycleOverflow = false;
     ctx.historyLoad = null;
-    ctx.chatItems = []; ctx.chatNames?.clear();
-    ctx.activeChatId = ''; ctx.chatsLoading = Boolean(next);
+    ctx.chatItems = supportsLocalHistory() ? ctx.chatItems.filter(row => isLocalId(row.id)) : [];
+    if (supportsLocalHistory()) {
+      for (const id of ctx.chatNames?.keys() || []) if (!isLocalId(id)) ctx.chatNames.delete(id);
+    } else ctx.chatNames?.clear();
+    if (!isLocalId(ctx.activeChatId)) ctx.activeChatId = '';
+    ctx.chatsLoading = !localReady && Boolean(next); accountError = '';
     closeChatMenu();
     try { ctx.sessionOff?.(); } finally { ctx.sessionOff = null; }
     if (ctx.root) ctx.renderChats();
     return true;
   }
   function refreshAccount() {
-    if (!syncHistoryOwner() || !ctx.root || !historyOwner) return;
+    if (!syncHistoryOwner() || !ctx.root) return;
     subscribeConversationPresence();
     void refreshConversationHistory();
   }
   global.addEventListener?.('soduwork-device-auth', refreshAccount);
   global.addEventListener?.('soduwork-data-scope-changed', refreshAccount);
+  global.addEventListener?.('beforeunload', () => {
+    closed = true; localRefreshPending = false;
+    if (localRefreshTimer !== null) global.clearTimeout(localRefreshTimer);
+    localRefreshTimer = null;
+  });
+  function scheduleLocalHistoryRefresh() {
+    if (!supportsLocalHistory() || closed || typeof global.setTimeout !== 'function') return;
+    if (localRefreshTimer !== null) global.clearTimeout(localRefreshTimer);
+    // Native persistence trails presence. This coalesced read is best effort;
+    // only the resulting durable catalog can promote a row to shared history.
+    localRefreshTimer = global.setTimeout(() => {
+      localRefreshTimer = null; localRefreshPending = true;
+      flushLocalHistoryRefresh();
+    }, 1200);
+  }
+  function flushLocalHistoryRefresh() {
+    if (closed || !localRefreshPending || localLoad) return;
+    localRefreshPending = false;
+    void refreshLocalHistory();
+  }
 
 function pinStorageKey() {
     let scope = 'default';
@@ -86,12 +212,24 @@ function togglePinned(id) {
     renderChats();
   }
 
-function forgetPinned(id) {
-    if (!id) return;
-    if (ctx.sidebarProjects) { ctx.sidebarProjects.forget(String(id)); return; }
-    const ids = pinnedIds();
-    if (!ids.delete(String(id))) return;
-    try { localStorage.setItem(pinStorageKey(), JSON.stringify([...ids])); } catch (e) {}
+function forgetPinned(id, failureMessage = '会话已删除，但侧栏记录未能保存，请重新点击删除清理', archived = false) {
+    const removed = [...new Set((Array.isArray(id) ? id : [id]).filter(Boolean).map(String))];
+    if (!removed.length) return true;
+    try {
+      if (archived && ctx.sidebarProjects?.forgetArchived) return ctx.sidebarProjects.forgetArchived(removed) === true;
+      if (ctx.sidebarProjects?.forgetMany) return ctx.sidebarProjects.forgetMany(removed) === true;
+      if (ctx.sidebarProjects) {
+        for (const key of removed) if (ctx.sidebarProjects.forget(key) === null) return false;
+        return true;
+      }
+      const ids = pinnedIds(); let changed = false;
+      for (const key of removed) if (ids.delete(key)) changed = true;
+      if (changed) localStorage.setItem(pinStorageKey(), JSON.stringify([...ids]));
+      return true;
+    } catch (error) {
+      global.petSay?.(failureMessage);
+      return false;
+    }
   }
 
 /*
@@ -99,16 +237,20 @@ function forgetPinned(id) {
  * application dialog. Send a second IPC with confirmed only after acceptance; cancellation
  * never executes deletion.
  */
-async function requestDelete(api, key) {
+async function requestDelete(api, key, current) {
     let got = null;
     try { got = await api.deleteHistory(key); }
     catch (error) { return { ok: false, reason: String(error && error.message || error) }; }
+    if (!current()) return { ok: false, cancelled: true };
     if (!got || !got.needsConfirm) return got;
     const dialog = global.SoduWorkConfirmDialog;
     if (!dialog || typeof dialog.open !== 'function') return { ok: false, reason: '确认弹窗没有加载出来，这次先不删' };
     const approved = await dialog.open({ ...(got.confirm || {}), danger: true });
-    if (!approved) return { ok: false, cancelled: true };
-    try { return await api.deleteHistory(key, { confirmed: true }); }
+    if (!approved || !current()) return { ok: false, cancelled: true };
+    // A missing-content confirmation must never authorize deleting files that
+    // become available while the confirmation dialog is open.
+    const options = got.missingContent === true ? { confirmed: true, missingOnly: true } : { confirmed: true };
+    try { return await api.deleteHistory(key, options); }
     catch (error) { return { ok: false, reason: String(error && error.message || error) }; }
 }
 
@@ -116,23 +258,31 @@ async function deleteHistoryChat(id) {
     const key = String(id || '');
     const api = global.soduWorkAPI && (global.soduWorkAPI.conversationSession || global.soduWorkAPI.piSession);
     if (!key || !api || typeof api.deleteHistory !== 'function') return false;
-    const got = await requestDelete(api, key);
+    const activeIds = activeConversationIds();
+    syncHistoryOwner();
+    const epoch = historyEpoch, startedAt = mutationGeneration;
+    const current = () => { syncHistoryOwner(); return epoch === historyEpoch; };
+    const got = await requestDelete(api, key, current);
+    syncHistoryOwner();
+    if (epoch !== historyEpoch) return false;
     if (!got || !got.ok) {
       if (!(got && got.cancelled) && typeof global.petSay === 'function') {
         global.petSay(String(got && got.reason || '这条会话暂时删不掉'));
       }
       return false;
     }
-    forgetPinned(key);
+    const applied = applyLifecycle({ ...got, deleted: true }, key, startedAt);
+    if (!applied) return true;
+    if (!forgetPinned(applied.ids)) return false;
+    for (const id of applied.ids) ctx.chatNames?.delete(id);
     if (global.ChatCollaborationStore && typeof ChatCollaborationStore.remove === 'function') {
       // The conversation is gone; its requirement bindings must not survive it,
       // or the next "open conversation" would try to resume a missing archive.
-      ChatCollaborationStore.remove(key);
+      for (const id of applied.ids) ChatCollaborationStore.remove(id);
     }
-    ctx.chatItems = ctx.chatItems.filter((row) => String(row && row.id || '') !== key);
-    if (ctx.activeChatId === key) {
+    if ([...activeIds].some(activeId => applied.ids.includes(activeId)) || hiddenRow({ id: ctx.activeChatId })) {
       ctx.activeChatId = '';
-      if (global.WorkspaceHost) global.WorkspaceHost.open('create', { newSession: true });
+      await openNewConversation();
     }
     renderChats();
     return true;
@@ -142,18 +292,24 @@ async function archiveHistoryChat(id) {
     const key = String(id || '');
     const api = global.soduWorkAPI && (global.soduWorkAPI.conversationSession || global.soduWorkAPI.piSession);
     if (!key || !api || typeof api.archiveHistory !== 'function') return false;
+    const activeIds = activeConversationIds();
+    syncHistoryOwner();
+    const epoch = historyEpoch, startedAt = mutationGeneration;
     let got = null;
     try { got = await api.archiveHistory(key); }
     catch (error) { got = { ok: false, reason: String(error && error.message || error) }; }
+    syncHistoryOwner();
+    if (epoch !== historyEpoch) return false;
     if (!got || !got.ok) {
       if (typeof global.petSay === 'function') global.petSay(String(got && got.reason || '这条会话暂时无法归档'));
       return false;
     }
-    ctx.sidebarProjects?.forget(key);
-    ctx.chatItems = ctx.chatItems.filter((row) => String(row && row.id || '') !== key);
-    if (ctx.activeChatId === key) {
+    const applied = applyLifecycle({ ...got, archived: true }, key, startedAt);
+    if (!applied) return true;
+    if (!forgetPinned(applied.ids, '这条会话暂时无法归档', true)) return false;
+    if ([...activeIds].some(activeId => applied.ids.includes(activeId)) || hiddenRow({ id: ctx.activeChatId })) {
       ctx.activeChatId = '';
-      if (global.WorkspaceHost) global.WorkspaceHost.open('create', { newSession: true });
+      await openNewConversation();
     }
     renderChats();
     return true;
@@ -179,10 +335,32 @@ function updateChatState(event) {
     const row = rememberChatName(event && event.presence);
     const id = String(event && event.sessionId || row && row.id || '');
     if (!id || !row) return;
+    const previous = ctx.chatItems.find(item => String(item.id || '') === id);
+    if (!row.emptyPlaceholder && !row.accountConversation && !row.remoteProjection &&
+        (event.kind === 'renamed' || event.kind === 'history-lifecycle' ||
+        !previous || ctx.chatState(previous) !== ctx.chatState(row) &&
+        ['completed', 'failed', 'stopped'].includes(ctx.chatState(row)))) scheduleLocalHistoryRefresh();
+    if (row.emptyPlaceholder) { ctx.upsertChat({ ...row, id }); return; }
     if (row.archived || row.deleted) {
-      removeChat(id);
+      // A legacy snapshot has no lifecycle ordering. After an explicit restore,
+      // only another explicit lifecycle action may hide this conversation again.
+      if (event.kind !== 'history-lifecycle' &&
+          rowIds(row, id).some(key => lifecycle.get(key)?.hidden === false)) return;
+      const applied = applyLifecycle(row, id);
+      if (applied) {
+        if (event.kind === 'history-lifecycle') {
+          forgetPinned(applied.ids, row.deleted ? undefined : '这条会话暂时无法归档', !row.deleted);
+        }
+        renderChats();
+      }
       return;
     }
+    if (event.kind === 'history-lifecycle' && row.archived === false && row.deleted === false) {
+      const restored = applyLifecycle(row, id);
+      if (!restored) return;
+      if (restored.changed && !row.title) void refreshConversationHistory();
+    }
+    if (hiddenRow({ ...row, id })) return;
     if (event.kind === 'renamed' && global.ChatChrome?.rename) global.ChatChrome.rename(id, row.title);
     const index = ctx.chatItems.findIndex((item) => String(item.id || '') === id);
     if (index < 0) {
@@ -534,7 +712,11 @@ function _syncChatList(target, items, isPinned, pool) {
 
 function renderChats() {
     ctx.mount();
-    const list = ctx.chatItems.slice(0, ctx.MAX_CHAT_ITEMS);
+    let accountCount = 0;
+    // Source-specific read limits do not create separate presentation groups.
+    // Existing project state owns chronological and manual placement.
+    const list = localReady ? ctx.chatItems.filter(item => isLocalId(item.id) || ++accountCount <= ctx.MAX_CHAT_ITEMS)
+      : ctx.chatItems.slice(0, ctx.MAX_CHAT_ITEMS);
     ctx.sidebarProjects?.remember(list);
     const pins = pinnedIds();
     const scroller = ctx.root.querySelector('#wsSideScroll');
@@ -548,26 +730,52 @@ function renderChats() {
         return acc;
       }, new Map()));
     const groups = ctx.sidebarProjects?.partition(list);
-    const pinned = groups ? groups.pinned : list.filter((item) => pins.has(String(item.id || '')));
-    const normal = groups ? groups.recent : list.filter((item) => !pins.has(String(item.id || '')));
+    const pinned = (groups ? groups.pinned : list.filter((item) => pins.has(String(item.id || ''))))
+      .filter(item => !hiddenRow(item));
+    const recent = (groups ? groups.recent : list.filter((item) => !pins.has(String(item.id || ''))))
+      .filter(item => !hiddenRow(item));
     const pinnedBox = ctx.root.querySelector('#wsPinnedBox');
     pinnedBox.hidden = !pinned.length;
     pinnedBox.classList.toggle('is-empty', !pinned.length);
-    ctx.root.querySelector('#wsChatsBox').classList.toggle('is-empty', !normal.length);
+    ctx.root.querySelector('#wsChatsBox').classList.toggle('is-empty', !recent.length);
     _syncChatList(ctx.pinnedChats, pinned, true, pool);
-    _syncChatList(ctx.chats, normal, false, pool);
-    for (const project of groups?.projects || []) {
-      _syncChatList(project.target, project.items, false, pool);
-      if (!project.items.length) ctx._empty(project.target, '拖入会话，开始整理');
+    _syncChatList(ctx.chats, recent, false, pool);
+    if (supportsLocalHistory()) {
+      let accountStatus = ctx.root.querySelector('#wsAccountHistoryStatus');
+      if (!accountStatus) {
+        accountStatus = document.createElement('div'); accountStatus.id = 'wsAccountHistoryStatus';
+        accountStatus.className = 'ws-history-status'; accountStatus.setAttribute('role', 'status');
+        ctx.root.querySelector('#wsChatsBox').appendChild(accountStatus);
+      }
+      accountStatus.hidden = !accountError;
+      accountStatus.textContent = accountError ? historyText('workspace.history.accountError', '部分会话暂时无法读取') : '';
+      let actions = ctx.root.querySelector('#wsLocalHistoryActions');
+      if (!actions) {
+        actions = document.createElement('div'); actions.id = 'wsLocalHistoryActions'; actions.className = 'ws-history-actions';
+        const status = document.createElement('span'); status.setAttribute('role', 'status');
+        const button = document.createElement('button'); button.type = 'button';
+        button.onclick = () => { void refreshLocalHistory({ append: !localError, refresh: !!localError }); };
+        actions.append(status, button); ctx.root.querySelector('#wsChatsBox').appendChild(actions);
+      }
+      actions.hidden = !localNext && !localRestart && !localError && (localReady || !localLoad);
+      actions.querySelector('span').textContent = localError ? historyText('workspace.history.localError', '本机历史暂时无法读取') : '';
+      const button = actions.querySelector('button'); button.disabled = !!localLoad;
+      button.textContent = localLoad ? historyText('workspace.history.loading', '正在加载…') : localError
+        ? historyText('workspace.history.retry', '重新加载') : historyText('workspace.history.more', '加载更多');
     }
-    if (!normal.length) ctx._empty(ctx.chats, list.length ? '没有更多聊天' :
+    for (const project of groups?.projects || []) {
+      const items = project.items.filter(item => !hiddenRow(item));
+      _syncChatList(project.target, items, false, pool);
+      if (!items.length) ctx._empty(project.target, '拖入会话，开始整理');
+    }
+    if (!recent.length && !localError && !accountError) ctx._empty(ctx.chats, list.length ? '没有更多聊天' :
       (ctx.chatsLoading ? '正在加载聊天…' : '还没有聊天'));
     if (ctx.openChatMenu && !ctx.openChatMenu.row?.isConnected) closeChatMenu();
     scroller.scrollTop = scrollTop;
   }
 function subscribeConversationPresence() {
     syncHistoryOwner();
-    if (hadOwner && !historyOwner) return;
+    if (!historyOwner) return;
     if (ctx.sessionOff) return;
     const api = global.soduWorkAPI && (global.soduWorkAPI.conversationSession || global.soduWorkAPI.piSession);
     const epoch = historyEpoch;
@@ -576,9 +784,11 @@ function subscribeConversationPresence() {
       ? api.onEventBatch(receive, { presenceOnly: true }) : api.onEvent(receive);
   }
 
-function refreshConversationHistory() {
+function refreshAccountHistory() {
     syncHistoryOwner();
-    if (hadOwner && !historyOwner) return Promise.resolve(false);
+    // Main-process history captures an authenticated actor before reading.
+    // A pre-login request cannot be reused when the first account arrives.
+    if (!historyOwner) return Promise.resolve(false);
     if (ctx.historyLoad) return ctx.historyLoad;
     const api = global.soduWorkAPI && (global.soduWorkAPI.conversationSession || global.soduWorkAPI.piSession);
     if (!api || typeof api.history !== 'function') {
@@ -586,15 +796,39 @@ function refreshConversationHistory() {
       ctx.renderChats();
       return Promise.resolve(false);
     }
-    const epoch = historyEpoch;
-    const current = () => { syncHistoryOwner(); return epoch === historyEpoch; };
-    const job = Promise.resolve().then(() => current() ? api.history() : null).then((got) => {
+    const epoch = historyEpoch, generation = accountMutationGeneration;
+    const current = () => { syncHistoryOwner(); return epoch === historyEpoch && generation === accountMutationGeneration; };
+    const job = Promise.resolve().then(() => {
+      if (!current()) return null;
+      return supportsLocalHistory() ? api.history({ source: 'account' }) : api.history();
+    }).then((got) => {
       if (!current()) return false;
-      if (got && got.ok) ctx.setChats(got.chats || []);
-      else { ctx.chatsLoading = false; ctx.renderChats(); }
+      if (got && got.ok) {
+        accountError = '';
+        // Native history supplies authenticated lifecycle records, including
+        // cold-start tombstones that have not produced a presence event.
+        const archived = new Set(), deleted = new Set();
+        for (const row of Array.isArray(got.lifecycle) ? got.lifecycle : []) {
+          if (supportsLocalHistory() && isLocalId(row?.id)) continue;
+          if (!row?.id || !(row.archived === true || row.deleted === true ||
+              row.archived === false && row.deleted === false && Number(row.lifecycleRevision) > 0)) continue;
+          const applied = applyLifecycle(row);
+          if (applied) for (const id of applied.ids) {
+            archived.delete(id); deleted.delete(id);
+            if (applied.hidden) (row.deleted ? deleted : archived).add(id);
+          }
+        }
+        // The directory may exceed the bounded live-event ledger. Retain this
+        // response's accepted cleanup IDs even when old ledger entries expire.
+        forgetPinned([...archived], '这条会话暂时无法归档', true);
+        forgetPinned([...deleted]);
+        ctx.setChats(supportsLocalHistory() ? [...localRows, ...(got.chats || []).filter(row => !isLocalId(row.id))] : got.chats || []);
+      }
+      else { accountError = 'unavailable'; ctx.chatsLoading = false; ctx.renderChats(); }
       return Boolean(got && got.ok);
     }).catch(() => {
       if (!current()) return false;
+      accountError = 'unavailable';
       ctx.chatsLoading = false;
       ctx.renderChats();
       return false;
@@ -602,21 +836,100 @@ function refreshConversationHistory() {
     ctx.historyLoad = job;
     return job;
   }
+  function refreshLocalHistory({ append = false, refresh = false } = {}) {
+    if (!supportsLocalHistory()) return Promise.resolve(false);
+    if (localLoad) return localLoad;
+    if (append && !localNext && !localRestart) return Promise.resolve(true);
+    const workspace = localCatalog?.workspace;
+    const options = { source: 'local', limit: 50, ...(refresh ? { refresh: true } : {}),
+      ...(append && localNext && !localRestart ? { after: localNext } : {}),
+      ...(localCatalog ? { workspace, catalogRevision: localCatalog.revision } : {}) };
+    const job = Promise.resolve().then(() => historyApi().history(options)).then(got => {
+      if (got?.ok && got.localCatalog && (!workspace || got.localCatalog.workspace === workspace) &&
+          got.localCatalog.revision < global.WorkspaceSidebarState.localHistoryRevision(got.localCatalog.workspace)) return false;
+      if (!got?.ok || !got.localCatalog || workspace && got.localCatalog.workspace !== workspace ||
+          !global.WorkspaceSidebarState?.setLocalHistory(got.localCatalog, got.chats || [])) throw Error('Local history unavailable');
+      const catalog = got.localCatalog;
+      let addedLocalIds = [];
+      if (Array.isArray(catalog.items)) {
+        const previousAliases = localAliases;
+        addedLocalIds = catalog.items.filter(row => {
+          const previous = localRecords.get(String(row.id));
+          return !row.archived && !row.deleted && (!previous || previous.archived || previous.deleted);
+        }).map(row => String(row.id));
+        localRecords = new Map(catalog.items.map(row => [String(row.id), row]));
+        localAliases = new Set(catalog.items.flatMap(row => [String(row.id), ...(row.historyAliasIds || [])]));
+        ctx.chatItems = ctx.chatItems.filter(row => !previousAliases.has(String(row.id)) || localVisible(row));
+        const archived = [], deleted = [];
+        for (const row of catalog.items) {
+          if (global.WorkspaceSidebarState.localHistoryId(row.id) !== row.id) continue;
+          if (row.archived || row.deleted || hiddenRow(row)) {
+            applyLifecycle({ ...row, lifecycleRevision: catalog.revision });
+            if (row.deleted) deleted.push(row.id); else if (row.archived) archived.push(row.id);
+          }
+        }
+        forgetPinned(archived, '这条会话暂时无法归档', true); forgetPinned(deleted);
+      }
+      localCatalog = { workspace: catalog.workspace, revision: catalog.revision };
+      const oldRows = localRows.filter(localVisible), incoming = (got.chats || []).filter(localVisible);
+      const ids = new Set(incoming.map(row => row.id));
+      localRows = append ? [...oldRows.filter(row => !ids.has(row.id)), ...incoming]
+        : [...incoming, ...oldRows.filter(row => !ids.has(row.id))];
+      const loadedIds = new Set(localRows.map(row => canonicalLocalId(row.id)));
+      const addedUnloaded = addedLocalIds.some(id => !loadedIds.has(id));
+      // A newly imported older record can precede an existing cursor or follow
+      // an exhausted one. Restart traversal without discarding loaded rows.
+      if (append || !localReady || localRestart || addedUnloaded) localNext = got.next || null;
+      else if (oldRows.length <= 50) localNext = got.next || null;
+      localRestart = append && addedUnloaded;
+      localReady = true; localError = got.refreshError ? 'refresh' : '';
+      const remote = ctx.chatItems.filter(row => !isLocalId(row.id));
+      ctx.setChats([...localRows, ...remote]);
+      return true;
+    }).catch(() => { localError = 'unavailable'; ctx.chatsLoading = false; ctx.renderChats(); return false; })
+      .finally(() => { if (localLoad === job) localLoad = null; ctx.renderChats(); flushLocalHistoryRefresh(); });
+    localLoad = job;
+    return job;
+  }
+  function refreshConversationHistory() {
+    const local = supportsLocalHistory() ? refreshLocalHistory() : null;
+    if (local && !nativeRefreshStarted) {
+      nativeRefreshStarted = true;
+      void local.then(() => refreshLocalHistory({ refresh: true }));
+    }
+    const remote = refreshAccountHistory();
+    return local ? Promise.all([local, remote]).then(values => values.some(Boolean)) : remote;
+  }
   /* Insert an optimistic row on the first message, then replace it by title and time once Pi's archive index is available. */
   function setChats(items) {
     ctx.chatsLoading = false;
-    ctx.chatItems = ctx._reconcileChats(ctx.chatItems, (items || []).map(rememberChatName), Date.now());
+    // Apply lifecycle visibility before the existing optimistic-row reconciliation.
+    ctx.chatItems = ctx.chatItems.filter(item => !hiddenRow(item));
+    items = (items || []).filter(item => !hiddenRow(item));
+    items = (items || []).map(rememberChatName);
+    if (localReady) {
+      const currentLocal = ctx.chatItems.filter(row => isLocalId(row.id)), incomingLocal = items.filter(row => isLocalId(row.id));
+      const limit = Math.max(1, new Set([...currentLocal, ...incomingLocal].map(row => row.id)).size);
+      ctx.chatItems = [...ctx._reconcileChats(currentLocal, incomingLocal, Date.now(), { limit, canonicalId: canonicalLocalId }),
+        ...ctx._reconcileChats(ctx.chatItems.filter(row => !isLocalId(row.id)), items.filter(row => !isLocalId(row.id)), Date.now())];
+    } else ctx.chatItems = ctx._reconcileChats(ctx.chatItems, items, Date.now());
     renderChats();
   }
 
   function upsertChat(item) {
-    if (!item) return;
-    const next = ctx._upsertChatItems(ctx.chatItems, rememberChatName(item), { deferUnconfirmedCloudTasks: true });
+    if (!item || hiddenRow(item)) return;
+    if (needsHistoryConfirmation(item)) { void refreshConversationHistory(); return; }
+    const local = localReady && isLocalId(item.id);
+    const current = localReady ? ctx.chatItems.filter(row => isLocalId(row.id) === local) : ctx.chatItems;
+    const options = { deferUnconfirmedCloudTasks: true, ...(local ? { limit: Math.max(1, current.length + 1), canonicalId: canonicalLocalId } : {}) };
+    const next = ctx._upsertChatItems(current, rememberChatName(item), options);
     if (next === null) {
       void refreshConversationHistory();
       return;
     }
-    ctx.chatItems = next;
+    if (!localReady) ctx.chatItems = next;
+    else if (local) ctx.chatItems = [...next, ...ctx.chatItems.filter(row => !isLocalId(row.id))];
+    else ctx.chatItems = [...ctx.chatItems.filter(row => isLocalId(row.id)), ...next];
     renderChats();
   }
 
@@ -642,7 +955,7 @@ function refreshConversationHistory() {
     }
   }
 
-  return { setChats, upsertChat, removeChat, setActiveChat, pinStorageKey, legacyPinnedIds, pinnedIds, togglePinned, forgetPinned, deleteHistoryChat, archiveHistoryChat, rememberChatName, updateChatState, renameChat, closeChatMenu, openChatRename, chatMenuItem, _newChatRow, _paintChatLocale, _paintChatRow, _syncChatList, renderChats, subscribeConversationPresence, refreshConversationHistory };
+  return { setChats, upsertChat, removeChat, setActiveChat, pinStorageKey, legacyPinnedIds, pinnedIds, togglePinned, forgetPinned, deleteHistoryChat, archiveHistoryChat, rememberChatName, updateChatState, renameChat, closeChatMenu, openChatRename, chatMenuItem, _newChatRow, _paintChatLocale, _paintChatRow, _syncChatList, renderChats, subscribeConversationPresence, refreshConversationHistory, refreshLocalHistory };
   }
   global.WorkspaceChatList = { create };
 })(window);

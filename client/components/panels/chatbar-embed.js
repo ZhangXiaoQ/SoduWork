@@ -122,10 +122,17 @@
     void api.workPreview.composerSubmitResult({ id: payload.id, ok, reason });
   }
   let turnWasBusy = false, observedRef = '';
+  let reportedBusy = false;
+  function reportActivity(busy) {
+    if (reportedBusy === busy) return;
+    reportedBusy = busy;
+    void api.workPreview.composerActivity?.(busy);
+  }
   function observeTurn(snapshot) {
     const ref = global.NativeChat?.sessionInfo?.()?.ref || '';
-    if (!snapshot) { if (ref !== observedRef) { observedRef = ref; turnWasBusy = false; } return; }
+    if (!snapshot) { if (ref !== observedRef) { observedRef = ref; turnWasBusy = false; reportActivity(false); } return; }
     const busy = ['streaming', 'queued'].includes(snapshot.status) || !!snapshot.execution?.running;
+    reportActivity(busy);
     if (ref !== observedRef) { observedRef = ref; turnWasBusy = busy; return; }
     if (ref && turnWasBusy && !busy) void api.workPreview.composerTurnSettled?.();
     turnWasBusy = busy;

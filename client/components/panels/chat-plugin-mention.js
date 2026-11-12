@@ -252,7 +252,8 @@
           if (!appendPluginIcon(mark, custom)) mark.textContent = item.name.slice(0, 1) || '✦';
         }
         const label = document.createElement('span');
-        label.textContent = item.name;
+        if (!action) label.setAttribute('data-user-content', '');
+        label.textContent = model.displayText(item, 'name', _uiText);
         const hint = document.createElement('small');
         hint.textContent = action ? '工作表单' : '插件';
         if (!action && item.inputs && item.inputs.length) {
@@ -312,11 +313,13 @@
       const copy = document.createElement('span');
       copy.className = 'nplugin-option-copy';
       const title = document.createElement('b');
+      if (!isAction(item)) title.setAttribute('data-user-content', '');
       title.textContent = isAction(item) ? '/' + item.command + ' · ' + item.name :
         (item.process && item.process.enterprise
-        ? '【' + (item.process.label || _uiText('企业流程')) + '】' : '') + item.name;
+        ? '【' + (item.process.label || _uiText('企业流程')) + '】' : '') + model.displayText(item, 'name', _uiText);
       const description = document.createElement('span');
-      description.textContent = item.description || (!isAction(item) &&
+      if (item.description) description.setAttribute('data-user-content', '');
+      description.textContent = model.displayText(item, 'description', _uiText) || (!isAction(item) &&
         item.workflow.length ? item.workflow.map((step) => step.name).filter(Boolean).slice(0, 3).join(' · ')
           : '企业已发布的工作方法');
       copy.append(title, description);
@@ -584,6 +587,7 @@
       loadedAt = 0;
       if (query) load(true);
     };
+    const onLocaleChanged = () => { renderStrip(); renderMenu(); };
 
     input.addEventListener('input', update);
     input.addEventListener('click', update);
@@ -591,6 +595,7 @@
     eventRoot?.addEventListener('resize', positionMenu);
     document.addEventListener('mousedown', onDocumentMouseDown);
     if (eventRoot) eventRoot.addEventListener('soduwork:plugins-changed', onCatalogChanged);
+    eventRoot?.addEventListener('soduwork-locale-change', onLocaleChanged);
 
     return {
       selected: () => selected.slice(),
@@ -748,7 +753,8 @@
         const turnValues = new Map(selectedForTurn.map(item => [item.pluginId,
           prepareConversationInputs(item.inputs, originalText, inputDrafts.get(item.pluginId), inputContext).values]));
         return {
-          text: preparedConversationText(originalText, selectedForTurn, turnValues),
+          // Parameters travel as bounded turn data; the transcript keeps the user's text.
+          text: originalText,
           items: selectedForTurn.map((item) => ({
             pluginId: item.pluginId,
             inputValues: { ...(turnValues.get(item.pluginId) || {}) },
@@ -764,6 +770,8 @@
         input.removeEventListener('keydown', onKeydown, true);
         document.removeEventListener('mousedown', onDocumentMouseDown);
         if (eventRoot) eventRoot.removeEventListener('soduwork:plugins-changed', onCatalogChanged);
+        eventRoot?.removeEventListener('soduwork-locale-change', onLocaleChanged);
+        eventRoot?.removeEventListener('resize', positionMenu);
         if (eventRoot && eventRoot.PluginInputSheet) eventRoot.PluginInputSheet.close();
         close();
         strip.remove();

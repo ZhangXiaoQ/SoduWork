@@ -20,7 +20,7 @@ const windows = [], views = [], servers = [], handlers = {};
 let host, origin, foreign, posted = '';
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const until = async (check, label) => { for (let i = 0; i < 320; i++) { if (await check()) return; await delay(25); } throw Error('Timed out: ' + label); };
-const js = (wc, source) => wc.executeJavaScript(source, true);
+const js = (wc, source) => wc.executeJavaScript(source, true).catch(error => { throw Error(source.slice(0, 160) + ': ' + error.message); });
 const sdk = fs.readFileSync(path.resolve(__dirname, '../sdk/soduwork-app.js'));
 const canvasPath = process.argv.find(value => value.startsWith('--canvas-source='))?.slice('--canvas-source='.length);
 const canvas = canvasPath ? fs.readFileSync(path.resolve(canvasPath)) : Buffer.from('<!doctype html><title>无限画布</title><div id="world">画布</div>');
@@ -32,6 +32,8 @@ async function serve(handler) {
 app.whenReady().then(async () => {
   foreign = await serve((_req, res) => { res.writeHead(200, { 'Content-Type':'text/html' }); res.end('<title>Foreign page</title>Other origin'); });
   origin = await serve((req, res) => {
+    if (req.url === '/never-finishes') { res.writeHead(200, { 'Content-Type':'image/png' }); res.flushHeaders(); return; }
+    if (req.url === '/pending-assets') { res.writeHead(200, { 'Content-Type':'text/html' }); res.end('<title>Pending assets</title><a id="next" href="/one">Next</a><img width="1" height="1" src="/never-finishes">'); return; }
     if (req.url === '/sdk.js') { res.writeHead(200, { 'Content-Type':'application/javascript' }); return res.end(sdk); }
     if (req.url === '/canvas') { res.writeHead(200, { 'Content-Type':'text/html; charset=utf-8' }); return res.end(canvas); }
     if (req.url === '/api/events') {
@@ -67,6 +69,7 @@ app.whenReady().then(async () => {
   const current = async () => { const s = await state(); return views.find(view => view.webContents && !view.webContents.isDestroyed() && view.webContents.getTitle() === s.tabs.find(tab => tab.id === s.activeId).title); };
   await until(async () => (await state()).tabs[0].title === 'H5 /', 'initial page title');
   await until(() => !composer.webContents.isLoading(), 'composer ready');
+  await until(async () => (await state()).startup === 'ready', 'initial first frame');
   assert.equal(await js(chrome.webContents,'!!document.querySelector("#back svg") && !document.querySelector("#title")'),true);
   assert.equal(await js(chrome.webContents,'soduWorkWindowChrome.platform'),process.platform);
   assert.equal(await js(chrome.webContents,'document.documentElement.dataset.platform'),process.platform);
@@ -80,13 +83,29 @@ app.whenReady().then(async () => {
   await js(first.webContents,'history.pushState({},"","/spa-one");history.pushState({},"","/spa-two");document.title="SPA 页面"');
   await action('back'); await until(() => first.webContents.getURL() === origin + '/spa-one', 'SPA back one');
   await action('back'); await until(() => first.webContents.getURL() === origin + '/', 'SPA back two');
+  assert.equal((await state()).startup, 'ready', 'SPA history navigation must not return to the startup shell');
+  assert.equal(first.getVisible(), true, 'SPA page remains visible');
   await first.webContents.loadURL(origin + '/one'); await first.webContents.loadURL(origin + '/two');
   await action('back'); await until(() => first.webContents.getURL() === origin + '/one', 'document back one');
   await action('back'); await until(() => first.webContents.getURL() === origin + '/', 'document back two');
   report.cases.push('Icon-only chrome, SVG back, dynamic document title, two SPA history entries and two full-document back steps.');
+  await js(first.webContents, 'const slowLink=document.createElement("a");slowLink.href="/pending-assets";document.body.append(slowLink);slowLink.click()');
+  await until(() => first.webContents.getTitle() === 'Pending assets', 'new document with pending asset');
+  assert.equal((await state()).startup, 'ready', 'internal navigation must not reopen launch splash while a resource is pending');
+  assert.equal(first.getVisible(), true, 'new page stays interactive before all resources finish');
+  // executeJavaScript waits for window.onload, so use Chromium input to prove
+  // the still-loading document is actually usable before that event fires.
+  win.show(); win.focus(); first.webContents.focus(); await delay(100);
+  first.webContents.sendInputEvent({type:'mouseDown',x:20,y:15,button:'left',clickCount:1});
+  first.webContents.sendInputEvent({type:'mouseUp',x:20,y:15,button:'left',clickCount:1});
+  await until(() => first.webContents.getURL() === origin + '/one', 'navigate again while previous resources remain pending');
+  await until(() => first.webContents.getTitle() === 'H5 /one' && !first.webContents.isLoading(), 'new document ready after pending resources');
+  await first.webContents.loadURL(origin + '/');
+  report.cases.push('Internal navigation stays visible while an image request never finishes, and another page can still be opened.');
   await js(first.webContents,'draft.value="保留 H5 草稿";void window.open("/popup","named")');
   await until(async () => (await state()).tabs.length === 2 && (await state()).tabs[1].title === 'H5 /popup', 'window.open tab');
   let popup = await current();
+  await until(async () => (await state()).startup === 'ready', 'popup first frame ready');
   assert.equal(first.getVisible(),false); assert.equal(popup.getVisible(),true);
   const popupId = (await state()).activeId;
   assert.equal((await js(popup.webContents,'soduWorkApp.settings.update({values:{ukey:"fixture-key"}})')).ok,true);

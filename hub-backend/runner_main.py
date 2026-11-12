@@ -603,10 +603,10 @@ class Runner:
                     headers.update({"X-Soduwork-Device": self.client_id, "X-Soduwork-Secret": self.secret})
                 if self.key and self.id:
                     # Send machine identity with its key; Hub verifies it matches the hello identity.
-                    headers.update({"X-Soduwork-Runner-Id": self.id,
-                                    "X-Soduwork-Runner-Key": self.key})
+                    headers.update({"X-SoduWork-Runner-Id": self.id,
+                                    "X-SoduWork-Runner-Key": self.key})
                 if self.token:
-                    headers["X-Soduwork-Runner-Token"] = self.token
+                    headers["X-SoduWork-Runner-Token"] = self.token
                 async with websockets.connect(self.url, max_size=8 * 1024 * 1024,
                                               additional_headers=headers, proxy=None) as ws:
                     self.ws = ws
@@ -688,7 +688,25 @@ class Runner:
         sys.stdout.buffer.write(blob.encode("utf-8"))
         sys.stdout.buffer.flush()
 
+    async def _conversation_content_store(self, realm):
+        import re
+        if not isinstance(realm, str) or not re.fullmatch(r"[a-f0-9]{64}", realm):
+            raise ValueError("Invalid local content realm")
+        if not hasattr(self, "_content_init_lock"):
+            self._content_init_lock = asyncio.Lock()
+            self._content_stores = {}
+        async with self._content_init_lock:
+            if realm not in self._content_stores:
+                from app.services.runner_content_store import Store
+                from app.services.local_base import _data_root
+                self._content_stores[realm] = await asyncio.to_thread(Store,
+                    os.path.join(_data_root(), "conversation-content", realm))
+            return self._content_stores[realm]
+
     async def _local_rpc_dispatch(self, message: dict) -> dict:
+        if message.get("op") == "runtime.content.read":
+            store = await self._conversation_content_store(message.get("realm"))
+            return await asyncio.to_thread(store.handle, {**message, "op": "content.read"})
         op = str(message.get("op") or "")
         if op == "desktop.capability.reply":
             bridge = getattr(self, "_desktop_capabilities", None)
@@ -941,11 +959,13 @@ class Runner:
             **admission,
             "skills": self._skill_inventory,
             "skillCatalog": _skill_report(self._skill_catalog),
-            "tags": self.tags, "caps": [ws_frames.CAP_BIN1, "handoff1", "executionSelection1", "sessionAck1", "turnFiles1"],
+            "tags": self.tags, "caps": [ws_frames.CAP_BIN1, "handoff1", "executionSelection1", "sessionAck1", "turnFiles1", "turnSkills1", "conversationContent1"],
         }
         if getattr(self, "desktop_owned", False):
             payload["caps"].append("desktopCapabilities1")
+            payload["caps"].extend(["desktopPluginTurn1", "desktopPluginStart1"])
             payload["caps"].append("desktopLibrary1")
+            payload["caps"].append("desktopHistory1")
         if getattr(getattr(self, "_admission", None), "_journal", None) is not None:
             payload["caps"].append("admit1")
         message, prefetched = await _negotiate_hello(
@@ -1505,6 +1525,12 @@ class Runner:
                             handoff_restore.restore_inputs, ctx, inputs, self.work_root)
                     except (ValueError, OSError) as exc:
                         return {"ok": False, "error": str(exc)}
+                if ctx.get("pluginTurn"):
+                    from app.services import runner_turn_plugins
+                    try:
+                        await runner_turn_plugins.prepare_start(self, expected_ref, ctx, cfg)
+                    except (ValueError, KeyError, TimeoutError) as exc:
+                        return {"ok": False, "error": str(exc)}
                 r = await asyncio.to_thread(
                     ai_local.dispatch_sync, cfg, t, inputs,
                     {"id": "local:" + cfg["local_cli"]}, ctx,
@@ -1878,6 +1904,18 @@ class Runner:
         m = dict(m)
         m.pop("_localParent", None)
         op = str(m.get("op") or "")
+        if op.startswith("content."):
+            try:
+                # Both ingress paths share one store initialization and lock.
+                # Hub realms still have separate account/record namespaces.
+                import hashlib
+                realm = hashlib.sha256(self.http_base.encode()).hexdigest()
+                store = await self._conversation_content_store(realm)
+                result = await asyncio.to_thread(store.handle, m)
+            except Exception as exc:
+                result = {"ok": False, "error": str(exc)}
+            await self._send({**result, "op": "reply", "id": m.get("id")})
+            return
         if op.startswith("desktop.capability"):
             try:
                 if op != "desktop.capability" or not getattr(self, "desktop_owned", False):
@@ -2138,6 +2176,10 @@ def main() -> None:
         from app.services import acp_bridge
         raise SystemExit(acp_bridge.main())
 
+    if len(sys.argv) > 1 and sys.argv[1] == "--harness2-native":
+        from app.services import harness2_native
+        raise SystemExit(harness2_native.main())
+
     if len(sys.argv) > 1 and sys.argv[1] == "--harness2-bridge":
         sys.argv = [sys.argv[0], *sys.argv[2:]]
         from app.services import harness2_bridge
@@ -2148,7 +2190,7 @@ def main() -> None:
     ap.add_argument("--config", default="", help="runner JSON 配置文件（独立部署兼容入口）")
     ap.add_argument("--config-stdin", action="store_true", help="通过桌面私有管道接收启动配置")
     ap.add_argument("--hub", default=os.environ.get("SODUWORK_HUB") or "",
-                    help="后端地址，如 ws://192.0.2.40:9080")
+                    help="后端地址，如 ws://192.0.2.230:9080")
     ap.add_argument("--token", default=os.environ.get("SODUWORK_RUNNER_TOKEN") or "")
     ap.add_argument("--key", default=os.environ.get("SODUWORK_RUNNER_KEY") or "",
                     help="一机一钥（管理端→终端管理里发的这台机器专属钥匙；配了就别再用共享 token）")

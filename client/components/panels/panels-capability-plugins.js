@@ -97,7 +97,7 @@
   }
   function sourceClass(item) {
     const kind = item && item.personal ? 'personal' : String(item && item.sourceKind || 'enterprise');
-    return 'source-' + (/^(personal|codex|claude|adapter|builtin)$/.test(kind)
+    return 'source-' + (/^(personal|codex|claude|soduwork|adapter|builtin)$/.test(kind)
       ? kind : 'enterprise');
   }
   function iconKind(item, hasWorkflow) {

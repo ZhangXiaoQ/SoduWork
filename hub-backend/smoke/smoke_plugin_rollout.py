@@ -71,7 +71,7 @@ async def main():
     now = datetime.now(timezone.utc)
     plugin = am.Plugin(
         id="plugin-rollout", org_id="org-a", key="rollout",
-        name="版本发布插件", enabled=True, source_kind="personal")
+        name="版本发布插件", enabled=True, source_kind="soduwork")
     versions = [
         am.PluginVersion(
             id="rollout-v1", plugin_id=plugin.id, version="1.0.0",

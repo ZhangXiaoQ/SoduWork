@@ -91,6 +91,40 @@ app.whenReady().then(async()=>{
     await js(`RequirementsDetail.close();Object.assign(tasks[0],{status:'todo',requirementStage:'ready',canEditRequirement:true});RequirementsDetail.open('acceptance')`);
     assert.equal(await js(`document.querySelector('.rq-detail-footer').textContent.includes('我来处理')`),false);
     report.checks.push('More menu submits exactly once and moves the task to review; ready details have no incomplete take-over shortcut');
+    for (const count of [1,2,3]) {
+      const delivered = Array.from({length:count},(_,i)=>({id:'final-'+i,filename:'original-'+i+'.html',role:'output',
+        evidenceMeta:{round:3,category:'primary'}}));
+      delivered.push({id:'support',filename:'styles.css',role:'output',evidenceMeta:{round:3,category:'supporting'}},
+        {id:'proof',filename:'verification.json',role:'verification',evidenceMeta:{round:3,category:'evidence'}});
+      await js(`RequirementsDetail.close();SoduWorkAPI.listAttachments=async()=>${JSON.stringify(delivered)};
+        RequirementsDetail.open('acceptance')`);
+      await click('[data-rq-material-group="output"]>summary');
+      const rendered = await js(`(()=>{const group=document.querySelector('[data-rq-material-group="output"]');
+        return {text:group.textContent,bundles:group.querySelectorAll('.rq-attachment[data-rq-bundle-download]').length,
+          visible:[...group.querySelectorAll('[data-rq-file-id]')].filter(n=>n.getBoundingClientRect().height>0).map(n=>n.dataset.rqFileId)}})()`);
+      assert.equal(rendered.bundles,count>2?1:0);
+      for (let i=0;i<count;i++) {
+        assert.ok(rendered.text.includes('original-'+i+'.html'));
+        assert.ok(rendered.visible.includes('final-'+i));
+      }
+      assert.ok(rendered.text.includes('styles.css'));
+      assert.ok(!rendered.text.includes('verification.json'));
+      assert.ok((await js(`document.querySelector('[data-rq-material-group="evidence"]').textContent`)).includes('verification.json'));
+      if (count===3) {
+        await js(`document.querySelector('[data-rq-material-group="output"]').scrollIntoView({block:'center',behavior:'instant'});void 0;`);
+        await shot('delivery-original-names');
+      }
+    }
+    await js(`RequirementsDetail.close();SoduWorkAPI.listAttachments=async()=>[
+      {id:'archive',filename:'完整产出-fixed.zip',role:'output',evidenceMeta:{round:4}},
+      {id:'final',filename:'original.html',role:'output',evidenceMeta:{round:4,category:'primary'}}];
+      RequirementsDetail.open('acceptance')`);
+    await click('[data-rq-material-group="output"]>summary');
+    assert.equal(await js(`document.querySelectorAll('.rq-attachment[data-rq-bundle-download]').length`),0);
+    const storedNames = await js(`document.querySelector('[data-rq-material-group="output"]').textContent`);
+    assert.ok(storedNames.includes('完整产出-fixed.zip'));
+    assert.ok(storedNames.includes('original.html'));
+    report.checks.push('Original delivery names remain visible; only more than two final files offer a new archive, supporting and evidence files do not inflate that threshold, and stored archives retain their exact name');
     await js(`RequirementsDetail.close();document.body.innerHTML='<main id="analysis"></main><textarea id="nchatInput"></textarea>';`);
     await js(fs.readFileSync(path.join(client,'components/panels/chat-acceptance-results.js'),'utf8'));
     await js(`window.testContext={esc:String,_sessionOptions:{taskRef:'acceptance'},_snap:{messages:[{role:'user',sentAt:20},{role:'assistant',sentAt:30}]},

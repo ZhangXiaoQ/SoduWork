@@ -1,5 +1,5 @@
 import { translateText as tx, localeMap, useLocale } from './i18n.js'
-import React, { lazy, Suspense, useState, useEffect, useRef } from 'react'
+import React, { lazy, Suspense, useState, useEffect, useRef, useCallback } from 'react'
 import { api, getToken, getUser, setUser, setToken, can } from './api.js'
 import Login from './Login.jsx'
 import LocaleSettings from './LocaleSettings.jsx'
@@ -7,9 +7,11 @@ import Landing from './Landing.jsx'
 import { Icon, Loading, ThemeToggle, ToastHost } from './ui.jsx'
 import { getLocale, t } from './i18n.js'
 import { healthReleaseLabel } from './health-version.js'
+import { MAX_STEP, MIN_STEP, readScaleStep, stepScale, subscribeScale } from './enlarge-theme.js'
 
 // Lazy-load management pages so the login introduction does not bundle all plugin, automation, and organization code.
 const Overview = lazy(() => import('./screens/Overview.jsx'))
+const LegalDocuments = lazy(() => import('./screens/LegalDocuments.jsx'))
 const IntegrationsHub = lazy(() => import('./screens/IntegrationsHub.jsx'))
 const Clients = lazy(() => import('./screens/Clients.jsx'))
 const ClientReleases = lazy(() => import('./screens/ClientReleases.jsx'))
@@ -53,6 +55,7 @@ const NAV = localeMap(() => ([
   { id: 'clients', label: '执行网络', sub: '集中管理员工终端、Runner 执行机与接单状态', icon: 'monitor', Comp: Clients, group: 'AI 运行', perm: 'client.view' },
   { id: 'client-releases', label: '客户端发布', sub: '上传已签名安装包、启用或停用各平台版本', icon: 'send', Comp: ClientReleases, group: 'AI 运行', perm: 'client.update' },
   { id: 'usage', label: '用量与成本', sub: '按成员、场景、Agent 与模型治理企业 AI 消耗', icon: 'chart', Comp: UsageCenter, group: 'AI 运行', perm: 'client.view' },
+  { id: 'quotas', label: '额度管理', sub: '套餐、模型额度与成员分配', icon: 'chart', Comp: QuotaManagement, group: 'AI 运行', perm: 'quota.manage' },
   // Treat automation as a plugin execution mode rather than a separate capability catalog.
   { id: 'projects', label: '项目与仓库', sub: '项目、代码仓库、流程和发布目标的治理入口', icon: 'box', Comp: Projects, group: 'AI 运行', perm: 'task.view' },
   { id: 'repositories', label: '仓库目录', sub: '企业代码资产全量目录、同步健康与项目挂载', icon: 'file', Comp: Repositories, group: 'AI 运行', perm: 'task.view' },
@@ -66,6 +69,7 @@ const NAV = localeMap(() => ([
   { id: 'users', label: '用户管理', sub: '成员、部门与角色归属', icon: 'users', Comp: Users, group: '组织治理', perm: 'user.manage' },
   { id: 'roles', label: '角色权限', sub: '角色和最小权限策略', icon: 'shield', Comp: Roles, group: '组织治理', perm: 'role.manage' },
   { id: 'account-security', label: '账户与安全', sub: '注册邮件、协议与个人数据处理', icon: 'shield', Comp: MailSettings, group: '组织治理', perm: 'identity.manage' },
+  { id: 'legal-documents', label: '协议与隐私政策', sub: '协议草稿、多语言发布与历史记录', icon: 'file', Comp: LegalDocuments, group: '组织治理', superOnly: true },
   { id: 'identity', label: '身份接入', sub: '企业 OIDC、账号映射与登录安全', icon: 'lock', Comp: IdentityCenter, group: '组织治理', perm: 'identity.manage' },
   { id: 'audit', label: '审计日志', sub: '关键操作与责任追溯', icon: 'ticket', Comp: Audit, group: '组织治理', perm: 'audit.view' },
 ]))
@@ -75,6 +79,12 @@ const LEGACY_SCREEN = {
   tasks: 'overview', inbox: 'overview', subs: 'overview',
 }
 const normalizeScreen = (id) => LEGACY_SCREEN[id] || id
+const canLeavePage = proceed => {
+  let resumed = false
+  return window.dispatchEvent(new CustomEvent('soduwork-before-admin-leave', {
+    cancelable: true, detail: { proceed: () => { if (!resumed) { resumed = true; proceed() } } },
+  }))
+}
 
 export default function App() {
   const uiLocale = useLocale();
@@ -82,8 +92,11 @@ export default function App() {
   const [showLogin, setShowLogin] = useState(!!SSO_ERROR)   // Explain SSO callback failures directly.
   const [me, setMe] = useState(getUser())
   const [health, setHealth] = useState({ state: 'checking', version: '' })
+  const healthRef = useRef(null)
   const [collapsedGroups, setCollapsedGroups] = useState({})
   const [profileOpen, setProfileOpen] = useState(false)
+  const [scaleStep, setScaleStepState] = useState(readScaleStep)
+  useEffect(() => subscribeScale(setScaleStepState), [])
   const profileRef = useRef(null)
   const profileTriggerRef = useRef(null)
   const [locale, setLocaleState] = useState(getLocale())
@@ -93,6 +106,40 @@ export default function App() {
       return normalizeScreen(saved)
     } catch (_e) { return 'overview' }
   })
+
+  const closeHealth = useCallback(() => {
+    if (healthRef.current) healthRef.current.open = false
+  }, [])
+  const navigate = useCallback((screen) => {
+    // Navigation to the current screen can still change that page's filters.
+    closeHealth()
+    const next = screen && normalizeScreen(screen)
+    if (next && next !== active && canLeavePage(() => setActive(next))) setActive(next)
+  }, [active, closeHealth])
+
+  useEffect(() => {
+    if (!authed) return undefined
+    const closeOutside = (event) => {
+      const details = healthRef.current
+      if (details?.open && !details.contains(event.target)) closeHealth()
+    }
+    const closeOnEscape = (event) => {
+      const details = healthRef.current
+      if (event.key !== 'Escape' || event.defaultPrevented || !details?.open) return
+      const restoreFocus = details.contains(document.activeElement)
+      closeHealth()
+      if (restoreFocus) {
+        event.preventDefault()
+        details.querySelector('summary')?.focus()
+      }
+    }
+    document.addEventListener('pointerdown', closeOutside, true)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOutside, true)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [authed, closeHealth])
 
   useEffect(() => {
     const h = () => { setAuthed(false); setMe(null) }
@@ -111,10 +158,10 @@ export default function App() {
 
   // Cross-page navigation with preset filters.
   useEffect(() => {
-    const h = (e) => { if (e.detail && e.detail.screen) setActive(normalizeScreen(e.detail.screen)) }
+    const h = (e) => { if (e.detail && e.detail.screen) navigate(e.detail.screen) }
     window.addEventListener('soduwork-hub-nav', h)
     return () => window.removeEventListener('soduwork-hub-nav', h)
-  }, [])
+  }, [navigate])
 
   // Refresh /me after login to obtain current permissions.
   useEffect(() => {
@@ -187,14 +234,17 @@ export default function App() {
       value === '能力配置' ? 'group.capabilities' : value === '组织治理' ? 'group.org' : ''
     return key ? t(key, value) : value
   }
-  const logout = () => { setProfileOpen(false); setToken(''); setUser(''); setAuthed(false); setMe(null); setShowLogin(false) }
+  const logout = () => {
+    const proceed = () => { setProfileOpen(false); setToken(''); setUser(''); setAuthed(false); setMe(null); setShowLogin(false) }
+    if (canLeavePage(proceed)) proceed()
+  }
 
   // Guide accounts without management permissions to the client rather than empty administration pages.
   if (visible.length === 0) {
     return (
       <div className="app">
         <div className="landing">
-          <img src="/soduwork.png" alt="SoduWork" className="logo-box" style={{ width: 44, height: 44 }} />
+          <img src="/soduwork.png" alt="" className="logo-box" style={{ width: 44, height: 44 }} />
           <h2>{tx("SoduWork 管理端是管理端")}</h2>
           <p>{tx("你好，")}{(me && (me.displayName || me.username)) || tx("同事")}{tx("。日常需求、收件箱认领和工作日报都在")}<b>{tx("桌面端「SoduWork」")}</b>{tx("里完成；")}<br />{tx("这里是负责人与管理员使用的管理控制台。如需管理权限，请联系管理员为你的角色开通。")}</p>
           <button className="btn btn-ghost" onClick={() => { setToken(''); setUser(''); setAuthed(false); setMe(null); setShowLogin(false) }}>{tx("退出登录")}</button>
@@ -208,7 +258,7 @@ export default function App() {
     <div className="app" data-screen={cur && cur.id}>
       <aside className="sidebar">
         <div className="brand">
-          <img src="/soduwork.png" alt="SoduWork" className="logo-box" />
+          <img src="/soduwork.png" alt="" className="logo-box" />
           <span className="brand-copy"><b>{t('brand.title')}</b><small>{tx("企业智能工作台")}</small></span>
           <span className="brand-edition">{tx("企业")}</span>
         </div>
@@ -219,7 +269,7 @@ export default function App() {
                 onClick={() => setCollapsedGroups((old) => ({ ...old, [g]: old[g] !== true }))}><span>{groupLabel(g)}</span></button>
               {collapsedGroups[g] !== true && visible.filter((n) => n.group === g).map((n) => (
                 <button key={n.id} title={navLabel(n) + ' · ' + t('sub.' + n.id, n.sub)} aria-current={cur && n.id === cur.id ? 'page' : undefined}
-                  className={'nav-item' + (cur && n.id === cur.id ? ' active' : '')} onClick={() => setActive(n.id)}>
+                  className={'nav-item' + (cur && n.id === cur.id ? ' active' : '')} onClick={() => navigate(n.id)}>
                   <span className="ico"><Icon name={n.icon} /></span><span className="nav-copy">{navLabel(n)}</span>
                 </button>
               ))}
@@ -237,6 +287,20 @@ export default function App() {
               <div><b>{(me && me.displayName) || (me && me.username) || '—'}</b><span>{me && me.isSuper ? tx("超级管理员") : tx("管理员")}</span></div></div>
             <div className="profile-menu-meta"><span>{tx("登录环境")}</span><b>{tx("企业内网")}</b></div>
             <div className="profile-menu-actions"><span>{tx("界面主题")}</span><ThemeToggle /></div>
+            <div className="profile-menu-actions"><span>{tx("字体大小")}</span>
+              <span className="scale-steps">
+                <button type="button" className="icon-btn scale-toggle" disabled={scaleStep >= MAX_STEP}
+                  title={tx("放大界面字体")} aria-label={tx("放大界面字体")}
+                  onClick={() => stepScale(1)}>A+</button>
+                <button type="button" className="icon-btn scale-toggle" disabled={scaleStep <= MIN_STEP}
+                  title={tx("缩小界面字体")} aria-label={tx("缩小界面字体")}
+                  onClick={() => stepScale(-1)}>A-</button>
+                <span className="scale-level" aria-live="polite"
+                  title={tx("当前字号：{0}", [scaleStep > 0 ? `+${scaleStep}` : String(scaleStep)])}>
+                  {scaleStep > 0 ? `+${scaleStep}` : scaleStep}
+                </span>
+              </span>
+            </div>
             <LocaleSettings inline />
             <button type="button" className="profile-logout" onClick={logout}><Icon name="logout" />{t("account.logout")}</button>
           </div>}
@@ -257,9 +321,7 @@ export default function App() {
               <h1>{cur && navLabel(cur)}</h1>
             </div>
             <div className="top-actions">
-              <details className={`env is-${health.state}`} onKeyDown={(event) => {
-                if (event.key === 'Escape') { event.currentTarget.open = false; event.currentTarget.querySelector('summary')?.focus() }
-              }}>
+              <details ref={healthRef} className={`env is-${health.state}`}>
                 <summary aria-label={healthTitle + " · " + tx("服务版本信息")}><span className={healthOk ? "dot" : "dot off"} aria-hidden="true" /><span className="env-copy"><b>{healthTitle}</b><small>{healthSub}</small></span></summary>
                 <dl className="env-details">
                   <div><dt>{tx("版本")}</dt><dd>{healthVersion || '—'}</dd></div>

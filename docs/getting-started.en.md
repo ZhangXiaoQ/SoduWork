@@ -23,6 +23,8 @@ Your first run has four steps: install the prerequisites, extract the source, st
 
 You do not need to create a database, install Docker or Git, prepare an `.env` file, or install each project separately. First-time setup needs internet access; later starts reuse completed work.
 
+On Windows, desktop startup also prepares and verifies a private PortableGit command runtime in this instance's application copy so Agents can use Bash, Git, and common tools. No separate Git installation or WSL configuration is needed. Later starts preserve the runtime and download cache and check the tools again. If preparation fails, inspect `startup.log`, fix network access, and rerun the same launcher.
+
 ## Know when startup is complete
 
 The terminal prints these key lines (use the actual address shown):
@@ -42,6 +44,8 @@ The browser and desktop client then open:
 Successful startup makes the application available. AI responses still require your own model service.
 
 ## Send your first AI message
+
+If you already saved an API key, continue at step 3: add a concrete chat model, then select Pi and that model in the desktop client. Configuration happens in the browser admin console; conversations happen in the desktop client. Both must use the same Hub.
 
 Have your provider's **API base URL, API key, and model ID** ready. These come from your model provider; the local administrator password cannot replace an API key. Real model calls may incur provider charges.
 

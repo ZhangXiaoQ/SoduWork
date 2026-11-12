@@ -39,20 +39,15 @@ async def exercise(machine, agent, workspace, until, refs):
         expected_state = "done" if marker == "DIALOGUE_SUCCESS" else "failed"
         assert data["status"] == expected_state, (marker, data)
         if marker == "DIALOGUE_EMPTY":
+            # Harness2 has already emitted real planning progress in this turn;
+            # a missing final answer is incomplete work, not an empty execution.
+            expected_failure = "execution_incomplete" if agent == "harness2" else "execution_no_output"
+            assert data["failureKind"] == expected_failure and data["error"], data
             if agent == "harness2":
-                # Harness2 now runs seven real refinement calls on every user
-                # turn before the synthetic executor. An empty executor reply
-                # therefore leaves planning progress, not an empty whole turn.
-                rows = [row for row in data["items"] if row["seq"] > data["admissionStartSeq"]]
-                assert sum(row.get("kind") == "usage" and row.get("usageScope") == "step"
-                           for row in rows) == 7, rows
-                assert any(row.get("kind") == "thinking" and row.get("text") for row in rows), rows
-                assert not any(row.get("kind") in {"say", "do", "out"} for row in rows), rows
-                assert data["failureKind"] == "execution_incomplete" and data["error"], data
-            else:
-                assert data["failureKind"] == "execution_no_output" and data["error"], data
+                current = [row for row in data["items"] if row.get("round") == data["round"]]
+                assert len([row for row in current if row.get("kind") == "usage"]) == 7, current
+                assert not any(row.get("kind") == "say" for row in current), current
         elif marker == "DIALOGUE_ERROR":
-            # Pi shares the current public model-error guidance with the Hub.
             expected_error = {"pi": "模型调用失败，已有进度已保留；请重试或切换可用模型。",
                               "harness2": "Google Harness² 调用模型失败"}.get(agent, "fixture provider failure")
             assert expected_error in data["error"], data

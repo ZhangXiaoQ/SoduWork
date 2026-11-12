@@ -26,6 +26,8 @@ async def writebacks(session, catalog_id):
         sent = 0
         for link_id in ids:
             link = await session.get(Link, link_id, populate_existing=True)
+            if link is None:
+                continue
             if link.task_id is None:
                 link.writeback_state = "manual"
                 link.last_error = "需求已删除，请人工核对源 Issue"
@@ -47,7 +49,7 @@ async def writebacks(session, catalog_id):
             await sync.fence(session, lease)
             await session.commit()
             try:
-                repo, cfg = await sync.source(session, catalog_id)
+                repo, cfg = await sync.source(session, catalog_id, require_enabled=True)
                 result = await sync.call_remote(session, lease, sync.adapter(repo).started, cfg,
                     repo.external_id, link.issue_iid, link.writeback_label)
                 if result.get("ok"):

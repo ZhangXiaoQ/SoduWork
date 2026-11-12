@@ -96,7 +96,12 @@ async def preflight_my_schedule(body: dict = Body(default_factory=dict),
         _sch_apply(candidate, dict(body or {}))
         # Preview the same execution identity that the saved plan will use.
         candidate.owner_client_id, candidate.owner_user_id = owner_client_id, owner_user_id
-        return await sch.preflight_execution(session, candidate)
+        result = await sch.preflight_execution(session, candidate)
+        if candidate.every != "once":
+            next_at = sch.next_run_instant(candidate)
+            result = {**result, "nextRunAt": next_at.isoformat() if next_at else None,
+                      "timeZone": sch.clean_time_zone(candidate.time_zone)}
+        return result
     except (ValueError, HTTPException) as exc:
         if isinstance(exc, HTTPException) and exc.status_code != 400:
             raise

@@ -66,7 +66,15 @@ async def prepare(session, client, raw) -> dict | None:
 def prompt(context: dict | None) -> str:
     if context is None:
         return ""
-    return "\n\n" + """这是自动化表单草稿。除上述普通需求字段外，可以返回 automationBindings 对象。
+    return "\n\n" + """这是自动化表单草稿。必须区分“配置自动化”和“每次运行要做的工作”：
+note 是每次触发时交给 Agent 的执行指令，只写每次要完成的工作、必要输入、输出要求与限制。
+不要将创建本自动化、名称、执行时间、保存为暂停/启用等计划配置写入 note。
+acceptanceCriteria/checklist 只包含每次工作结果的完成标准，不包含创建成功、每天触发或初始暂停等配置标准。
+例如“创建晨报，每天09:00，只回复 OK，不调用工具，先暂停保存”：
+title 为“晨报”，note 为“只回复 OK，不调用工具”，完成标准为“仅回复 OK；不调用工具”；时间与启停由独立表单控制。
+不得为简化 note 丢失真实工作细节、附件上下文或工具/文件/网络限制；缺少每次工作内容时让用户补充，不编造。
+如果每次工作本身明确要求管理其他自动化，则保留该业务工作，不混淆为当前计划的创建配置。
+除上述普通需求字段外，可以返回 automationBindings 对象。
 其键只能是 method（工作方法/个人插件）、repo（工程）、agent（执行底座）。
 只提取下面 instruction 中用户明确指定或明确取消的字段；没提到的键必须省略。
 每个值使用 {"action":"select|clear","id":"候选ID或空字符串","name":"用户指定名称或空字符串","evidence":"本次原话逐字片段"}。

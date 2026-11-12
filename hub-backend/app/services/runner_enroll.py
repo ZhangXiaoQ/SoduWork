@@ -281,7 +281,9 @@ def _src_sources() -> list[Path]:
 
 
 def windows_package() -> Path | None:
-    """Return the Windows installation ZIP, preferring administrator-uploaded packages in downloads/ when source packaging is unavailable."""
+    """Return the Windows installer ZIP, preferring an administrator-uploaded package when source
+    builds are unavailable.
+    """
     ready = _BACKEND / "downloads" / "soduwork-runner-win.zip"
     if ready.is_file():
         return ready
@@ -305,7 +307,7 @@ def windows_package() -> Path | None:
 
 
 def source_package() -> Path | None:
-    """Return the Linux source tar.gz with hub-backend/runner_main.py at the extracted package root."""
+    """Build the source tarball with hub-backend/runner_main.py at the expected extracted path."""
     ready = _BACKEND / "downloads" / "soduwork-runner-src.tar.gz"
     if ready.is_file():
         return ready

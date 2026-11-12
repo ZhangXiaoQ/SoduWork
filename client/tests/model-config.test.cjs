@@ -10,6 +10,77 @@ const fsNode = require('node:fs');
 const root = path.join(__dirname, '..');
 const read = (...parts) => fs.readFileSync(path.join(root, ...parts), 'utf8');
 
+async function fetchDeclaredModel(metadata) {
+  return require('../main/pi-session/model-config').fetchModel(
+    { hub: 'https://hub.example.test', clientId: 'device-1', session: 'device-session' },
+    'managed-alias', 8000,
+    async () => new Response(JSON.stringify({ ok: true, key: 'fixture', model: 'managed-alias', ...metadata }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    false, 'harness2');
+}
+
+test('Hub reasoning declarations survive model normalization and the runner boundary', async () => {
+  const { create } = require('../main/agent-runtime/runner-config.cjs');
+  for (const declaration of [
+    { thinkingMode: 'always', thinkingAlwaysOn: true },
+    { thinkingMode: 'always' },
+    { thinkingMode: 'controllable', thinkingAlwaysOn: false },
+    { thinkingMode: 'controllable' },
+    { thinkingMode: 'none', thinkingAlwaysOn: false },
+    { reasoning: true, thinkingAlwaysOn: true },
+  ]) {
+    const result = await fetchDeclaredModel({ ...declaration, thinkingFormat: 'zai',
+      supportsReasoningEffort: true, thinkingLevelMap: { low: 'low', high: 'high' } });
+    assert.equal(result.ok, true);
+    assert.equal(result.model.reasoning, declaration.thinkingMode !== 'none');
+    const runner = create(result.model, 'harness2').llm;
+    for (const model of [result.model, runner]) {
+      assert.equal(model.thinkingMode, declaration.thinkingMode);
+      assert.equal(model.thinkingAlwaysOn, declaration.thinkingAlwaysOn);
+      assert.equal(Object.hasOwn(model, 'thinkingMode'), Object.hasOwn(declaration, 'thinkingMode'));
+      assert.equal(Object.hasOwn(model, 'thinkingAlwaysOn'), Object.hasOwn(declaration, 'thinkingAlwaysOn'));
+      assert.equal(Object.hasOwn(model, 'thinkingLevel'), false);
+    }
+    if (declaration.thinkingMode === 'always' || declaration.thinkingAlwaysOn === true) {
+      assert.equal(result.model.thinkingLevelMap.off, null);
+      assert.equal(runner.thinkingLevelMap.off, null);
+    } else if (declaration.thinkingMode === 'controllable') {
+      assert.equal(Object.hasOwn(result.model.thinkingLevelMap, 'off'), false);
+      assert.equal(Object.hasOwn(runner.thinkingLevelMap, 'off'), false);
+    } else {
+      assert.equal(Object.hasOwn(runner, 'reasoning'), false);
+    }
+  }
+});
+
+test('Hub model metadata does not invent thinking policy or accept malformed declarations', async () => {
+  const ordinary = await fetchDeclaredModel({ reasoning: false });
+  assert.equal(ordinary.ok, true);
+  assert.equal(ordinary.model.reasoning, false);
+  for (const field of ['thinkingMode', 'thinkingAlwaysOn', 'thinkingLevel']) {
+    assert.equal(Object.hasOwn(ordinary.model, field), false, field);
+  }
+  for (const invalid of [null, '', 'AUTO', 'controllable ', 1, {}, []]) {
+    const result = await fetchDeclaredModel({ thinkingMode: invalid, thinkingAlwaysOn: invalid,
+      thinkingLevel: invalid });
+    assert.equal(result.ok, true);
+    for (const field of ['thinkingMode', 'thinkingAlwaysOn', 'thinkingLevel']) {
+      assert.equal(Object.hasOwn(result.model, field), false, field);
+    }
+  }
+});
+
+test('Hub explicit thinking level remains explicit through the runner boundary', async () => {
+  const { create } = require('../main/agent-runtime/runner-config.cjs');
+  for (const thinkingLevel of ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
+    const result = await fetchDeclaredModel({ thinkingMode: 'controllable', thinkingAlwaysOn: false,
+      thinkingFormat: 'zai', thinkingLevel });
+    assert.equal(result.ok, true);
+    assert.equal(result.model.thinkingLevel, thinkingLevel);
+    assert.equal(create(result.model, 'harness2').llm.thinkingLevel, thinkingLevel);
+  }
+});
+
 test('模型中心支持个人地址覆盖与任意自定义服务', () => {
   const panel = read('components', 'panels', 'panels-models.js');
   const api = read('api.js');

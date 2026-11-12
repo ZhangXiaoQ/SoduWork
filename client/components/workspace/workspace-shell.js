@@ -1,10 +1,7 @@
-
-
-
-
-
-
-
+/* SoduWork workspace shell owns navigation without duplicating business panels.
+   Keep frequent actions in the main menu and personal settings in account mode.
+   Settings reuse the same content area with their own secondary navigation.
+   Brand, new chat and account stay fixed; other entries share a scroll area. */
 (function (global) {
   'use strict';
   const chatContext = {
@@ -131,12 +128,12 @@
   const groupLabel = (label) => label === '协作' ? wsT('group.collaboration', label) :
     label === 'AI 与账号' ? wsT('group.ai', label) : label === '偏好' ? wsT('group.preferences', label) : label;
 
-  /* Order home navigation by frequency and priority. */
+  /* Main navigation lists frequent actions in priority order. */
   const HOME_GROUPS = [
     ['', ['schedules', 'skills', 'library', 'notices']],
     ['协作', ['history', 'aidesk'], 'collaboration'],
   ];
-  /* Group personal work, account settings, and preferences in account navigation. */
+  /* Account navigation groups personal work, security and preferences. */
   const SETTINGS_GROUPS = [
     ['AI 与账号', ['account', 'usage', 'agents', 'models', 'cloud', 'codeacct']],
     ['工作内容', ['archive']],
@@ -188,11 +185,8 @@
       ? '<svg class="ws-rail-app-icon ws-icon-solid" viewBox="0 0 24 24" data-icon="apps" aria-hidden="true" focusable="false"><g transform="translate(12 11.425) scale(1.15) translate(-12 -11.425)">' + APP_PAGE_GIFT_MARKUP + '</g></svg>'
       : '<svg class="ws-icon-solid" viewBox="0 0 24 24" data-icon="' + key + '" aria-hidden="true" focusable="false">' + (SOLID_ICONS[key] || ICONS[key] || ICONS.history) + '</svg>');
   let root = null, active = '', nav = null, rail = null, railMoreMenu = null, recent = null, chats = null, pinnedChats = null, chatItems = [];
-  /*
-   * Cache the last manually selected conversation directory from the main process. Use it
-   * only as a new-conversation fallback, not project ownership; clear it when the default
-   * workspace is selected.
-   */
+  /* The main process persists the last manually selected directory. It is a fallback
+     for new chats, not project membership; choosing the default workspace clears it. */
   let recentWorkspace = { dir: '', name: '' }, recentWorkspaceLoaded = false;
   function loadRecentWorkspace() {
     if (recentWorkspaceLoaded) return;
@@ -203,7 +197,7 @@
       if (reply && reply.ok && reply.dir) recentWorkspace = { dir: reply.dir, name: reply.name || '' };
     }).catch(() => {});
   }
-  /* Reload the directory cache after saving or clearing to match main-process state. */
+  /* Reload the main-process directory preference after a manual update or reset. */
   function refreshRecentWorkspace() {
     recentWorkspace = { dir: '', name: '' };
     recentWorkspaceLoaded = false;
@@ -221,7 +215,7 @@
   const { MAX_CHAT_ITEMS, CHAT_STATE, chatState, _chatAt, _chatUiKey, _withChatUiKey, _sameDraft, _settleDraft, _reconcileChats, _upsertChatItems } = global.WorkspaceChatHistory;
   let mode = 'home';              // home | settings
   let collaborationCollapsed = true; // Start collapsed; preserve expansion during navigation and permission refreshes.
-  let lastHomeView = 'create';    // Return to a new conversation when leaving settings for home.
+  let lastHomeView = 'create';    // Return to a new chat when leaving settings.
   let railMoreOpen = false;
   function reportWorkspaceView(key) {
     if (global.WorkspaceNavigation) { global.WorkspaceNavigation.record(key); return; }
@@ -245,8 +239,8 @@
     else html.style.removeProperty('--ws-main-left');
   }
 
-  /* Show team management after capabilities load and only when the granted role permits access.
-   Wait for authorization data before rendering to avoid briefly exposing unavailable controls. */
+  /* Team navigation requires the server-provided management capability.
+     Wait for asynchronous capabilities before showing the entry. */
   function teamAllowed() {
     const cap = global.__teamCap;
     if (!cap) return false;
@@ -286,7 +280,7 @@
     const noticeText = navLabel('notices');
     const moreMenu = '<div class="ws-rail-more-wrap"><button class="ws-rail-button ws-rail-menu-button" type="button" data-rail-menu="more" aria-label="' + moreText + '" aria-expanded="false" title="' + moreText + '">' + railIcon('more') + '<span>' + moreText + '</span></button>' +
       '<div class="ws-rail-popover ws-rail-more-popover" id="wsRailMoreMenu" hidden><div class="ws-rail-popover-title">' + moreText + '</div>' + more + '</div></div>';
-    return '<div class="ws-rail-top">' + primary + moreMenu + '</div>' +
+    return '<div class="ws-rail-top">' + primary + '<div id="wsSidebarApps" class="ws-sidebar-apps"></div>' + moreMenu + '</div>' +
       '<div class="ws-rail-bottom">' +
         '<button class="ws-rail-button ws-rail-settings" type="button" data-rail-view="settings" aria-label="' + settingsText + '" title="' + settingsText + '">' + railIcon('settings') + '<span>' + settingsText + '</span></button>' +
         '<button class="ws-update ws-rail-update" id="wsUpdate" hidden title="有新版本已就绪，点一下重启更新" aria-label="重启并更新">' +
@@ -294,7 +288,7 @@
         '<button class="ws-rail-button ws-rail-notices" type="button" data-rail-view="notices" aria-label="' + noticeText + '" title="' + noticeText + '" aria-describedby="wsRailNoticeBadge">' +
           railIcon('notices') + '<em id="wsRailNoticeBadge"></em></button>' +
         '<button class="ws-rail-account" id="wsRailMine" type="button" title="打开个人信息" aria-label="打开个人信息">' +
-          '<span class="ws-rail-avatar" data-soduwork-user-initial aria-hidden="true">我</span></button>' +
+          '<span class="ws-rail-avatar" aria-hidden="true"><span data-soduwork-user-initial>我</span></span></button>' +
       '</div>';
   }
 
@@ -366,6 +360,7 @@
       railMoreMenu.addEventListener('click', onRailMoreMenuClick);
     }
     syncRail();
+    global.WorkspaceSidebarApps?.mount();
     refreshNoticeBadge();
     if (updateStatus) applyUpdateState(updateStatus);
   }
@@ -404,7 +399,7 @@
     root.querySelectorAll('.ws-chat').forEach(_paintChatLocale);
   }
 
-  /* Switch home and settings navigation while retaining the same main content container. */
+  /* Switch sidebar and header modes while retaining the same content container. */
   function setMode(next) {
     if (mode === next) return;
     mode = next;
@@ -433,7 +428,7 @@
           '<button class="ws-section-toggle" id="wsPinnedToggle" type="button" aria-expanded="true" aria-controls="wsPinnedChats" title="收起置顶">' +
             '<span>置顶</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 9 5 5 5-5"/></svg></button>' +
           '<div class="ws-list-body" id="wsPinnedChats"></div></section>' +
-        /* Navigation, pins, and chats share a scroll region; recent requirements occupy a sibling region above the account. */
+        /* Navigation, pins and chats share scrolling; recent requirements remain above the account. */
         '<section class="ws-list ws-chats ws-chat-group" id="wsChatsBox">' +
           '<button class="ws-section-toggle" id="wsChatsToggle" type="button" aria-expanded="true" aria-controls="wsChats" title="收起最近聊天">' +
             '<span>最近聊天</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 9 5 5 5-5"/></svg></button>' +
@@ -451,7 +446,7 @@
             '<svg class="ws-profile-go" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>' +
         '</div>' +
       '</aside>' +
-      /* Resizable divider between the sidebar and main content. */
+      /* Drag this separator to resize the sidebar. */
       '<div class="ws-resizer" id="wsResizer" title="拖动调整菜单宽度"></div>' +
       '<main class="ws-stage"><div class="ws-canvas" id="wsCanvas"></div></main>';
     document.body.appendChild(root);
@@ -525,23 +520,21 @@
     subscribeConversationPresence();
     refreshConversationHistory();
 
-
-
-
-
-
+    /* Restore the sidebar width from storage, update --ws-side-w while dragging, and save on release.
+       Track pointer movement on document so dragging continues outside the handle.
+       Set the variable on documentElement: fixed business panels are body children
+       and cannot inherit a custom property from the workspace shell. */
     (function wireSideResize() {
       const KEY = 'soduwork_work_ws_side_w';
       const CSSROOT = document.documentElement;
       const clamp = (w) => Math.max(168, Math.min(440, w));
       const setW = (w) => CSSROOT.style.setProperty('--ws-side-w', clamp(w) + 'px');
-      try { const s = parseInt(localStorage.getItem(KEY) || '', 10); if (s) setW(s); } catch (e) { /* Use defaults when storage is unavailable in privacy mode. */ }
+      try { const s = parseInt(localStorage.getItem(KEY) || '', 10); if (s) setW(s); } catch (e) { /* Use defaults when storage is unavailable. */ }
       const rz = root.querySelector('#wsResizer') || document.getElementById('wsResizer');
       if (!rz) return;
-      /*
-       * Mount the divider directly on body above content panels; the shell's stacking context
-       * would otherwise obscure its hit area. Avoid moving it again once mounted.
-       */
+      /* Move the separator to body to escape the shell stacking context.
+         Otherwise fixed panels cover the handle despite its local z-index.
+         Keep this move idempotent and place the separator after the panels. */
       if (rz.parentElement !== document.body) document.body.appendChild(rz);
       rz.addEventListener('pointerdown', (e) => {
         e.preventDefault();
@@ -549,7 +542,7 @@
         const startX = e.clientX;
         const startW = side ? side.getBoundingClientRect().width : 220;
         CSSROOT.classList.add('ws-resizing');
-        try { rz.setPointerCapture(e.pointerId); } catch (_e) { /* Pointer capture is unavailable in older environments. */ }
+        try { rz.setPointerCapture(e.pointerId); } catch (_e) { /* Pointer capture is unavailable in some environments. */ }
         const onMove = (ev) => { setW(startW + (ev.clientX - startX)); };
         const onUp = () => {
           CSSROOT.classList.remove('ws-resizing');
@@ -563,14 +556,14 @@
       });
     })();
 
-    /* The avatar opens the personal account security page. */
+    /* The account avatar opens the default account-security page. */
     function openPersonalAccount() {
       if (global.WorkspaceHost) global.WorkspaceHost.open('account', { tab: 'security' });
     }
     root.querySelector('#wsMine').addEventListener('click', () => {
       openPersonalAccount();
     });
-    /* Return to the page active before settings opened. */
+    /* Return to the page that was active before entering settings. */
     root.querySelector('#wsBack').addEventListener('click', () => {
       if (!global.WorkspaceHost) return;
       const key = lastHomeView || 'create';
@@ -625,19 +618,14 @@
       }
       if (!global.WorkspaceHost) return;
       const key = button.dataset.view || button.dataset.railView;
-      /*
-       * New conversation is an action even when already viewing chat; other pages use ordinary
-       * navigation and historical chats use chatId.
-       */
+      /* New chat is an action: selecting it while viewing a conversation creates a fresh draft.
+         Other pages use ordinary navigation; archived chats retain their explicit chatId. */
       openWorkspaceView(key);
     });
     return root;
   }
 
-  /*
-   * Synchronize sidebar mode with the active page regardless of whether navigation
-   * originated in the sidebar, dock, or pet.
-   */
+  /* Select the sidebar mode from the current page so all navigation entry points agree. */
   function setActive(key) {
     mount(); active = key;
     reportWorkspaceView(key);
@@ -651,7 +639,7 @@
     renderChats();
   }
 
-  /* Render independent empty states without changing sibling scroll regions. */
+  /* Render independent empty states without changing the parallel scroll hierarchy. */
   function _empty(box, text) {
     const d = document.createElement('div'); d.className = 'ws-list-empty'; d.textContent = text;
     box.appendChild(d);
@@ -672,7 +660,7 @@
       const title = document.createElement('span'); title.textContent = task.title || '未命名需求';
       if (task.title) title.setAttribute('data-user-content', '');
       b.append(dot, title); b.addEventListener('click', (e) => {
-        /* Open pending requirements in the shared conversation flow, with task details as a fallback when no chat host exists. */
+        /* Pending requirements reopen their conversation; fall back to details when no chat host exists. */
         e.stopPropagation();
         if (typeof global.openTaskConversation === 'function') {
           global.openTaskConversation(task.id, task.title || '', { source: 'task-list' });
@@ -685,7 +673,7 @@
     });
   }
 
-  /* Recent conversations contain id, title, and updatedAt; the conversation surface supplies their data. */
+  /* The conversation view supplies recent chat records with id, title and updatedAt. */
 
 
 
@@ -698,10 +686,8 @@
 
 
 
-  /*
-   * Load local conversations when the shell mounts and allow only one concurrent scan across
-   * initialization and navigation.
-   */
+  /* Load real local history when the shell mounts, before the user opens a chat.
+     Coalesce concurrent reads from startup and navigation. */
 
 
 
@@ -712,7 +698,7 @@
 
 
 
-  /* Assign newly created project conversations immediately so the sidebar groups them correctly. */
+  /* Group newly persisted conversations under their explicit project immediately. */
   function fileChatInProject(chatId, projectId, meta) {
     const done = sidebarProjects?.file(String(chatId || ''), String(projectId || ''), meta) === true;
     if (done) renderChats();
@@ -736,12 +722,25 @@
     return { ...context, cwd, workspaceLabel };
   }
 
-  /*
-   * The main process creates isolated workspaces for ordinary conversations. Pass cwd and
-   * project ownership only for explicit directory or project entry points.
-   */
+  /* 顶部「新对话」/窗口菜单「新建」等纯新对话入口的参数：项目归属只认显式
+     传入（cda885c8），但工作目录作为默认值延续——显式传入优先；其次沿用当
+     前活动会话的目录（云端会话目录不沿用，见 newSessionContext 的防护）；
+     无活动会话时用最近一次手选的目录兜底（冷启动，主进程已校验目录仍存在）。
+     用户点「默认工作区」会同步清掉最近手选记录，之后的新对话不再延续。 */
   function newSessionPayload(extra) {
-    return { ...(extra || {}), newSession: true };
+    const given = extra || {};
+    let inherited = {};
+    if (!given.cwd) {
+      const context = newSessionContext();
+      if (context.cwd) {
+        inherited = { cwd: context.cwd, workspaceLabel: context.workspaceLabel || '',
+          workspaceSource: 'last-session' };
+      } else if (recentWorkspace.dir) {
+        inherited = { cwd: recentWorkspace.dir, workspaceLabel: recentWorkspace.name || '',
+          workspaceSource: 'recent' };
+      }
+    }
+    return { ...inherited, ...given, newSession: true };
   }
 
   function projectForChat(id) { return sidebarProjects?.projectForChat(String(id || '')) || null; }
@@ -767,12 +766,12 @@
     root.querySelector('#wsHubState').textContent = ok ? wsT('connected', '已连接 SoduWork 服务') : wsT('connecting', '服务连接中');
   }
 
-  /* Refresh team navigation when desk-boot receives asynchronous capabilities. */
+  /* Refresh team navigation after asynchronous capability loading. */
   function refreshNav() {
     if (root && nav) { renderRail(); renderNav(); }
   }
 
-  /* The update entry always exposes current status; installation requires the progress card's explicit action. */
+  /* Keep update status available; installation requires an explicit progress-card action. */
   function setUpdateState(status) {
     updateStatus = status || {};
     mount();
@@ -794,7 +793,7 @@
                             _reconcileChats, _upsertChatItems, _chatState: chatState,
                             get active() { return active; }, get mode() { return mode; },
                             get activeChatId() { return activeChatId; }, set activeChatId(value) { activeChatId = value; },
-                            /* Track the destination for the details page's Back action. */
+                            /* Remember the return destination for the detail page. */
                             get lastView() { return lastHomeView; } };
   // The desk has no pet dock; reuse the store/window-sync invalidation hook.
   if (typeof global.updateNoticeBadge !== 'function') global.updateNoticeBadge = () => {

@@ -3,10 +3,11 @@ const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const preferences = require('../main/access-control/preferences');
-function fixture(t, confirm) {
+function fixture(t, confirm, initialMode) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-access-preference-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const app = { getPath: () => root }, handlers = new Map(), notifications = [], confirmations = [];
+  if (initialMode) fs.writeFileSync(path.join(root, 'access-preferences.json'), JSON.stringify({ schema: 1, mode: initialMode, revision: 0 }));
   const wc = { getURL: () => pathToFileURL(path.resolve(__dirname, '../desk.html')).href + '?panel=workspace', isDestroyed: () => false, mainFrame: {} };
   const parent = { isDestroyed: () => false, webContents: { send: (...args) => notifications.push(args) } };
   const event = { sender: wc, senderFrame: wc.mainFrame };
@@ -21,7 +22,10 @@ function fixture(t, confirm) {
 }
 test('default modes persist locally and are applied only to new supported interactive chats', async t => {
   const f = fixture(t);
-  assert.deepEqual(f.get(), { ok: true, mode: 'standard', revision: 0 });
+  assert.deepEqual(f.get(), { ok: true, mode: 'full', revision: 0 });
+  assert.equal(f.apply({ adapterId: 'pi' }).accessMode, 'full');
+  assert.equal(preferences.hasFullConsent(f.app, {}), true);
+  assert.equal(fs.existsSync(path.join(f.root, 'access-preferences.json')), false);
   assert.equal((await f.set('readonly', 0)).ok, true);
   assert.equal(preferences.snapshot(f.app).mode, 'readonly');
   for (const adapterId of ['pi', 'codex-harness', 'opencode', 'qwen', 'codex', 'dsh', 'kimi', 'claude']) assert.equal(f.apply({ adapterId }).accessMode, 'readonly');
@@ -42,13 +46,21 @@ test('explicit session choices update the remembered mode for the next new chat'
   assert.equal(preferences.snapshot(f.app).mode, 'full');
   assert.equal(f.notifications.length, 2);
 });
+test('saved standard and readonly defaults survive reload instead of inheriting the new full default', t => {
+  for (const mode of ['standard', 'readonly']) {
+    const f = fixture(t, undefined, mode);
+    assert.deepEqual(preferences.snapshot(f.app), { mode, revision: 0 });
+    assert.equal(f.apply({ adapterId: 'pi' }).accessMode, mode);
+    assert.equal(preferences.hasFullConsent(f.app, {}), false);
+  }
+});
 test('saved full access requires dedicated default-scope consent; cancelling changes nothing', async t => {
-  const f = fixture(t);
+  const f = fixture(t, undefined, 'standard');
   assert.equal((await f.set('full', 0)).cancelled, true);
   assert.deepEqual(preferences.snapshot(f.app), { mode: 'standard', revision: 0 });
-  assert.equal(fs.existsSync(path.join(f.root, 'access-preferences.json')), false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, 'access-preferences.json'), 'utf8')).mode, 'standard');
   assert.deepEqual(f.confirmations[0][1], { scope: 'default' });
-  const allowed = fixture(t, () => true);
+  const allowed = fixture(t, () => true, 'standard');
   assert.equal((await allowed.set('full', 0)).ok, true);
   assert.equal(preferences.snapshot(allowed.app).mode, 'full');
   assert.equal(preferences.hasFullConsent(allowed.app, {}), true);
@@ -71,7 +83,7 @@ test('stale, invalid, embedded and untrusted updates cannot persist access chang
 });
 test('concurrent changes and owner navigation during full consent cannot save a stale choice', async t => {
   let answer;
-  const f = fixture(t, () => new Promise(resolve => { answer = resolve; }));
+  const f = fixture(t, () => new Promise(resolve => { answer = resolve; }), 'standard');
   const saving = f.set('full', 0);
   assert.equal((await f.set('readonly', 0)).ok, false);
   f.wc.getURL = () => 'file:///untrusted.html';

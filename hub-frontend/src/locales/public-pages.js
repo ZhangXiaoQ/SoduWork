@@ -118,7 +118,7 @@ export default {
   '掌握运行': 'Oversee operations',
   '运行状态、用量与审计': 'Status, usage and audit records',
   '一个工作空间，让人和 AI 更好地协作。': 'One workspace for people and AI to work better together.',
-  'SoduWork 管理端': 'SoduWork Admin',
+  'SODUWORK 管理端': 'SODUWORK ADMIN',
   '欢迎回来。': 'Welcome back.',
   '登录你的账号，继续管理团队的工作空间。': 'Sign in to manage your team’s workspace.',
   '输入你的账号': 'Enter your account',

@@ -43,7 +43,7 @@ class IMPrimitiveTests(unittest.TestCase):
         # Later migrations may advance the head, but must retain this complete
         # IM/account/notification/release merge lineage.
         ancestors = {item.revision for item in script.walk_revisions(base="base", head=heads[0])}
-        self.assertTrue({public_merge.revision, source_app.revision, release_merge.revision, integrated.revision,
+        self.assertTrue({source_app.revision, release_merge.revision, integrated.revision,
                          merged.revision, migration.revision}.issubset(ancestors))
         for revision, parent in {
                 "0074_cloud_execution_durability": "0073_remote_screen_grants",

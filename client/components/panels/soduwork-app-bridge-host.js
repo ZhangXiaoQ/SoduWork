@@ -136,7 +136,7 @@
         ok: false, code: 'APP_HOST_ERROR', reason: String(error && error.message || error),
       })).then((result) => host.respond(request && request.id, result));
     });
-    global.addEventListener('soduwork-data-scope-changed', () => { epoch++; conversations.clear(); });
+    global.addEventListener('soduwork-data-scope-changed', () => conversations.clear());
     return true;
   }
 
