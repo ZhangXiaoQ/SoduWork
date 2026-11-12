@@ -36,6 +36,15 @@ class TemplateValidationTests(unittest.TestCase):
             self.assertEqual(result["id"], template_id)
             self.assertEqual(result["name"], name.strip())
 
+    def test_normalizes_optional_date_range_and_rejects_invalid_ranges(self):
+        result = templates.normalize({**VALID, "startDate": "2026-11-12", "endDate": "2026-12-01"})
+        self.assertEqual(result["startDate"], "2026-11-12")
+        self.assertEqual(result["endDate"], "2026-12-01")
+        with self.assertRaisesRegex(ValueError, "结束日期不能早于开始日期"):
+            templates.normalize({**VALID, "startDate": "2026-12-01", "endDate": "2026-11-12"})
+        with self.assertRaisesRegex(ValueError, "开始日期格式无效"):
+            templates.normalize({**VALID, "startDate": "2026-02-30"})
+
     def test_invalid_batch_and_duplicate_id_leave_persisted_catalog_unchanged(self):
         async def scenario():
             engine = create_async_engine("sqlite+aiosqlite:///:memory:")

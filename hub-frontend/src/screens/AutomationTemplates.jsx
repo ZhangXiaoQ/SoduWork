@@ -8,7 +8,7 @@ import './automation-templates.css'
 
 const blank = () => ({ id: '', name: '', description: '', title: '', note: '', every: 'daily',
   atHour: 9, atMinute: 0, weekday: 1, requiredCapabilities: [], retryLimit: 2,
-  retryDelayMinutes: 5, pluginBindingId: '', enabled: true })
+  retryDelayMinutes: 5, pluginBindingId: '', startDate: '', endDate: '', enabled: true })
 const capOptions = localeMap(() => ([['browser', '浏览网页'], ['computer', '操作电脑'], ['office', '办公文档']]))
 const rhythm = localeMap(() => ({ hourly: '每小时', daily: '每天', weekly: '每周' }))
 // Optional locale maps supply employee display and prefill with base-field fallback.
@@ -25,18 +25,21 @@ function templateErrors(value, items = []) {
   if (typeof name !== 'string' || !name.trim()) errors.name = tx("请填写模板名称，不能全为空白")
   else if (Array.from(name.trim()).length > 80) errors.name = tx("模板名称最多 80 个字符")
   else if (/[\u0000-\u001f\u007f-\u009f]/.test(name)) errors.name = tx("模板名称不能包含换行或控制字符")
+  if (value.startDate && value.endDate && value.endDate < value.startDate)
+    errors.endDate = tx("结束日期不能早于开始日期")
   return errors
 }
 
 function Editor({ value, items = [], onChange, onCancel, onSave, busy }) {
   const formId = useId()
-  const idRef = useRef(null), nameRef = useRef(null)
+  const idRef = useRef(null), nameRef = useRef(null), endDateRef = useRef(null)
   const [touched, setTouched] = useState({})
   const errors = templateErrors(value, items)
   useEffect(() => {
     idRef.current?.setCustomValidity(errors.id || '')
     nameRef.current?.setCustomValidity(errors.name || '')
-  }, [errors.id, errors.name])
+    endDateRef.current?.setCustomValidity(errors.endDate || '')
+  }, [errors.id, errors.name, errors.endDate])
   const touch = key => setTouched(previous => ({ ...previous, [key]: true }))
   const set = (key, next) => onChange({ ...value, [key]: next })
   const toggleCap = (key) => set('requiredCapabilities', value.requiredCapabilities.includes(key)
@@ -44,12 +47,12 @@ function Editor({ value, items = [], onChange, onCancel, onSave, busy }) {
   return <Modal wide className="at-dialog" icon="activity" title={value.updatedAt ? tx("编辑自动化模板") : tx("新建自动化模板")} onClose={onCancel}
     foot={<><label className="at-enabled modal-foot-note"><input type="checkbox" checked={value.enabled} onChange={(e) => set('enabled', e.target.checked)} />{tx("发布给员工使用")}</label>
       <button type="button" className="btn btn-ghost" onClick={onCancel}>{tx("取消")}</button><button type="submit" form={formId} className="btn btn-primary" disabled={busy}>{busy ? tx("保存中…") : tx("保存模板")}</button></>}>
-    <form id={formId} className="at-editor" onInvalidCapture={() => setTouched({ id: true, name: true })}
+    <form id={formId} className="at-editor" onInvalidCapture={() => setTouched({ id: true, name: true, endDate: true })}
       onSubmit={(event) => {
         event.preventDefault()
         if (Object.keys(errors).length) {
-          setTouched({ id: true, name: true })
-          ;(errors.id ? idRef : nameRef).current?.focus()
+          setTouched({ id: true, name: true, endDate: true })
+          ;(errors.id ? idRef : errors.name ? nameRef : endDateRef).current?.focus()
           return
         }
         onSave()
@@ -90,6 +93,11 @@ function Editor({ value, items = [], onChange, onCancel, onSave, busy }) {
       {value.every === 'weekly' && <SelectMenu value={value.weekday} onChange={(e) => set('weekday', Number(e.target.value))}>
         {[[tx("周一"), 1], [tx("周二"), 2], [tx("周三"), 3], [tx("周四"), 4], [tx("周五"), 5], [tx("周六"), 6], [tx("周日"), 7]].map(([label, key]) => <option key={key} value={key}>{label}</option>)}
       </SelectMenu>}
+      <label className="at-date"><span>{tx("开始日期")}</span><input type="date" value={value.startDate || ''}
+        max={value.endDate || undefined} onChange={(e) => set('startDate', e.target.value)} /></label>
+      <label className="at-date"><span>{tx("结束日期")}</span><input ref={endDateRef} type="date" value={value.endDate || ''}
+        min={value.startDate || undefined} onChange={(e) => set('endDate', e.target.value)} />
+        {errors.endDate && <small className="at-field-error" role="status">{errors.endDate}</small>}</label>
     </div></div>
     <div className="at-section"><b>{tx("执行要求")}</b><div className="at-checks">
       {capOptions.map(([key, label]) => <label key={key}><input type="checkbox" checked={value.requiredCapabilities.includes(key)} onChange={() => toggleCap(key)} />{label}</label>)}

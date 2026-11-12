@@ -1,5 +1,23 @@
 const rows = [
   [
+    "开始日期",
+    "Start date",
+    "開始日",
+    "시작일"
+  ],
+  [
+    "结束日期",
+    "End date",
+    "終了日",
+    "종료일"
+  ],
+  [
+    "结束日期不能早于开始日期",
+    "End date cannot be earlier than start date",
+    "終了日は開始日より前に設定できません",
+    "종료일은 시작일보다 빠를 수 없습니다"
+  ],
+  [
     "停用后客户端不再展示模板，已创建的自动化不受影响。",
     "Disabled templates are hidden from clients. Existing automations are unaffected.",
     "無効にしたテンプレートはクライアントに表示されません。作成済みの自動化には影響しません。",
