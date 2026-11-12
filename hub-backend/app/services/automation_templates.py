@@ -22,6 +22,7 @@ MAX_ITEMS = 100
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,63}$")
 _EVERY = {"hourly", "daily", "weekly"}
 _CAPABILITIES = {"browser", "computer", "office"}
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def _text(value, limit: int = 240) -> str:
@@ -34,6 +35,19 @@ def _int(value, default: int, low: int, high: int) -> int:
     except (TypeError, ValueError):
         value = default
     return max(low, min(high, value))
+
+
+def _date(value, field: str) -> str:
+    value = _text(value, 10)
+    if not value:
+        return ""
+    if not _DATE_RE.fullmatch(value):
+        raise ValueError(f"{field}格式无效")
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError as exc:
+        raise ValueError(f"{field}格式无效") from exc
+    return value
 
 
 def normalize(raw: dict, *, require_name: bool = True) -> dict:
@@ -83,6 +97,10 @@ def normalize(raw: dict, *, require_name: bool = True) -> dict:
     # Reuse schedule input cleaning so template defaults and personal schedules
     # have exactly the same size and secret-handling contract.
     from . import schedules
+    start_date = _date(raw.get("startDate"), "开始日期")
+    end_date = _date(raw.get("endDate"), "结束日期")
+    if start_date and end_date and end_date < start_date:
+        raise ValueError("结束日期不能早于开始日期")
     return {
         "id": template_id,
         "name": name,
@@ -97,6 +115,8 @@ def normalize(raw: dict, *, require_name: bool = True) -> dict:
         "atHour": _int(raw.get("atHour"), 9, 0, 23),
         "atMinute": _int(raw.get("atMinute"), 0, 0, 59),
         "weekday": _int(raw.get("weekday"), 1, 1, 7),
+        "startDate": start_date,
+        "endDate": end_date,
         "timeZone": _text(raw.get("timeZone") or "Asia/Shanghai", 64),
         "requiredCapabilities": caps,
         "retryLimit": _int(raw.get("retryLimit"), 2, 0, 10),
