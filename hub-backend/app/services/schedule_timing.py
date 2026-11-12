@@ -283,6 +283,17 @@ def settle(s, run, out: dict, *, outcome_of=None) -> dict:
     if getattr(s, "every", "") == "once" and run.trigger == "timer" and not bool(getattr(s, "once_fired", False)):
         s.retry_count, s.next_retry_at = 0, None  # Manual failures never consume the timer's retry budget.
     retry = outcome_of(s, out)
+    if getattr(s, "every", "") in ("hourly", "daily", "weekly", "monthly"):
+        pending = getattr(s, "next_retry_at", None)
+        if pending is not None:
+            start, end = schedule_dates(s)
+            if start or end:
+                from .schedules import schedule_zone
+                retry_date = utc(pending).astimezone(schedule_zone(s)).date()
+                if (start and retry_date < start) or (end and retry_date > end):
+                    # A retry outside the calendar window must not remain pending forever.
+                    s.retry_count, s.next_retry_at = 0, None
+                    retry = {"retrying": False}
     if getattr(s, "every", "") != "once":
         return retry
     if run.trigger == "timer":

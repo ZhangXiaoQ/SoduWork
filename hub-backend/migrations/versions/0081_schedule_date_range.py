@@ -17,6 +17,13 @@ def upgrade():
 
 def downgrade():
     columns = {column["name"] for column in sa.inspect(op.get_bind()).get_columns("ai_schedule")}
+    if "weekdays" in columns:
+        # The calendar-timing branch owns these shared columns too.
+        return
+    for name in ("start_date", "end_date"):
+        if name in columns and op.get_bind().scalar(sa.text(
+                f"SELECT count(*) FROM ai_schedule WHERE {name} IS NOT NULL")):
+            raise RuntimeError("Convert calendar-bounded schedules explicitly before dropping their timing fields")
     for name in ("end_date", "start_date"):
         if name in columns:
             op.drop_column("ai_schedule", name)

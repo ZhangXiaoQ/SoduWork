@@ -17,6 +17,36 @@ MERGE = importlib.import_module("migrations.versions.0087_merge_schedule_date_ra
 
 
 class TimingMigrationTests(unittest.TestCase):
+    def test_local_downgrade_preserves_shared_calendar_columns_and_dates(self):
+        engine = sa.create_engine("sqlite:///:memory:")
+        self.addCleanup(engine.dispose)
+        with engine.begin() as connection:
+            connection.execute(sa.text("CREATE TABLE ai_schedule (id TEXT PRIMARY KEY, every TEXT, weekday INTEGER)"))
+            connection.execute(sa.text("INSERT INTO ai_schedule VALUES ('plan','daily',1)"))
+            with Operations.context(MigrationContext.configure(connection)):
+                CALENDAR.upgrade()
+                DATE_RANGE.upgrade()
+                connection.execute(sa.text("UPDATE ai_schedule SET start_date='2030-01-01',end_date='2030-01-31'"))
+                DATE_RANGE.downgrade()
+            row = connection.execute(sa.text("SELECT start_date,end_date FROM ai_schedule")).one()
+            self.assertEqual(tuple(row), ("2030-01-01", "2030-01-31"))
+
+    def test_local_downgrade_refuses_to_discard_configured_dates(self):
+        engine = sa.create_engine("sqlite:///:memory:")
+        self.addCleanup(engine.dispose)
+        with engine.begin() as connection:
+            connection.execute(sa.text("CREATE TABLE ai_schedule (id TEXT PRIMARY KEY)"))
+            connection.execute(sa.text("INSERT INTO ai_schedule VALUES ('plan')"))
+            with Operations.context(MigrationContext.configure(connection)):
+                DATE_RANGE.upgrade()
+                connection.execute(sa.text("UPDATE ai_schedule SET end_date='2030-01-31'"))
+                with self.assertRaisesRegex(RuntimeError, "calendar-bounded"):
+                    DATE_RANGE.downgrade()
+                self.assertEqual(connection.scalar(sa.text("SELECT end_date FROM ai_schedule")), "2030-01-31")
+                connection.execute(sa.text("UPDATE ai_schedule SET end_date=NULL"))
+                DATE_RANGE.downgrade()
+            self.assertEqual([column["name"] for column in sa.inspect(connection).get_columns("ai_schedule")], ["id"])
+
     def test_date_range_branches_merge_in_either_order_without_losing_dates(self):
         for local_first in (True, False):
             with self.subTest(local_first=local_first):

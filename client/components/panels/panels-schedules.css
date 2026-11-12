@@ -356,9 +356,6 @@
 .sch-executor-tools{display:flex;align-items:baseline;gap:8px}.sch-executor-tools small{flex:1;min-width:0}.sch-executor-tools button{flex-shrink:0}
 /* Cadence, weekday, time, and live next-run preview. */
 .sch-when-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.sch-date-range{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:8px 0 12px}
-.sch-date-range label{display:flex;align-items:center;gap:6px;color:var(--ink-3);font-size:var(--font-min-readable,14.5px)}
-.sch-date-range .sch-in{width:155px}
 .sch-w-every{max-width:110px}
 .sch-w-wd{max-width:96px}
 .sch-clock{display:inline-flex;align-items:center;gap:4px}
