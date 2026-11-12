@@ -4,7 +4,7 @@ import importlib
 import os
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -35,6 +35,27 @@ def schedule(**changes):
 
 
 class OnceTimingTests(unittest.TestCase):
+    def test_recurring_date_range_is_inclusive_in_schedule_timezone(self):
+        plan = schedule(every="daily", run_at=None, at_hour=9, start_date=date(2030, 10, 21),
+                        end_date=date(2030, 10, 22), time_zone="Asia/Shanghai")
+        before = datetime(2030, 10, 20, 23, 0, tzinfo=UTC)  # 07:00 on the start date.
+        self.assertEqual(schedules.next_run_instant(plan, before),
+                         datetime(2030, 10, 21, 1, 0, tzinfo=UTC))
+        self.assertTrue(schedules.due(plan, datetime(2030, 10, 21, 1, 0, tzinfo=UTC)))
+        plan.last_run_at = datetime(2030, 10, 22, 1, 0, tzinfo=UTC)
+        self.assertIsNone(schedules.next_run_instant(plan, plan.last_run_at))
+        self.assertFalse(schedules.due(plan, datetime(2030, 10, 23, 1, 0, tzinfo=UTC)))
+
+    def test_hourly_range_starts_at_first_matching_minute_and_blocks_late_retry(self):
+        plan = schedule(every="hourly", run_at=None, at_minute=15,
+                        start_date=date(2030, 10, 21), end_date=date(2030, 10, 21),
+                        time_zone="Asia/Shanghai")
+        before = datetime(2030, 10, 20, 15, 0, tzinfo=UTC)
+        self.assertEqual(schedules.next_run_instant(plan, before),
+                         datetime(2030, 10, 20, 16, 15, tzinfo=UTC))
+        plan.next_retry_at = datetime(2030, 10, 21, 16, 5, tzinfo=UTC)
+        self.assertFalse(schedules.due(plan, datetime(2030, 10, 21, 16, 5, tzinfo=UTC)))
+
     def test_once_due_uses_fixed_instant_and_not_last_manual_run(self):
         s = schedule(last_run_at=TARGET - timedelta(minutes=1))
         self.assertFalse(schedules.due(s, TARGET - timedelta(microseconds=1)))
