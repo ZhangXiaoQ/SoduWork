@@ -117,7 +117,7 @@ class ScheduleTimingRuleTests(unittest.TestCase):
           self.assertTrue(schedules.due(schedule, utc("2030-01-31T15:59:00Z")))
           self.assertFalse(schedules.due(schedule, utc("2030-01-31T16:00:00Z")))
           schedule.next_retry_at = utc("2030-02-01T00:00:00Z")
-          self.assertTrue(schedules.due(schedule, schedule.next_retry_at))
+          self.assertFalse(schedules.due(schedule, schedule.next_retry_at))
 
   def test_final_minute_occurrence_survives_one_scheduler_poll_after_midnight(self):
       for mode in ("hourly", "daily", "weekly", "monthly"):

@@ -9,10 +9,14 @@ depends_on = None
 
 
 def upgrade():
-    op.add_column("ai_schedule", sa.Column("start_date", sa.Date(), nullable=True))
-    op.add_column("ai_schedule", sa.Column("end_date", sa.Date(), nullable=True))
+    columns = {column["name"] for column in sa.inspect(op.get_bind()).get_columns("ai_schedule")}
+    for name in ("start_date", "end_date"):
+        if name not in columns:
+            op.add_column("ai_schedule", sa.Column(name, sa.String(10), nullable=True))
 
 
 def downgrade():
-    op.drop_column("ai_schedule", "end_date")
-    op.drop_column("ai_schedule", "start_date")
+    columns = {column["name"] for column in sa.inspect(op.get_bind()).get_columns("ai_schedule")}
+    for name in ("end_date", "start_date"):
+        if name in columns:
+            op.drop_column("ai_schedule", name)

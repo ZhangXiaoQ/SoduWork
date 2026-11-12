@@ -176,8 +176,8 @@ _WANT_COLUMNS = {
         ("work_routing", "{json}"),
     ],
     "ai_schedule": [
-        ("start_date", "DATE"),
-        ("end_date", "DATE"),
+        ("start_date", "VARCHAR(10)"),
+        ("end_date", "VARCHAR(10)"),
         ("model_name", "VARCHAR(300) NOT NULL DEFAULT ''"),
         ("created_by", "VARCHAR(36)"),
         ("time_zone", "VARCHAR(64) NOT NULL DEFAULT 'Asia/Shanghai'"),

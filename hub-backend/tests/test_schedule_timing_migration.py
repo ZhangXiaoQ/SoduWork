@@ -12,9 +12,45 @@ import sqlalchemy as sa
 
 CALENDAR = importlib.import_module("migrations.versions.0083_schedule_timing_rules")
 CUSTOM = importlib.import_module("migrations.versions.0084_schedule_custom_rule")
+DATE_RANGE = importlib.import_module("migrations.versions.0081_schedule_date_range")
+MERGE = importlib.import_module("migrations.versions.0087_merge_schedule_date_range")
 
 
 class TimingMigrationTests(unittest.TestCase):
+    def test_date_range_branches_merge_in_either_order_without_losing_dates(self):
+        for local_first in (True, False):
+            with self.subTest(local_first=local_first):
+                engine = sa.create_engine("sqlite:///:memory:")
+                try:
+                    with engine.begin() as connection:
+                        connection.execute(sa.text("CREATE TABLE ai_schedule (id TEXT PRIMARY KEY, every TEXT, weekday INTEGER, title TEXT)"))
+                        connection.execute(sa.text("INSERT INTO ai_schedule VALUES ('plan','daily',1,'Retained')"))
+                        context = MigrationContext.configure(connection)
+                        first, second = (DATE_RANGE, CALENDAR) if local_first else (CALENDAR, DATE_RANGE)
+                        with Operations.context(context):
+                            first.upgrade()
+                            connection.execute(sa.text("UPDATE ai_schedule SET start_date='2030-01-01',end_date='2030-01-31'"))
+                            second.upgrade()
+                            MERGE.upgrade()
+                        row = connection.execute(sa.text("SELECT start_date,end_date,title FROM ai_schedule")).one()
+                        self.assertEqual(tuple(row), ("2030-01-01", "2030-01-31", "Retained"))
+                finally:
+                    engine.dispose()
+
+    def test_merge_converts_previously_applied_date_columns_without_data_loss(self):
+        engine = sa.create_engine("sqlite:///:memory:")
+        self.addCleanup(engine.dispose)
+        with engine.begin() as connection:
+            connection.execute(sa.text("CREATE TABLE ai_schedule (id TEXT PRIMARY KEY, start_date DATE, end_date DATE)"))
+            connection.execute(sa.text("INSERT INTO ai_schedule VALUES ('plan','2030-01-01','2030-01-31')"))
+            with Operations.context(MigrationContext.configure(connection)):
+                MERGE.upgrade()
+            row = connection.execute(sa.text("SELECT * FROM ai_schedule")).one()
+            self.assertEqual(tuple(row), ("plan", "2030-01-01", "2030-01-31"))
+            columns = sa.inspect(connection).get_columns("ai_schedule")
+            self.assertTrue(all(isinstance(column["type"], sa.String)
+                                for column in columns if column["name"].endswith("_date")))
+
     def test_large_legacy_upgrade_and_lossless_rollback(self):
         engine = sa.create_engine("sqlite:///:memory:")
         self.addCleanup(engine.dispose)
