@@ -27,3 +27,6 @@
 .at-field-hint { color: var(--ink-3); }
 .at-field-error { color: var(--crit); }
 .at-editor input[aria-invalid="true"] { border-color: var(--crit); }
+.at-date { display:flex!important; align-items:center; grid-template-columns:none!important; gap:6px!important; margin-left:6px; }
+.at-date input { width:150px!important; }
+.at-date .at-field-error { max-width:180px; }
